@@ -1,0 +1,23 @@
+#!/bin/bash
+
+SRC_DIR="$SYNC"
+REPO_DIR="/run/media/$USER/7E36-49D3/borg-repo"
+DATE=$(date +"%Y-%m-%d")
+
+if ! mountpoint -q /run/media/$USER/7E36-49D3; then
+	echo "External drive is not mounted. Mounting now..."
+	sudo mount /dev/sda1 /mnt/backup
+	if [ $? -ne 0 ]; then
+		echo "Failed to mount the external drive. Exiting."
+		exit 1
+	fi
+fi
+
+if [ ! -d "$REPO_DIR" ]; then
+	echo "Initializing Borg repository at $REPO_DIR..."
+	borg init --encryption=repokey "$REPO_DIR"
+fi
+
+borg create --stats --progress "$REPO_DIR"::"backup-$DATE" "$SRC_DIR"
+
+echo "Backup completed successfully to Borg repository."

@@ -1,0 +1,115 @@
+#!/bin/bash
+set -euo pipefail
+
+# Define directories
+NOTES=${NOTES:-"$HOME/sync/Vault"}
+INBOX="$NOTES/Inbox"
+EDITOR=${EDITOR:-nvim}
+PREVIEW_TOOL=${PREVIEW_TOOL:-bat}
+DEBUG=${DEBUG:-false}
+
+# Ensure Inbox exists
+mkdir -p "$INBOX"
+
+log_debug() {
+	if [[ "$DEBUG" == "true" ]]; then
+		echo "DEBUG: $1"
+	fi
+}
+
+edit_file() {
+	local file=$1
+	[[ -f "$file" ]] && $EDITOR "$file" || echo "Error: File not found - $file"
+}
+
+move_file() {
+	local file=$1
+	local target_dir
+	target_dir=$(find "$NOTES" -type d | fzf --prompt "Select a directory: ")
+	[[ -z "$target_dir" ]] && return
+	mv "$file" "$target_dir" && echo "Moved $(basename "$file") to $target_dir"
+}
+
+merge_files() {
+	local source_file=$1
+	local target_file
+	target_file=$(find "$NOTES" -type f | fzf --prompt "Select a file to merge into: ")
+	[[ -z "$target_file" ]] && return
+	cp "$target_file" "$target_file.bak"
+	cat "$source_file" >>"$target_file"
+	echo "Merged $(basename "$source_file") into $(basename "$target_file")"
+	rm -f "$source_file"
+}
+
+tag_file() {
+	local file=$1
+	read -p "Enter tags (comma-separated): " tags
+	tags=${tags:-default-tag}
+	if grep -q "^tags:" "$file"; then
+		sed -i "s/^tags:.*/tags: [$tags]/" "$file"
+	else
+		sed -i "1i tags: [$tags]" "$file"
+	fi
+	echo "Added tags to $(basename "$file")"
+}
+
+rename_file() {
+	local file=$1
+	local dir=$(dirname "$file")
+	local new_name
+	read -p "Enter new name (with extension): " new_name
+	if [[ -n "$new_name" ]]; then
+		mv "$file" "$dir/$new_name" && echo "Renamed $(basename "$file") to $new_name"
+	else
+		echo "Error: Invalid name"
+	fi
+}
+
+find_files() {
+	find "$1" -type f
+}
+
+find_dirs() {
+	find "$1" -type d
+}
+
+# Function to delete a file
+delete_file() {
+	local file=$1
+	read -p "Are you sure you want to delete $(basename "$file")? [y/N]: " confirm
+	if [[ "$confirm" =~ ^[Yy]$ ]]; then
+		rm -f "$file" && echo "Deleted $(basename "$file")"
+	else
+		echo "Deletion canceled."
+	fi
+}
+
+# Main loop
+while true; do
+	selected_file=$(find "$INBOX" -type f | fzf --prompt "Select a file: " \
+		--preview "$PREVIEW_TOOL --style=numbers --color=always --line-range :500 {}" \
+		--header "Options: [Ctrl-E] Edit | [Ctrl-M] Move | [Ctrl-N] Merge | [Ctrl-T] Tag | [Ctrl-R] Rename | [Ctrl-D] Delete | [Esc] Exit" \
+		--bind "ctrl-e:accept" \
+		--bind "ctrl-m:accept" \
+		--bind "ctrl-n:accept" \
+		--bind "ctrl-t:accept" \
+		--bind "ctrl-r:accept" \
+		--bind "ctrl-d:accept" \
+		--expect=ctrl-e,ctrl-m,ctrl-n,ctrl-t,ctrl-r,ctrl-d,esc)
+
+	[[ -z "$selected_file" ]] && break
+
+	key=$(head -n1 <<<"$selected_file")
+	file=$(tail -n1 <<<"$selected_file")
+
+	case "$key" in
+	ctrl-e) edit_file "$file" ;;
+	ctrl-m) move_file "$file" ;;
+	ctrl-n) merge_files "$file" ;;
+	ctrl-t) tag_file "$file" ;;
+	ctrl-r) rename_file "$file" ;;
+	ctrl-d) delete_file "$file" ;;
+	esc) break ;;
+	*) echo "Unknown action: $key" ;;
+	esac
+done

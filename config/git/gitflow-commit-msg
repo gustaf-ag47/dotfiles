@@ -1,0 +1,12 @@
+#!/bin/bash
+
+branch_name=$(git symbolic-ref --short HEAD)
+
+jira_issue=$(echo "$branch_name" | grep -oE "(feature|hotfix|chore)/sc-[0-9]+" | grep -oE "sc-[0-9]+")
+
+if [ -n "$jira_issue" ]; then
+	commit_message_file="$1"
+	if ! grep -q "$jira_issue" "$commit_message_file"; then
+		sed -i.bak "1s/$/ [$jira_issue]/" "$commit_message_file"
+	fi
+fi

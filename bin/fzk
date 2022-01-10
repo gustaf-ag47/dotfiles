@@ -1,0 +1,107 @@
+#!/bin/bash
+
+# Constants
+EXCLUDE="(systemd|bash|fzf|tmux|sshd)"
+DEFAULT_SIGNAL="SIGTERM"
+
+# Display usage
+usage() {
+  echo "Usage: $0 [--signal SIGNAL] [--verbose]"
+  echo "  --signal SIGNAL   Specify the signal to send (default: SIGTERM)"
+  echo "  --verbose         Enable verbose logging"
+  exit 1
+}
+
+# Parse arguments
+SIGNAL=$DEFAULT_SIGNAL
+VERBOSE=false
+
+while [[ "$#" -gt 0 ]]; do
+  case $1 in
+  --signal)
+    SIGNAL="$2"
+    shift 2
+    ;;
+  --verbose)
+    VERBOSE=true
+    shift
+    ;;
+  *) usage ;;
+  esac
+done
+
+# Ensure `fzf` is installed
+if ! command -v fzf &>/dev/null; then
+  echo "Error: 'fzf' is not installed. Install it using 'sudo pacman -S fzf' and try again."
+  exit 1
+fi
+
+# Function to log messages
+log() {
+  if [[ "$VERBOSE" == true ]]; then
+    echo "$1"
+  fi
+}
+
+# Fetch process details (PID, CPU%, MEM%, COMMAND)
+process_list() {
+  ps -eo pid,%cpu,%mem,state,cmd --sort=-%mem |
+    awk 'NR>1 {printf "%-8s %-6s %-6s %-2s %s\n", $1, $2, $3, $4, $5}' |
+    grep -Ev "$EXCLUDE"
+}
+
+# Kill the selected process
+kill_process() {
+  local pid="$1"
+  local state="$2"
+
+  if [[ -z "$pid" ]]; then
+    echo "⚠️ No process selected."
+    return
+  fi
+
+  # Handle different process states
+  case "$state" in
+  Z) # Zombie process
+    echo "⚠️ Process $pid is a zombie. Killing its parent..."
+    local ppid=$(ps -o ppid= -p "$pid")
+    if [[ -n "$ppid" ]]; then
+      kill -"$SIGNAL" "$ppid" && echo "✅ Parent process $ppid terminated."
+    else
+      echo "❌ Failed to kill parent of zombie process $pid."
+    fi
+    ;;
+  D) # Uninterruptible (I/O wait)
+    echo "⚠️ Process $pid is in an uninterruptible state (D). Investigate hardware or I/O issues."
+    ;;
+  *) # Regular processes
+    log "Sending signal '$SIGNAL' to process $pid."
+    if kill -"$SIGNAL" "$pid"; then
+      echo "✅ Process $pid terminated."
+    else
+      echo "❌ Failed to terminate process $pid. Try using SIGKILL or investigating further."
+    fi
+    ;;
+  esac
+}
+
+# Main function
+main() {
+  log "Fetching process list..."
+  local selection
+  selection=$(process_list | fzf --ansi \
+    --header="🔍 Select a process to kill (PID | CPU% | MEM% | STATE | COMMAND)" \
+    --preview="ps -p {1} -o cmd,etime,%cpu,%mem,state" \
+    --preview-window=up:3:wrap)
+
+  if [[ -n "$selection" ]]; then
+    local pid=$(echo "$selection" | awk '{print $1}')
+    local state=$(echo "$selection" | awk '{print $4}')
+    kill_process "$pid" "$state"
+  else
+    echo "⚠️ No process selected."
+  fi
+}
+
+# Run the script
+main

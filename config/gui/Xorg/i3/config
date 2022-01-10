@@ -1,0 +1,129 @@
+set $mod Mod4
+
+font pango:Inconsolata NF 20
+
+exec --no-startup-id dunst
+
+floating_modifier $mod
+
+bindsym $mod+Return exec "terminal"
+bindsym $mod+i exec "filemanager"
+bindsym $mod+Shift+q kill
+
+bindsym $mod+space exec "rofi -modi drun,run -show drun"
+bindsym $mod+d exec "launch-apps"
+bindsym $mod+b exec "launch-pdf"
+bindsym $mod+Ctrl+Shift+l exec "lock"
+bindsym $mod+S exec "screenshot"
+
+bindsym $mod+h focus left
+bindsym $mod+j focus down
+bindsym $mod+k focus up
+bindsym $mod+l focus right
+
+bindsym $mod+Shift+h move left
+bindsym $mod+Shift+j move down
+bindsym $mod+Shift+k move up
+bindsym $mod+Shift+l move right
+
+bindsym $mod+Ctrl+h move workspace to output right
+bindsym $mod+Ctrl+j move workspace to output down
+bindsym $mod+Ctrl+k move workspace to output up
+bindsym $mod+Ctrl+l move workspace to output left
+
+bindsym $mod+f fullscreen toggle
+bindsym $mod+w layout tabbed
+bindsym $mod+e layout toggle split
+bindsym $mod+Shift+space floating toggle
+bindsym $mod+a focus parent
+
+set $terms "1: terms"
+set $web "2: web"
+set $ws3 "3"
+set $ws4 "4"
+set $ws5 "5"
+set $ws6 "6"
+set $ws7 "7"
+set $ws8 "8"
+set $ws9 "9"
+set $ws10 "10"
+
+bindsym $mod+1 workspace number $terms
+bindsym $mod+2 workspace number $web
+bindsym $mod+3 workspace number $ws3
+bindsym $mod+4 workspace number $ws4
+bindsym $mod+5 workspace number $ws5
+bindsym $mod+6 workspace number $ws6
+bindsym $mod+7 workspace number $ws7
+bindsym $mod+8 workspace number $ws8
+bindsym $mod+9 workspace number $ws9
+bindsym $mod+0 workspace number $ws10
+
+bindsym $mod+Shift+1 move container to workspace number $terms
+bindsym $mod+Shift+2 move container to workspace number $web
+bindsym $mod+Shift+3 move container to workspace number $ws3
+bindsym $mod+Shift+4 move container to workspace number $ws4
+bindsym $mod+Shift+5 move container to workspace number $ws5
+bindsym $mod+Shift+6 move container to workspace number $ws6
+bindsym $mod+Shift+7 move container to workspace number $ws7
+bindsym $mod+Shift+8 move container to workspace number $ws8
+bindsym $mod+Shift+9 move container to workspace number $ws9
+bindsym $mod+Shift+0 move container to workspace number $ws10
+
+workspace_auto_back_and_forth no
+focus_follows_mouse no
+
+bindsym $mod+Shift+c reload
+bindsym $mod+Shift+r restart
+
+for_window [window_role="pop-up"] floating enable
+for_window [window_role="task_dialog"] floating enable
+for_window [class="Arandr"] floating enable
+for_window [class="Bitwarden"] floating enable
+
+mode "resize" {
+        bindsym h resize shrink width 10 px or 10 ppt
+        bindsym j resize grow height 10 px or 10 ppt
+        bindsym k resize shrink height 10 px or 10 ppt
+        bindsym l resize grow width 10 px or 10 ppt
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+        bindsym $mod+r mode "default"
+}
+
+bindsym $mod+r mode "resize"
+
+set_from_resource $foreground foreground
+set_from_resource $background background 
+set_from_resource $cursorColor cursorColor
+
+set_from_resource $black1 color0 
+set_from_resource $black2 color8
+set $trueblack #000000
+
+set_from_resource $red1 color1 
+set_from_resource $red2 color9
+
+set_from_resource $green1 color2 
+set_from_resource $green2 color10 
+
+set_from_resource $yellow1 color3 
+set_from_resource $yellow2 color11 
+
+set_from_resource $blue1 color4 
+set_from_resource $blue2 color12 
+
+set_from_resource $cyan1 color5 
+set_from_resource $cyan2 color13 
+
+set_from_resource $cyan1 color6 
+set_from_resource $cyan2 color14 
+
+set_from_resource $white1 color7 
+set_from_resource $white2 color15 
+
+hide_edge_borders both
+
+gaps inner 5
+gaps outer 5
+for_window [class=".*"] border pixel 1

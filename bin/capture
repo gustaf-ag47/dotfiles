@@ -1,0 +1,17 @@
+#!/bin/bash
+
+INBOX_DIR="$NOTES/Inbox"
+
+mkdir -p "$INBOX_DIR"
+
+TASK=$(echo | wofi --dmenu --prompt="Add to Inbox")
+
+if [ -n "$TASK" ]; then
+	TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
+	FILENAME="$INBOX_DIR/$TIMESTAMP.md"
+	echo "#braindump" >>"$FILENAME"
+	echo "$TASK" >>"$FILENAME"
+	echo "Task added to inbox."
+else
+	echo "No task entered."
+fi

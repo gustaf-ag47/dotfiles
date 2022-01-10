@@ -1,0 +1,68 @@
+* {
+  font-family: "monospace";
+  font-size: 12px;
+  color: #c0caf5;
+}
+
+#battery {
+  background: #1a1b26;
+  padding: 5px;
+  border-radius: 5px;
+  color: #c0caf5;
+}
+
+#clock {
+  background: #1a1b26;
+  padding: 5px;
+  border-radius: 5px;
+  color: #c0caf5;
+}
+
+/* Additional styling for modules */
+#battery.full {
+  color: #9ece6a; /* Green */
+}
+
+#battery.good {
+  color: #e0af68; /* Yellow */
+}
+
+#battery.medium {
+  color: #e0af68; /* Yellow */
+}
+
+#battery.low {
+  color: #f7768e; /* Red */
+}
+
+#battery.empty {
+  color: #f7768e; /* Red */
+}
+
+/* General background for bar */
+#bar {
+  background: #1a1b26;
+  border-bottom: 1px solid #414868;
+  padding: 5px 10px;
+}
+
+/* Separator styling */
+.separator {
+  background: #414868;
+  margin: 0 10px;
+}
+
+/* Tooltip styling */
+.tooltip {
+  background: #1a1b26;
+  color: #c0caf5;
+  border: 1px solid #414868;
+  padding: 5px;
+  border-radius: 5px;
+}
+
+/* Hover effects */
+#battery:hover,
+#clock:hover {
+  background: #32344a;
+}

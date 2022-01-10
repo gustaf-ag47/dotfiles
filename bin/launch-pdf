@@ -1,0 +1,38 @@
+#!/bin/bash
+
+search_dir="$SYNC"
+pdf_viewer="zathura"
+epub_viewer="zathura"
+log_file="$SYNC/pdf_epub_launcher.log"
+
+echo "$XDG_SESSION_TYPE"
+if [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+	launcher="wofi -i --show dmenu --prompt='Select PDF/EPUB'"
+else
+	launcher="rofi -dmenu -p 'Select PDF/EPUB'"
+fi
+
+selected_file=$(fd -e pdf -e epub "" "$search_dir" | eval $launcher)
+
+if [ -n "$selected_file" ]; then
+	case "${selected_file##*.}" in
+	pdf)
+		viewer="$pdf_viewer"
+		;;
+	epub)
+		viewer="$epub_viewer"
+		;;
+	*)
+		echo "Unsupported file type." >>"$log_file"
+		exit 1
+		;;
+	esac
+
+	if "$viewer" "$selected_file" & then
+		echo "$(date): Opened $selected_file" >>"$log_file"
+	else
+		echo "$(date): Failed to open $selected_file" >>"$log_file"
+	fi
+else
+	echo "$(date): No file selected." >>"$log_file"
+fi

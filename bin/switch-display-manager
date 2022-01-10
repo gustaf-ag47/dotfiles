@@ -1,0 +1,32 @@
+#!/bin/bash
+
+start_hyprland() {
+	echo "Switching to Hyprland..."
+	pkill -KILL -u "$USER"
+	sleep 2
+	export XDG_SESSION_TYPE=wayland
+	export GDK_BACKEND=wayland
+	export QT_QPA_PLATFORM=wayland
+	export MOZ_ENABLE_WAYLAND=1
+	Hyprland &
+}
+
+start_i3() {
+	echo "Switching to i3 on Xorg..."
+	pkill -KILL -u "$USER"
+	sleep 2
+	export XDG_SESSION_TYPE=x11
+	export GDK_BACKEND=x11
+	export QT_QPA_PLATFORM=xcb
+	export MOZ_ENABLE_WAYLAND=0
+	startx /usr/bin/i3 &
+}
+
+if [[ "$1" == "hyprland" ]]; then
+	start_hyprland
+elif [[ "$1" == "i3" ]]; then
+	start_i3
+else
+	echo "Usage: ./switch_wm.sh [hyprland|i3]"
+	exit 1
+fi

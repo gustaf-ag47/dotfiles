@@ -1,0 +1,23 @@
+[Default Applications]
+application/epub+zip=pdf.desktop;
+application/pdf=pdf.desktop;
+application/postscript=pdf.desktop;
+application/rss+xml=rss.desktop
+application/x-bittorrent=torrent.desktop;
+image/gif=img.desktop;
+image/jpeg=img.desktop;
+image/png=img.desktop;
+inode/directory=file.desktop
+text/html=firefox.desktop
+text/plain=text.desktop;
+text/x-shellscript=text.desktop;
+video/mp4=video.desktop
+video/x-matroska=video.desktop
+x-scheme-handler/http=firefox.desktop
+x-scheme-handler/https=firefox.desktop
+x-scheme-handler/jetbrains=jetbrains-toolbox.desktop
+x-scheme-handler/lbry=lbry.desktop
+x-scheme-handler/magnet=torrent.desktop;
+x-scheme-handler/mailto=mail.desktop;
+x-scheme-handler/obsidian=obsidian.desktop
+x-scheme-handler/postman=Postman.desktop

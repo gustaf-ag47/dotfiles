@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=GitHub
+Exec=firefox https://github.com
+Type=Application

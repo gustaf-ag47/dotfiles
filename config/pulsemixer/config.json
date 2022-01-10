@@ -1,0 +1,16 @@
+{
+    "keybindings": {
+        "increase_volume": ["k"],
+        "decrease_volume": ["j"],
+        "mute": ["m"],
+        "move_up": ["k"],
+        "move_down": ["j"],
+        "toggle_mute": ["m"],
+        "exit": ["q"],
+        "select_default_sink": ["D"],
+        "select_default_source": ["d"],
+        "move_left": ["h"],
+        "move_right": ["l"],
+        "change_focused_item": ["tab"]
+    }
+}

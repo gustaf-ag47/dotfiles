@@ -1,0 +1,171 @@
+
+[main]
+
+
+
+smart_completion = True
+
+
+
+wider_completion_menu = False
+
+
+
+
+
+multi_line = False
+
+
+
+
+
+
+multi_line_mode = psql
+
+
+expand = False
+
+
+auto_expand = True
+
+
+generate_aliases = true
+
+
+
+
+
+log_file = default
+
+
+keyword_casing = auto
+
+
+
+
+
+casing_file = default
+
+
+
+generate_casing_file = False
+
+
+case_column_headers = True
+
+
+
+
+
+history_file = default
+
+
+
+log_level = INFO
+
+
+
+asterisk_column_order = table_order
+
+
+
+qualify_columns = if_more_than_one_table
+
+
+search_path_filter = False
+
+
+
+
+
+
+timing = True
+
+
+
+
+
+table_format = psql
+
+
+
+
+syntax_style = default
+
+
+
+
+
+vi = true
+
+
+
+
+
+on_error = STOP
+
+
+row_limit = 1000
+
+
+less_chatty = True
+
+
+
+
+
+
+
+
+
+
+
+prompt = "\u@\h:\d> "
+
+
+min_num_menu_lines = 4
+
+
+multiline_continuation_char = ""
+
+
+null_string = <null>
+[colors]
+Token.Menu.Completions.Completion.Current = "bg:ansired ansiwhite bold"
+Token.Menu.Completions.Completion = "bg:ansiblack ansiwhite"
+Token.Menu.Completions.Meta.Current = "bg:ansiyellow ansiblack"
+Token.Menu.Completions.Meta = "bg:ansiblack ansiwhite"
+Token.Menu.Completions.MultiColumnMeta = "bg:ansiblack ansiwhite"
+Token.Menu.Completions.ProgressButton = "bg:ansiblack"
+Token.Menu.Completions.ProgressBar = "bg:ansiblue"
+Token.SelectedText = "ansiwhite bg:ansiblue"
+Token.SearchMatch = "ansiwhite bg:ansiblue"
+Token.SearchMatch.Current = "ansiwhite bg:ansired"
+Token.Toolbar = "ansiwhite"
+Token.Toolbar.Off = "ansigray"
+Token.Toolbar.On = "bg:ansiblack ansiwhite"
+Token.Toolbar.Search = noinherit bold
+Token.Toolbar.Search.Text = nobold
+Token.Toolbar.System = noinherit bold
+Token.Toolbar.Arg = noinherit bold
+Token.Toolbar.Arg.Text = nobold
+Token.Toolbar.Transaction.Valid = "bg:ansiblack ansigreen bold"
+Token.Toolbar.Transaction.Failed = "bg:ansiblack ansired bold"
+
+
+
+Token.Keyword = "ansigreen bold"
+Token.String = "ansired"
+Token.String.Other = "ansired"
+Token.Number = "ansired"
+Token.Operator = "ansired"
+
+[named queries]
+tenant = SELECT * FROM tenants
+select = SELECT * FROM $1
+
+[alias_dsn]
+
+[data_formats]
+decimal = ""
+float = ""

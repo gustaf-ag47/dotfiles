@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Claude AI
+Exec=firefox https://claude.ai/login
+Type=Application

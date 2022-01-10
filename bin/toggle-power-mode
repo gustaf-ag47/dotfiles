@@ -1,0 +1,174 @@
+#!/bin/bash
+
+# Configuration
+MODE_FILE="$HOME/.config/power_mode.conf"
+LOG_FILE="$HOME/.local/share/power_mode.log"
+WIFI_INTERFACE=$(iw dev | awk '$1=="Interface"{print $2}')
+BATTERY_PATH="/sys/class/power_supply/BAT0"
+AC_PATH="/sys/class/power_supply/AC"
+
+# List of services to manage
+POWER_SAVE_SERVICES=("bluetooth.service" "docker.service" "NetworkManager-wait-online.service")
+PERFORMANCE_SERVICES=("bluetooth.service" "docker.service")
+
+# Logging function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Function to check if a service is active
+is_service_active() {
+  local service="$1"
+  systemctl is-active --quiet "$service"
+}
+
+# Function to stop services
+stop_services() {
+  for service in "${POWER_SAVE_SERVICES[@]}"; do
+    if is_service_active "$service"; then
+      log "Stopping $service..."
+      sudo systemctl stop "$service" || log "⚠️ Failed to stop $service."
+    else
+      log "$service is already stopped."
+    fi
+  done
+}
+
+# Function to start services
+start_services() {
+  for service in "${PERFORMANCE_SERVICES[@]}"; do
+    if ! is_service_active "$service"; then
+      log "Starting $service..."
+      sudo systemctl start "$service" || log "⚠️ Failed to start $service."
+    else
+      log "$service is already running."
+    fi
+  done
+}
+
+# Adjust brightness
+adjust_brightness() {
+  if command -v brightnessctl &>/dev/null; then
+    [[ "$1" == "low" ]] && brightnessctl set 25%
+    [[ "$1" == "high" ]] && brightnessctl set 100%
+  else
+    log "brightnessctl not found, skipping brightness adjustment."
+  fi
+}
+
+# Enable power-save mode
+enable_power_save() {
+  log "🔋 Enabling Power Save Mode"
+
+  # Set CPU governor to powersave
+  if command -v cpupower &>/dev/null; then
+    sudo cpupower frequency-set -g powersave || log "⚠️ Failed to set CPU governor."
+  fi
+
+  # Enable GPU power saving (NVIDIA)
+  if command -v nvidia-smi &>/dev/null; then
+    sudo nvidia-smi -pm 1
+    if ! sudo nvidia-smi --auto-boost-default=0; then
+      log "⚠️ GPU does not support auto-boost configuration. Skipping."
+    fi
+  fi
+
+  # Enable Wi-Fi power saving
+  if [[ -n "$WIFI_INTERFACE" ]]; then
+    sudo iw dev "$WIFI_INTERFACE" set power_save on || log "⚠️ Failed to set Wi-Fi power-saving mode."
+  fi
+
+  # Reduce brightness
+  adjust_brightness "low"
+
+  # Stop unnecessary services
+  stop_services
+
+  # Save mode to file
+  echo "power-save" >"$MODE_FILE"
+}
+
+# Enable performance mode
+enable_performance() {
+  log "⚡ Enabling Performance Mode"
+
+  # Set CPU governor to performance
+  if command -v cpupower &>/dev/null; then
+    sudo cpupower frequency-set -g performance || log "⚠️ Failed to set CPU governor."
+  fi
+
+  # Disable GPU power saving (NVIDIA)
+  if command -v nvidia-smi &>/dev/null; then
+    sudo nvidia-smi -pm 0
+    if ! sudo nvidia-smi --auto-boost-default=1; then
+      log "⚠️ GPU does not support auto-boost configuration. Skipping."
+    fi
+  fi
+
+  # Disable Wi-Fi power saving
+  if [[ -n "$WIFI_INTERFACE" ]]; then
+    sudo iw dev "$WIFI_INTERFACE" set power_save off || log "⚠️ Failed to disable Wi-Fi power-saving mode."
+  fi
+
+  # Restore brightness
+  adjust_brightness "high"
+
+  # Start essential services
+  start_services
+
+  # Save mode to file
+  echo "performance" >"$MODE_FILE"
+}
+
+# Display current status
+display_status() {
+  local mode=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
+  log "🔎 Current Mode: $mode"
+  if command -v cpupower &>/dev/null; then
+    log "CPU Governor: $(cpupower frequency-info | grep 'governor is' | awk '{print $4}')"
+  fi
+  if [[ -n "$WIFI_INTERFACE" ]]; then
+    log "Wi-Fi Power Save: $(iw dev "$WIFI_INTERFACE" get power_save 2>/dev/null || echo "N/A")"
+  fi
+  log "Brightness: $(brightnessctl g 2>/dev/null || echo "N/A")"
+}
+
+# Auto-switch based on battery and AC status
+auto_switch_mode() {
+  local battery_level=$(cat "$BATTERY_PATH/capacity" 2>/dev/null || echo 100)
+  local ac_status=$(cat "$AC_PATH/online" 2>/dev/null || echo 0)
+
+  if [[ "$ac_status" -eq 1 ]]; then
+    log "AC connected. Enabling Performance Mode."
+    enable_performance
+  elif [[ "$battery_level" -lt 20 ]]; then
+    log "Battery low ($battery_level%). Enabling Power Save Mode."
+    enable_power_save
+  else
+    log "Battery sufficient ($battery_level%). Maintaining current mode."
+  fi
+}
+
+# Main function
+main() {
+  if [[ "$1" == "--status" ]]; then
+    display_status
+    exit 0
+  fi
+
+  if [[ "$1" == "--auto" ]]; then
+    auto_switch_mode
+    exit 0
+  fi
+
+  # Toggle mode manually
+  local current_mode=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
+  if [[ "$current_mode" == "power-save" ]]; then
+    enable_performance
+  else
+    enable_power_save
+  fi
+}
+
+# Run the script
+main "$@"

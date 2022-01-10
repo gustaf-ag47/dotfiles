@@ -1,0 +1,64 @@
+#!/bin/bash
+
+set -euo pipefail
+
+: "${BACKUP_DIR:?Environment variable BACKUP_DIR is not set}"
+
+BACKUP_FOLDER="${BACKUP_DIR}/$(date +%Y-%m-%d_%H-%M-%S)"
+PERMISSION_LOG="${BACKUP_FOLDER}/permission_log.txt"
+
+mkdir -p "$BACKUP_FOLDER" || {
+	echo "Failed to create backup folder"
+	exit 1
+}
+
+log_and_set_permissions() {
+	local path="$1"
+	local perm_files="$2"
+	local perm_dirs="$3"
+
+	sudo find "$path" -type f -exec sh -c 'echo "$(stat -c "%a %n" "{}")" >> "$0"; chmod "$1" "{}"' "$PERMISSION_LOG" "$perm_files" \;
+	sudo find "$path" -type d -exec sh -c 'echo "$(stat -c "%a %n" "{}")" >> "$0"; chmod "$1" "{}"' "$PERMISSION_LOG" "$perm_dirs" \;
+}
+
+backup_item() {
+	local src="$1"
+	local dest="$2"
+	local file_perms="${3:-644}"
+	local dir_perms="${4:-755}"
+
+	if [ -e "$src" ]; then
+		sudo cp -r "$src" "$dest" && echo "Backed up $src to $dest"
+		log_and_set_permissions "$dest" "$file_perms" "$dir_perms"
+	else
+		echo "Warning: $src does not exist and was skipped"
+	fi
+}
+
+backup_item "/var/lib/bluetooth" "$BACKUP_FOLDER/bluetooth" "600" "700"
+backup_item "/etc/NetworkManager/system-connections" "$BACKUP_FOLDER/network-connections" "600" "700"
+backup_item "$HOME/.ssh" "$BACKUP_FOLDER/ssh-keys" "600" "700"
+backup_item "$HOME/.mozilla/firefox" "$BACKUP_FOLDER/firefox-data"
+backup_item "$HOME/.thunderbird" "$BACKUP_FOLDER/thunderbird-data"
+backup_item "$HOME/.gnupg" "$BACKUP_FOLDER/gnupg" "600" "700"
+
+cp /etc/fstab "$BACKUP_FOLDER/fstab" && chmod 644 "$BACKUP_FOLDER/fstab"
+cp /etc/hostname "$BACKUP_FOLDER/hostname" && chmod 644 "$BACKUP_FOLDER/hostname"
+cp /etc/hosts "$BACKUP_FOLDER/hosts" && chmod 644 "$BACKUP_FOLDER/hosts"
+
+crontab -l >"$BACKUP_FOLDER/crontab" 2>/dev/null || echo "No crontab found for user"
+chmod 600 "$BACKUP_FOLDER/crontab"
+
+pacman -Qqe >"$BACKUP_FOLDER/pkglist.txt"
+pacman -Qqm >"$BACKUP_FOLDER/aurlist.txt"
+chmod 644 "$BACKUP_FOLDER/pkglist.txt" "$BACKUP_FOLDER/aurlist.txt"
+
+backup_item "$XDG_CONFIG_HOME/tmuxp" "$BACKUP_FOLDER/tmuxp-sessions"
+backup_item "$ZDOTDIR/.zhistory" "$BACKUP_FOLDER/zhistory" "600"
+
+backup_item "/etc/systemd/system" "$BACKUP_FOLDER/systemd-services" "644" "755"
+
+sudo tar -czf "${BACKUP_FOLDER}.tar.gz" -C "$BACKUP_DIR" "$(basename "$BACKUP_FOLDER")" && sudo rm -rf "$BACKUP_FOLDER"
+
+echo "Backup completed successfully. Data saved in ${BACKUP_FOLDER}.tar.gz"
+echo "Original permissions logged in $PERMISSION_LOG"

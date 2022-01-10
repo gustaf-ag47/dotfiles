@@ -1,0 +1,47 @@
+BACKUP_DIR="$HOME/sync/backup" 
+
+restore_dir() {
+	local src="$1"
+	local dest="$2"
+	if [ -d "$src" ]; then
+		echo "Restoring $src to $dest"
+		cp -r "$src" "$dest"
+	else
+		echo "Directory $src not found in the backup"
+	fi
+}
+
+restore_file() {
+	local src="$1"
+	local dest="$2"
+	if [ -f "$src" ]; then
+		echo "Restoring $src to $dest"
+		cp "$src" "$dest"
+	else
+		echo "File $src not found in the backup"
+	fi
+}
+
+echo "Starting restoration process..."
+
+sudo restore_dir "$BACKUP_DIR/bluetooth" "/var/lib/bluetooth"
+
+sudo restore_dir "$BACKUP_DIR/network-connections" "/etc/NetworkManager/system-connections"
+
+restore_dir "$BACKUP_DIR/ssh-keys" "$HOME/.ssh"
+
+restore_dir "$BACKUP_DIR/firefox-data" "$HOME/.mozilla/firefox"
+
+restore_dir "$BACKUP_DIR/thunderbird-data" "$HOME/.thunderbird"
+
+restore_file "$BACKUP_DIR/fstab" "/etc/fstab"
+
+restore_dir "$BACKUP_DIR/tmuxp-sessions" "$XDG_CONFIG_HOME/tmuxp"
+
+restore_file "$BACKUP_DIR/zhistory" "$ZDOTDIR/zhistory"
+
+restore_dir "$BACKUP_DIR/gnupg" "$HOME/.gnupg"
+
+echo "Restoration completed."
+
+echo "Some changes may require a system restart or re-login to take effect."

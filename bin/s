@@ -1,0 +1,12 @@
+#!/bin/bash
+
+if [ -z "$TMUX" ]; then
+	echo "You are not in a tmux session!" >&2
+	return 1
+fi
+
+session=$(tmux list-sessions -F "#S" | fzf --height 40% --tmux 40%)
+
+if [ -n "$session" ]; then
+	tmux switch-client -t "$session"
+fi

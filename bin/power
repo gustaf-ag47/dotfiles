@@ -1,0 +1,11 @@
+#!/bin/bash
+
+options="Shutdown\nReboot\nLog Out"
+
+chosen=$(echo -e $options | wofi --show dmenu -i)
+
+case $chosen in
+Shutdown) systemctl poweroff ;;
+Reboot) systemctl reboot ;;
+Logout) pkill -KILL -u "$USER" ;;
+esac

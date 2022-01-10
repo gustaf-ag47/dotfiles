@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Function to list systemd services with their state and active status
+list_services() {
+  systemctl list-unit-files --type=service | awk 'NR>1 {print $1, $2}' | while read -r service state; do
+    active_state=$(systemctl is-active "$service" 2>/dev/null || echo "inactive")
+    printf "%-40s %-10s %-10s\n" "$service" "$state" "$active_state"
+  done
+}
+
+# Function to show details of a selected service
+service_details() {
+  local service="$1"
+  systemctl status "$service" --no-pager
+}
+
+# Function to enable or disable a service
+toggle_service() {
+  local service="$1"
+  local action="$2"
+
+  if [[ "$action" == "enable" ]]; then
+    sudo systemctl enable "$service" && echo "✅ $service enabled."
+  elif [[ "$action" == "disable" ]]; then
+    sudo systemctl disable "$service" && echo "✅ $service disabled."
+  else
+    echo "❌ Invalid action: $action"
+  fi
+}
+
+# Main function
+main() {
+  local selection
+  selection=$(list_services | fzf --ansi \
+    --header="🔍 Select a systemd service to view or manage (Service Name | State | Active Status)" \
+    --preview="systemctl status {1} --no-pager" \
+    --preview-window=up:10:wrap)
+
+  if [[ -n "$selection" ]]; then
+    local service=$(echo "$selection" | awk '{print $1}')
+    local state=$(echo "$selection" | awk '{print $2}')
+    local active_status=$(echo "$selection" | awk '{print $3}')
+
+    echo "Selected service: $service (State: $state, Active: $active_status)"
+    echo -e "\nOptions:\n  [1] Start\n  [2] Stop\n  [3] Enable\n  [4] Disable\n  [5] View Status\n  [q] Quit"
+    read -rp "Choose an option: " option
+
+    case $option in
+    1) sudo systemctl start "$service" && echo "✅ $service started." ;;
+    2) sudo systemctl stop "$service" && echo "✅ $service stopped." ;;
+    3) toggle_service "$service" "enable" ;;
+    4) toggle_service "$service" "disable" ;;
+    5) service_details "$service" ;;
+    q) echo "Exiting." ;;
+    *) echo "❌ Invalid option." ;;
+    esac
+  else
+    echo "⚠️ No service selected."
+  fi
+}
+
+# Run the script
+main

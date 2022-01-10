@@ -1,0 +1,16 @@
+{
+    "layer": "top",
+    "modules-left": ["battery"],
+    "modules-center": [],
+    "modules-right": ["clock"],
+    "battery": {
+        "format": "{capacity}% {icon}",
+        "format-icons": ["battery-full", "battery-good", "battery-medium", "battery-low", "battery-empty"],
+        "ac": "AC",
+        "adapter": "BAT0",
+        "percentage-interval": 1
+    },
+    "clock": {
+        "format": "{:%Y-%m-%d %H:%M:%S}"
+    }
+}

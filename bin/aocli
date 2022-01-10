@@ -1,0 +1,383 @@
+#!/bin/bash
+set -euo pipefail
+
+readonly BASE_DIR="${SYNC:-$HOME}/src/problems/aoc"
+readonly EDITOR="${EDITOR:-nvim}"
+readonly AOC_CLI="$SYNC/src/problems/aoc/aoc"
+readonly SESSION_FILE="$SYNC/src/problems/aoc/session"
+
+declare VERBOSE=false
+declare DRY_RUN=false
+
+usage() {
+  cat <<-EOF
+		Usage: $(basename "$0") [-o|--open] [-s|--submit] [-d|--download] [--part <1|2>] [options] <year> <day>
+
+		Options:
+		  -o, --open      Open problem in tmux session (default if no flag specified)
+		  -s, --submit    Submit solutions
+		  -d, --download  Download/update puzzle input and description
+		  -p, --part      Specify which part to submit (1 or 2)
+		      --dry-run   Run solution without submitting
+		  -v, --verbose   Enable verbose logging
+		  -h, --help      Show this help message
+
+		Examples:
+		  $(basename "$0") -o 2023 1                    # Open day 1 in tmux
+		  $(basename "$0") -s --part 1 2023 1          # Submit part 1
+		  $(basename "$0") -s --part 2 2023 1          # Submit part 2
+		  $(basename "$0") -d 2023 1                   # Download/update files
+		  $(basename "$0") -s --dry-run 2023 1         # Test without submitting
+	EOF
+
+}
+
+log() {
+  local level="$1"
+  shift
+  local msg="[${level}] $*"
+  if [[ "$VERBOSE" == true ]] || [[ "$level" != "DEBUG" ]]; then
+    printf '%s\n' "$msg" >&2
+  fi
+}
+
+die() {
+  log "ERROR" "$*"
+  exit 1
+}
+
+parse_args() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 1
+  fi
+
+  local action="open"
+  local year=""
+  local day=""
+  local part=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -o | --open)
+      action="open"
+      shift
+      ;;
+    -s | --submit)
+      action="submit"
+      shift
+      ;;
+    -d | --download)
+      action="download"
+      shift
+      ;;
+    -p | --part)
+      if [[ ! "$2" =~ ^[12]$ ]]; then
+        die "Part must be 1 or 2"
+      fi
+      part="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -v | --verbose)
+      VERBOSE=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      if [[ -z "$year" ]]; then
+        year="$1"
+      elif [[ -z "$day" ]]; then
+        day="$1"
+      else
+        die "Unexpected argument: $1"
+      fi
+      shift
+      ;;
+    esac
+  done
+
+  if [[ -z "$year" || -z "$day" ]]; then
+    die "Year and day are required"
+  fi
+
+  if ! [[ "$year" =~ ^[0-9]{4}$ ]]; then
+    die "Year must be a 4-digit number"
+  fi
+
+  if ! [[ "$day" =~ ^[0-9]+$ ]]; then
+    die "Day must be a numeric value"
+  fi
+
+  echo "$action" "$year" "$day" "$part"
+}
+
+validate_inputs() {
+  if [[ -z "${1:-}" || -z "${2:-}" ]]; then
+    usage
+  fi
+
+  if ! [[ "$1" =~ ^[0-9]{4}$ ]]; then
+    echo "Error: Year must be a 4-digit number."
+    usage
+  fi
+
+  if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+    echo "Error: Day must be a numeric value."
+    usage
+  fi
+}
+
+check_dependencies() {
+  command -v "$AOC_CLI" >/dev/null || {
+    echo "Error: $AOC_CLI CLI not found."
+    exit 1
+  }
+  [[ -f "$SESSION_FILE" ]] || {
+    echo "Error: Session file not found at $SESSION_FILE."
+    exit 1
+  }
+}
+
+setup_puzzle_environment() {
+  local year="$1"
+  local day
+  day="$(printf "%02d" "$2")"
+  local target_dir="$BASE_DIR/$year/$day"
+
+  mkdir -p "$target_dir"
+
+  echo "Downloading puzzle input and description..."
+  "$AOC_CLI" download -y "$year" -d "$day" -s "$SESSION_FILE" \
+    -i "$target_dir/input.txt" \
+    -p "$target_dir/puzzle.md" \
+    --overwrite
+
+  local python_file="$target_dir/solution.py"
+  if [[ ! -f "$python_file" ]]; then
+    echo "Creating Python solution file..."
+    create_python_template "$year" "$day" >"$python_file"
+  fi
+}
+
+create_python_template() {
+  local year="$1"
+  local day="$2"
+  cat <<EOF
+# Advent of Code $year - Day $day
+import sys
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: main.py <input file>")
+    input_file = sys.argv[1]
+
+    p1 = p2 = 0
+
+    with open(input_file) as f:
+        data = f.read().split("\n")
+
+    print(f"Part 1: {p1}")
+    print(f"Part 2: {p2}")
+
+
+if __name__ == "__main__":
+    main()
+EOF
+}
+
+run_solution() {
+  local -r python_file="$1"
+  local -r input_file="$2"
+
+  log "DEBUG" "Running Python solution: $python_file $input_file"
+  if ! output=$(python3 "$python_file" "$input_file" 2>&1); then
+    die "Python script failed: $output"
+  fi
+  printf '%s\n' "$output"
+}
+
+submit_answer() {
+  local -r year="$1"
+  local -r day="$(printf "%02d" "$2")"
+  local -r answer="$3"
+  local -r part="$4"
+  local -r target_dir="$BASE_DIR/$year/$day"
+  local -r session_name="aoc-${year}-${day}"
+
+  log "INFO" "Submitting your answer for Part $part..."
+  log "DEBUG" "Answer: $answer"
+
+  tmux split-window -h
+  tmux send-keys "cd $target_dir && nvim puzzle.md" C-m
+
+  tmux split-window -v
+  tmux send-keys "cd $target_dir && nvim input.txt" C-m
+
+  tmux select-pane -t 1
+  tmux split-window -v
+  tmux send-keys "aoc_start $year $day s"
+
+  tmux select-pane -t 1
+  tmux attach-session -t "$session_name"
+
+}
+run_and_prompt_submission() {
+  local year="$1"
+  local day
+  day="$(printf "%02d" "$2")"
+  local specific_part="$3"
+  local target_dir="$BASE_DIR/$year/$day"
+  local python_file="$target_dir/solution.py"
+
+  cd "$target_dir" || die "Failed to change to directory: $target_dir"
+
+  log "INFO" "Running Python solution..."
+  local output
+  output=$(python3 "$python_file" "input.txt")
+
+  local part1 part2
+  part1=$(echo "$output" | grep -Eo "^Part 1: .*" | sed 's/Part 1: //')
+  part2=$(echo "$output" | grep -Eo "^Part 2: .*" | sed 's/Part 2: //')
+
+  echo "Solution output:"
+  echo "$output"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log "INFO" "Dry run mode - solutions would be:"
+    [[ -n "$part1" ]] && log "INFO" "Part 1: $part1"
+    [[ -n "$part2" ]] && log "INFO" "Part 2: $part2"
+    return 0
+  fi
+
+  if [[ -n "$specific_part" ]]; then
+    local answer
+    if [[ "$specific_part" == "1" ]]; then
+      [[ -n "$part1" ]] || die "No answer found for part 1"
+      submit_answer "$year" "$day" "$part1" "1"
+    else
+      [[ -n "$part2" ]] || die "No answer found for part 2"
+      submit_answer "$year" "$day" "$part2" "2"
+    fi
+    return 0
+  fi
+
+  if [[ -n "$part1" ]]; then
+    read -r -p "Do you want to submit Part 1? [y/N] " submit1
+    if [[ "$submit1" =~ ^[Yy]$ ]]; then
+      submit_answer "$year" "$day" "$part1" "1"
+    else
+      log "INFO" "Part 1 submission skipped."
+    fi
+  fi
+
+  if [[ -n "$part2" ]]; then
+    read -r -p "Do you want to submit Part 2? [y/N] " submit2
+    if [[ "$submit2" =~ ^[Yy]$ ]]; then
+      submit_answer "$year" "$day" "$part2" "2"
+    else
+      log "INFO" "Part 2 submission skipped."
+    fi
+  fi
+}
+
+download_puzzle() {
+  local year="$1"
+  local day
+  day="$(printf "%02d" "$2")"
+  local target_dir="$BASE_DIR/$year/$day"
+
+  mkdir -p "$target_dir"
+
+  echo "Downloading/updating puzzle input and description..."
+  "$AOC_CLI" download -y "$year" -d "$day" -s "$SESSION_FILE" \
+    -i "$target_dir/input.txt" \
+    -p "$target_dir/puzzle.md" \
+    --overwrite
+
+  echo "Download complete!"
+}
+
+launch_tmux_session() {
+  local -r year="$1"
+  local -r day="$(printf "%02d" "$2")"
+  local -r target_dir="$BASE_DIR/$year/$day"
+  local -r session_name="aoc-${year}-${day}"
+  local -r python_file="$target_dir/solution.py"
+
+  # Kill existing session if it exists
+  if tmux has-session -t "$session_name" 2>/dev/null; then
+    log "INFO" "Killing existing session: $session_name"
+    tmux kill-session -t "$session_name"
+  fi
+
+  # Create new session
+  tmux new-session -d -s "$session_name" -c "$target_dir"
+
+  # Window 1: Main coding window
+  tmux rename-window -t "$session_name:1" 'code'
+  tmux send-keys -t "$session_name:1" "$EDITOR $python_file" C-m
+
+  # Split for puzzle description
+  tmux split-window -h -t "$session_name:1" -c "$target_dir"
+  tmux send-keys -t "$session_name:1.2" "$EDITOR puzzle.md" C-m
+
+  # Split for input
+  tmux split-window -v -t "$session_name:1.2" -c "$target_dir"
+  tmux send-keys -t "$session_name:1.3" "$EDITOR input.txt" C-m
+
+  # Split for running tests
+  tmux split-window -v -t "$session_name:1.1" -c "$target_dir"
+  tmux send-keys -t "$session_name:1.4" "python3 $python_file input.txt" C-m
+
+  # Set the main editor pane to be larger
+  tmux select-layout -t "$session_name:1" main-vertical
+
+  # Select the main pane
+  tmux select-pane -t "$session_name:1.1"
+
+  # Attach to session
+  if [[ -n "${TMUX:-}" ]]; then
+    # We're already in tmux, switch to the new session
+    tmux switch-client -t "$session_name"
+  else
+    # We're not in tmux, attach to the new session
+    tmux attach-session -t "$session_name"
+  fi
+}
+
+main() {
+  if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
+    usage
+    exit 0
+  fi
+
+  local action year day part
+  read -r action year day part < <(parse_args "$@")
+  check_dependencies
+
+  case "$action" in
+  "open")
+    setup_puzzle_environment "$year" "$day"
+    launch_tmux_session "$year" "$day"
+    ;;
+  "submit")
+    run_and_prompt_submission "$year" "$day" "$part"
+    ;;
+  "download")
+    download_puzzle "$year" "$day"
+    ;;
+  *)
+    die "Unknown action: $action"
+    ;;
+  esac
+}
+
+main "$@"
