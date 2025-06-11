@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# Terminal Calculator Popup
+# Opens a floating terminal with a calculator
+
+# Calculator script content
+CALC_SCRIPT="
+import math
+import sys
+import readline
+import atexit
+import os
+
+# Setup readline history
+histfile = os.path.join(os.path.expanduser('~'), '.calc_history')
+try:
+    readline.read_history_file(histfile)
+    readline.set_history_length(100)
+except FileNotFoundError:
+    pass
+
+atexit.register(readline.write_history_file, histfile)
+
+# Define useful constants and functions
+pi = math.pi
+e = math.e
+sqrt = math.sqrt
+sin = math.sin
+cos = math.cos
+tan = math.tan
+log = math.log
+log10 = math.log10
+exp = math.exp
+pow = math.pow
+abs = abs
+ceil = math.ceil
+floor = math.floor
+round = round
+
+def help_calc():
+    print('''
+🧮 Calculator Help:
+==================
+Basic operators: + - * / ** % //
+Functions: sqrt(), sin(), cos(), tan(), log(), log10(), exp()
+Constants: pi, e
+Examples:
+  2 + 3 * 4        → 14
+  sqrt(16)         → 4.0
+  sin(pi/2)        → 1.0
+  2**8             → 256
+  log(e)           → 1.0
+  
+Commands:
+  help() or ?      → Show this help
+  quit() or q      → Exit calculator
+  clear() or c     → Clear screen
+  
+Results are automatically copied to clipboard!
+    ''')
+
+def quit_calc():
+    print('Goodbye! 👋')
+    sys.exit(0)
+
+def clear_screen():
+    os.system('clear')
+    print('🧮 Terminal Calculator')
+    print('Type help() for commands or an expression to calculate')
+    print('Press Ctrl+C or type quit() to exit\\n')
+
+# Add shortcuts
+q = quit_calc
+c = clear_screen
+help = help_calc
+
+# Copy to clipboard function
+def copy_to_clipboard(text):
+    try:
+        if os.environ.get('WAYLAND_DISPLAY'):
+            os.system(f'echo \"{text}\" | wl-copy')
+        else:
+            os.system(f'echo \"{text}\" | xclip -selection clipboard')
+        return True
+    except:
+        return False
+
+# Welcome message
+clear_screen()
+
+while True:
+    try:
+        expr = input('📱 calc> ')
+        
+        if not expr.strip():
+            continue
+            
+        if expr.strip().lower() in ['quit', 'q', 'exit']:
+            quit_calc()
+        elif expr.strip().lower() in ['clear', 'c', 'cls']:
+            clear_screen()
+            continue
+        elif expr.strip().lower() in ['help', '?']:
+            help_calc()
+            continue
+            
+        # Evaluate the expression
+        try:
+            result = eval(expr)
+            print(f'✅ {result}')
+            
+            # Copy result to clipboard
+            if copy_to_clipboard(str(result)):
+                print('📋 Copied to clipboard!')
+            
+        except Exception as e:
+            print(f'❌ Error: {e}')
+            
+    except KeyboardInterrupt:
+        quit_calc()
+    except EOFError:
+        quit_calc()
+"
+
+# Create a temporary Python script
+TEMP_SCRIPT="/tmp/calculator_$$.py"
+echo "$CALC_SCRIPT" > "$TEMP_SCRIPT"
+
+# Launch the calculator in a floating terminal
+if [ -n "$WAYLAND_DISPLAY" ]; then
+    # For Wayland/Hyprland
+    alacritty --class "floating-calculator" --title "Calculator" -e python3 "$TEMP_SCRIPT"
+else
+    # For X11
+    alacritty --class "floating-calculator" --title "Calculator" -e python3 "$TEMP_SCRIPT"
+fi
+
+# Clean up
+rm -f "$TEMP_SCRIPT"
