@@ -1,77 +1,124 @@
 [global]
-    alignment = center
-    always_run_script = true
-    browser = /usr/bin/xdg-open
-    class = Dunst
-    corner_radius = 5
-    dmenu = /usr/bin/dmenu -p dunst:
+    ### Display ###
+    monitor = 0
+    follow = mouse
+    
+    ### Geometry ###
+    width = (300, 600)
+    height = (50, 400)
+    origin = top-right
+    offset = (30, 50)
+    scale = 0
+    notification_limit = 10
+    
+    ### Progress bar ###
+    progress_bar = true
+    progress_bar_height = 14
+    progress_bar_frame_width = 1
+    progress_bar_min_width = 150
+    progress_bar_max_width = 400
+    progress_bar_corner_radius = 5
+    
+    ### Visual ###
+    transparency = 10
+    horizontal_padding = 16
+    vertical_alignment = center
+    text_icon_padding = 16
+    frame_width = 2
+    frame_color = "#7aa2f7"
+    gap_size = 5
+    separator_height = 1
+    padding = 16
+    corner_radius = 8
+    separator_color = auto
+    
+    ### Text ###
+    font = "JetBrainsMono Nerd Font" 14
+    line_height = 4
+    markup = full
+    format = "<b>%s</b>\n%b"
+    alignment = left
+    vertical_alignment = center
+    show_age_threshold = 60
     ellipsize = middle
+    ignore_newline = no
+    stack_duplicates = true
+    hide_duplicate_count = false
+    show_indicators = yes
+    word_wrap = yes
+    
+    ### Icons ###
     enable_recursive_icon_lookup = true
-    follow = none
-    font = Monospace 10
+    icon_theme = "Adwaita"
+    icon_position = left
+    min_icon_size = 32
+    max_icon_size = 48
+    
+    ### History ###
+    sticky_history = yes
+    history_length = 50
+    
+    ### Misc ###
+    browser = /usr/bin/xdg-open
+    always_run_script = true
+    title = Dunst
+    class = Dunst
     force_xinerama = false
     force_xwayland = false
-    format = "<b>%s</b>\n%b"
-    frame_color = "#1A1B26"
-    frame_width = 3
-    gap_size = 0
-    height = 150
-    hide_duplicate_count = false
-    history_length = 20
-    horizontal_padding = 8
-    icon_corner_radius = 0
-    icon_path = /usr/share/icons/gnome/16x16/status/:/usr/share/icons/gnome/16x16/devices/
-    icon_position = left
-    icon_theme = Adwaita
     ignore_dbusclose = false
-    ignore_newline = no
-    indicate_hidden = yes
-    line_height = 0
-    markup = full
-    max_icon_size = 0
-    min_icon_size = 0
-    monitor = 0
+    
+    ### Mouse ###
     mouse_left_click = close_current
     mouse_middle_click = do_action, close_current
     mouse_right_click = close_all
-    notification_limit = 20
-    offset = 10x50
-    origin = top-center
-    padding = 8
-    progress_bar = true
-    progress_bar_corner_radius = 0
-    progress_bar_frame_width = 1
-    progress_bar_height = 10
-    progress_bar_max_width = 300
-    progress_bar_min_width = 150
-    scale = 0
-    separator_color = frame
-    separator_height = 2
-    show_age_threshold = 60
-    show_indicators = yes
-    sort = yes
-    stack_duplicates = true
-    sticky_history = yes
-    text_icon_padding = 0
-    title = Dunst
-    transparency = 0
-    vertical_alignment = center
-    width = 150
-
-[experimental]
-    per_monitor_dpi = false
 
 [urgency_low]
     background = "#16161e"
-    foreground = "#c0caf5"
-    frame_color = "#c0caf5"
+    foreground = "#a9b1d6"
+    frame_color = "#565f89"
+    timeout = 5
 
 [urgency_normal]
     background = "#1a1b26"
     foreground = "#c0caf5"
-    frame_color = "#c0caf5"
+    frame_color = "#7aa2f7"
+    timeout = 8
 
 [urgency_critical]
     background = "#292e42"
-    foreground = "#db4b4b"
-    frame_color = "#db4b4b"
+    foreground = "#f7768e"
+    frame_color = "#f7768e"
+    timeout = 0
+
+# Application-specific rules
+[spotify]
+    appname = "Spotify"
+    format = "<b>🎵 Spotify</b>\n%s\n%b"
+    timeout = 4
+
+[discord]
+    appname = "discord"
+    format = "<b>💬 Discord</b>\n%s\n%b"
+    timeout = 10
+
+[volume]
+    summary = "*Volume*"
+    format = "<b>🔊 %s</b>"
+    history_ignore = yes
+    timeout = 2
+
+[brightness]
+    summary = "*Brightness*"
+    format = "<b>🔆 %s</b>"
+    history_ignore = yes
+    timeout = 2
+
+[battery]
+    summary = "*Battery*"
+    format = "<b>🔋 %s</b>\n%b"
+    timeout = 8
+
+[network]
+    summary = "*Network*"
+    format = "<b>🌐 %s</b>\n%b"
+    timeout = 5

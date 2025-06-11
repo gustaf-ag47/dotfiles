@@ -1,68 +1,235 @@
+/* Tokyo Night Waybar Theme - Enhanced Aesthetics */
+
+/* Reset and base styles */
 * {
-  font-family: "monospace";
-  font-size: 12px;
-  color: #c0caf5;
+  border: none;
+  border-radius: 0;
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 18px;
+  min-height: 0;
+  font-weight: 500;
 }
 
-#battery {
-  background: #1a1b26;
-  padding: 5px;
-  border-radius: 5px;
+#waybar {
+  background: linear-gradient(135deg, rgba(26, 27, 38, 0.95), rgba(22, 22, 30, 0.9));
   color: #c0caf5;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(26, 27, 38, 0.4);
+  border-bottom: 1px solid rgba(122, 162, 247, 0.3);
 }
 
+/* Enhanced module styling */
+#workspaces,
+#window,
+#clock,
+#cpu,
+#memory,
+#custom-battery,
+#network,
+#tray {
+  padding: 0 16px;
+  margin: 0;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Workspaces with glassmorphism effect */
+#workspaces {
+  background: rgba(26, 27, 38, 0.3);
+  border-radius: 12px;
+  margin: 4px 8px;
+  padding: 2px 4px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+#workspaces button {
+  background: transparent;
+  color: #565f89;
+  border: none;
+  padding: 6px 12px;
+  margin: 2px;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  box-shadow: none;
+}
+
+#workspaces button.active {
+  background: linear-gradient(135deg, #7aa2f7, #7dcfff);
+  color: #1a1b26;
+  font-weight: bold;
+  box-shadow: 0 4px 16px rgba(122, 162, 247, 0.4);
+  transform: translateY(-1px);
+}
+
+#workspaces button.urgent {
+  background: linear-gradient(135deg, #f7768e, #ff9e64);
+  color: #1a1b26;
+  font-weight: bold;
+  box-shadow: 0 4px 16px rgba(247, 118, 142, 0.4);
+  animation: pulse 2s infinite;
+}
+
+#workspaces button:hover {
+  background: rgba(122, 162, 247, 0.2);
+  color: #c0caf5;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(122, 162, 247, 0.2);
+}
+
+/* Window title with subtle styling */
+#window {
+  background: rgba(31, 35, 53, 0.6);
+  color: #9aa5ce;
+  font-style: italic;
+  font-weight: 400;
+  border-radius: 8px;
+  margin: 4px 8px;
+  padding: 0 16px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(122, 162, 247, 0.2);
+}
+
+/* Clock with gradient background */
 #clock {
-  background: #1a1b26;
-  padding: 5px;
-  border-radius: 5px;
+  background: linear-gradient(135deg, rgba(26, 27, 38, 0.8), rgba(31, 35, 53, 0.8));
   color: #c0caf5;
+  font-weight: bold;
+  border-radius: 12px;
+  margin: 4px 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(122, 162, 247, 0.3);
 }
 
-/* Additional styling for modules */
-#battery.full {
-  color: #9ece6a; /* Green */
+/* System metrics with enhanced styling */
+#cpu {
+  background: linear-gradient(135deg, rgba(31, 35, 53, 0.8), rgba(36, 40, 59, 0.8));
+  color: #7dcfff;
+  border-radius: 8px;
+  margin: 4px 4px 4px 8px;
+  border: 1px solid rgba(125, 207, 255, 0.3);
+  box-shadow: 0 2px 8px rgba(125, 207, 255, 0.1);
 }
 
-#battery.good {
-  color: #e0af68; /* Yellow */
+#memory {
+  background: linear-gradient(135deg, rgba(36, 40, 59, 0.8), rgba(41, 46, 66, 0.8));
+  color: #bb9af7;
+  border-radius: 8px;
+  margin: 4px;
+  border: 1px solid rgba(187, 154, 247, 0.3);
+  box-shadow: 0 2px 8px rgba(187, 154, 247, 0.1);
 }
 
-#battery.medium {
-  color: #e0af68; /* Yellow */
+/* Enhanced battery styling */
+#custom-battery {
+  background: linear-gradient(135deg, rgba(41, 46, 66, 0.8), rgba(59, 70, 97, 0.8));
+  color: #c0caf5;
+  font-weight: bold;
+  border-radius: 8px;
+  margin: 4px;
+  border: 1px solid rgba(169, 177, 214, 0.3);
+  box-shadow: 0 2px 8px rgba(169, 177, 214, 0.1);
 }
 
-#battery.low {
-  color: #f7768e; /* Red */
+#custom-battery.charging {
+  background: linear-gradient(135deg, rgba(158, 206, 106, 0.2), rgba(158, 206, 106, 0.1));
+  color: #9ece6a;
+  border-color: rgba(158, 206, 106, 0.5);
+  box-shadow: 0 2px 12px rgba(158, 206, 106, 0.2);
 }
 
-#battery.empty {
-  color: #f7768e; /* Red */
+#custom-battery.warning {
+  background: linear-gradient(135deg, rgba(224, 175, 104, 0.2), rgba(224, 175, 104, 0.1));
+  color: #e0af68;
+  border-color: rgba(224, 175, 104, 0.5);
+  box-shadow: 0 2px 12px rgba(224, 175, 104, 0.2);
 }
 
-/* General background for bar */
-#bar {
-  background: #1a1b26;
-  border-bottom: 1px solid #414868;
-  padding: 5px 10px;
+#custom-battery.critical {
+  background: linear-gradient(135deg, rgba(247, 118, 142, 0.3), rgba(247, 118, 142, 0.2));
+  color: #f7768e;
+  border-color: rgba(247, 118, 142, 0.6);
+  box-shadow: 0 2px 16px rgba(247, 118, 142, 0.3);
+  animation: pulse 1s ease-in-out infinite alternate;
 }
 
-/* Separator styling */
-.separator {
-  background: #414868;
-  margin: 0 10px;
+/* Network with connectivity styling */
+#network {
+  background: linear-gradient(135deg, rgba(59, 70, 97, 0.8), rgba(86, 95, 137, 0.6));
+  color: #7aa2f7;
+  border-radius: 8px;
+  margin: 4px 8px 4px 4px;
+  border: 1px solid rgba(122, 162, 247, 0.3);
+  box-shadow: 0 2px 8px rgba(122, 162, 247, 0.1);
+}
+
+#network.disconnected {
+  background: linear-gradient(135deg, rgba(247, 118, 142, 0.2), rgba(247, 118, 142, 0.1));
+  color: #f7768e;
+  border-color: rgba(247, 118, 142, 0.5);
+}
+
+/* System tray styling */
+#tray {
+  background: linear-gradient(135deg, rgba(59, 70, 97, 0.6), rgba(86, 95, 137, 0.4));
+  border-radius: 8px;
+  margin: 4px 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(122, 162, 247, 0.2);
+}
+
+/* Custom separator */
+#custom-separator {
+  background: transparent;
+  color: rgba(122, 162, 247, 0.4);
+  padding: 0 8px;
+  font-size: 20px;
+  font-weight: 300;
+}
+
+/* Hover effects for interactive elements */
+#cpu:hover,
+#memory:hover,
+#custom-battery:hover,
+#network:hover,
+#clock:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(122, 162, 247, 0.2);
+  border-color: rgba(122, 162, 247, 0.6);
+}
+
+/* Animations */
+@keyframes pulse {
+  0% {
+    box-shadow: 0 2px 16px rgba(247, 118, 142, 0.3);
+  }
+  100% {
+    box-shadow: 0 4px 24px rgba(247, 118, 142, 0.6);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* Tooltip styling */
-.tooltip {
-  background: #1a1b26;
-  color: #c0caf5;
-  border: 1px solid #414868;
-  padding: 5px;
-  border-radius: 5px;
+tooltip {
+  background: rgba(26, 27, 38, 0.95);
+  border: 2px solid rgba(122, 162, 247, 0.3);
+  border-radius: 12px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(26, 27, 38, 0.6);
 }
 
-/* Hover effects */
-#battery:hover,
-#clock:hover {
-  background: #32344a;
+tooltip label {
+  color: #c0caf5;
+  padding: 12px;
+  font-weight: 500;
 }

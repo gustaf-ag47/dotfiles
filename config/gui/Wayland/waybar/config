@@ -1,16 +1,99 @@
 {
-    "layer": "top",
-    "modules-left": ["battery"],
-    "modules-center": [],
-    "modules-right": ["clock"],
-    "battery": {
-        "format": "{capacity}% {icon}",
-        "format-icons": ["battery-full", "battery-good", "battery-medium", "battery-low", "battery-empty"],
-        "ac": "AC",
-        "adapter": "BAT0",
-        "percentage-interval": 1
+  "layer": "top",
+  "position": "top",
+  "height": 36,
+  "spacing": 0,
+  "modules-left": ["hyprland/workspaces", "custom/separator", "hyprland/window"],
+  "modules-center": ["clock"],
+  "modules-right": ["cpu", "memory", "custom/battery", "network", "tray"],
+
+  "hyprland/workspaces": {
+    "format": "{icon}",
+    "on-click": "activate",
+    "format-icons": {
+      "1": "󰎤",
+      "2": "󰎧",
+      "3": "󰎪",
+      "4": "󰎭",
+      "5": "󰎱",
+      "6": "󰎳",
+      "7": "󰎶",
+      "8": "󰎹",
+      "9": "󰎼",
+      "10": "󰎡",
+      "urgent": "",
+      "default": "󰊠"
     },
-    "clock": {
-        "format": "{:%Y-%m-%d %H:%M:%S}"
+    "persistent_workspaces": {
+      "1": [],
+      "2": [],
+      "3": [],
+      "4": [],
+      "5": []
     }
+  },
+
+  "custom/separator": {
+    "format": "|",
+    "interval": "once",
+    "tooltip": false
+  },
+
+  "hyprland/window": {
+    "format": "󰖯 {title}",
+    "max-length": 50,
+    "separate-outputs": true
+  },
+
+  "clock": {
+    "format": "󰃭 {:%Y-%m-%d  󰥔 %H:%M}",
+    "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
+    "calendar": {
+      "mode": "month",
+      "mode-mon-col": 3,
+      "on-scroll": 1,
+      "format": {
+        "months": "<span color='#a9b1d6'><b>{}</b></span>",
+        "days": "<span color='#a9b1d6'><b>{}</b></span>",
+        "weekdays": "<span color='#e0af68'><b>{}</b></span>",
+        "today": "<span color='#7aa2f7'><b><u>{}</u></b></span>"
+      }
+    }
+  },
+
+  "cpu": {
+    "format": "󰍛 CPU {usage}%",
+    "interval": 2,
+    "tooltip": true,
+    "tooltip-format": "CPU Usage: {usage}%\nLoad Average: {load}"
+  },
+
+  "memory": {
+    "format": "󰧑 RAM {used:0.1f}G",
+    "interval": 2,
+    "tooltip-format": "Memory: {used:0.1f}G / {total:0.1f}G ({percentage}%)\nSwap: {swapUsed:0.1f}G / {swapTotal:0.1f}G"
+  },
+
+  "custom/battery": {
+    "exec": "$HOME/sync/src/dotfiles/bin/waybar-battery",
+    "return-type": "json",
+    "interval": 30,
+    "format": "{}",
+    "on-click": "$HOME/sync/src/dotfiles/bin/battery-monitor"
+  },
+
+  "network": {
+    "format-wifi": "󰤨 {essid}",
+    "format-ethernet": "󰈀 ETH",
+    "format-linked": "󱘖 No IP",
+    "format-disconnected": "󰤭 Offline",
+    "tooltip-format-wifi": "Signal: {signalStrength}%\nFrequency: {frequency}MHz\nIP: {ipaddr}",
+    "tooltip-format-ethernet": "Interface: {ifname}\nIP: {ipaddr}",
+    "on-click": "nm-connection-editor"
+  },
+
+  "tray": {
+    "icon-size": 20,
+    "spacing": 10
+  }
 }

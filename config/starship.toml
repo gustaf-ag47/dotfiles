@@ -1,0 +1,121 @@
+# Starship Configuration - Tokyo Night Theme
+# ~/.config/starship.toml
+
+format = """
+[](#7aa2f7)\
+$os\
+$username\
+[](bg:#3b4261 fg:#7aa2f7)\
+$directory\
+[](fg:#3b4261 bg:#292e42)\
+$git_branch\
+$git_status\
+[](fg:#292e42 bg:#1a1b26)\
+$nodejs\
+$rust\
+$golang\
+$python\
+$docker_context\
+[](fg:#1a1b26)\
+$line_break$character"""
+
+# Disable the blank line at the start of the prompt
+add_newline = false
+
+# OS module
+[os]
+style = "bg:#7aa2f7 fg:#16161e"
+disabled = false
+format = '[ $symbol ]($style)'
+
+[os.symbols]
+Windows = "󰍲"
+Ubuntu = "󰕈"
+SUSE = ""
+Raspbian = "󰐿"
+Mint = "󰣭"
+Macos = "󰀵"
+Manjaro = ""
+Linux = "󰌽"
+Gentoo = "󰣨"
+Fedora = "󰣛"
+Alpine = ""
+Amazon = ""
+Android = ""
+Arch = "󰣇"
+Artix = "󰣇"
+CentOS = ""
+Debian = "󰣚"
+Redhat = "󱄛"
+RedHatEnterprise = "󱄛"
+
+# Username
+[username]
+show_always = true
+style_user = "bg:#7aa2f7 fg:#16161e"
+style_root = "bg:#7aa2f7 fg:#16161e"
+format = '[$user ]($style)'
+disabled = false
+
+# Directory
+[directory]
+style = "fg:#e0af68 bg:#3b4261"
+format = "[ $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[directory.substitutions]
+"Documents" = "󰈙 "
+"Downloads" = " "
+"Music" = " "
+"Pictures" = " "
+
+# Git branch
+[git_branch]
+symbol = ""
+style = "bg:#292e42"
+format = '[[ $symbol $branch ](fg:#9ece6a bg:#292e42)]($style)'
+
+# Git status
+[git_status]
+style = "bg:#292e42"
+format = '[[($all_status$ahead_behind )](fg:#f7768e bg:#292e42)]($style)'
+
+# Node.js
+[nodejs]
+symbol = ""
+style = "bg:#1a1b26"
+format = '[[ $symbol ($version) ](fg:#9ece6a bg:#1a1b26)]($style)'
+
+# Rust
+[rust]
+symbol = ""
+style = "bg:#1a1b26"
+format = '[[ $symbol ($version) ](fg:#f7768e bg:#1a1b26)]($style)'
+
+# Python
+[python]
+symbol = ""
+style = "bg:#1a1b26"
+format = '[[ $symbol ($version) ](fg:#e0af68 bg:#1a1b26)]($style)'
+
+# Docker
+[docker_context]
+symbol = ""
+style = "bg:#1a1b26"
+format = '[[ $symbol $context ](fg:#7dcfff bg:#1a1b26)]($style)'
+
+# Golang
+[golang]
+symbol = ""
+style = "bg:#1a1b26"
+format = '[[ $symbol ($version) ](fg:#7dcfff bg:#1a1b26)]($style)'
+
+# Character
+[character]
+success_symbol = '[](bold fg:#9ece6a)'
+error_symbol = '[](bold fg:#f7768e)'
+vimcmd_symbol = '[](bold fg:#e0af68)'
+vimcmd_replace_one_symbol = '[](bold fg:#bb9af7)'
+vimcmd_replace_symbol = '[](bold fg:#bb9af7)'
+vimcmd_visual_symbol = '[](bold fg:#e0af68)'

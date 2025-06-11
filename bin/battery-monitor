@@ -1,0 +1,159 @@
+#!/bin/bash
+
+# Battery Monitor Script
+# Monitors battery status, sends notifications, and handles low battery situations
+
+# Configuration
+LOW_BATTERY_THRESHOLD=20
+CRITICAL_BATTERY_THRESHOLD=10
+VERY_CRITICAL_THRESHOLD=5
+
+# State files
+STATE_DIR="$HOME/.local/share/battery-monitor"
+LAST_NOTIFICATION_FILE="$STATE_DIR/last_notification"
+mkdir -p "$STATE_DIR"
+
+# Get battery information
+get_battery_info() {
+    local battery_path="/sys/class/power_supply/BAT0"
+    
+    if [[ ! -d "$battery_path" ]]; then
+        echo "Battery not found" >&2
+        exit 1
+    fi
+    
+    capacity=$(cat "$battery_path/capacity" 2>/dev/null || echo "0")
+    status=$(cat "$battery_path/status" 2>/dev/null || echo "Unknown")
+    
+    echo "$capacity,$status"
+}
+
+# Check if AC adapter is connected
+is_charging() {
+    local ac_path="/sys/class/power_supply/ADP1"
+    
+    # Try different AC adapter paths
+    for ac in /sys/class/power_supply/A{C,DP,CAD}*; do
+        if [[ -d "$ac" ]]; then
+            local online=$(cat "$ac/online" 2>/dev/null || echo "0")
+            if [[ "$online" == "1" ]]; then
+                return 0
+            fi
+        fi
+    done
+    
+    return 1
+}
+
+# Send notification
+send_notification() {
+    local title="$1"
+    local message="$2"
+    local urgency="$3"
+    local icon="$4"
+    
+    notify-send -u "$urgency" -i "$icon" "$title" "$message"
+}
+
+# Handle low battery
+handle_low_battery() {
+    local capacity="$1"
+    local last_notif_time=0
+    
+    # Read last notification time
+    if [[ -f "$LAST_NOTIFICATION_FILE" ]]; then
+        last_notif_time=$(cat "$LAST_NOTIFICATION_FILE")
+    fi
+    
+    local current_time=$(date +%s)
+    local time_diff=$((current_time - last_notif_time))
+    
+    # Only notify every 5 minutes to avoid spam
+    if [[ $time_diff -lt 300 ]]; then
+        return
+    fi
+    
+    if [[ $capacity -le $VERY_CRITICAL_THRESHOLD ]]; then
+        send_notification "Critical Battery!" "Battery at ${capacity}%. System will hibernate in 30 seconds." "critical" "battery-caution"
+        echo "$current_time" > "$LAST_NOTIFICATION_FILE"
+        
+        # Give user 30 seconds to plug in charger
+        sleep 30
+        
+        # Check again if still critical and not charging
+        local new_info=$(get_battery_info)
+        local new_capacity=$(echo "$new_info" | cut -d',' -f1)
+        
+        if [[ $new_capacity -le $VERY_CRITICAL_THRESHOLD ]] && ! is_charging; then
+            send_notification "Hibernating Now" "Battery critically low. Hibernating system." "critical" "battery-caution"
+            systemctl hibernate
+        fi
+        
+    elif [[ $capacity -le $CRITICAL_BATTERY_THRESHOLD ]]; then
+        send_notification "Battery Critical" "Battery at ${capacity}%. Please plug in charger." "critical" "battery-low"
+        echo "$current_time" > "$LAST_NOTIFICATION_FILE"
+        
+    elif [[ $capacity -le $LOW_BATTERY_THRESHOLD ]]; then
+        send_notification "Battery Low" "Battery at ${capacity}%. Consider charging soon." "normal" "battery-low"
+        echo "$current_time" > "$LAST_NOTIFICATION_FILE"
+    fi
+}
+
+# Handle charging status change
+handle_charging_change() {
+    local capacity="$1"
+    local is_charging_now="$2"
+    local state_file="$STATE_DIR/charging_state"
+    local was_charging="false"
+    
+    if [[ -f "$state_file" ]]; then
+        was_charging=$(cat "$state_file")
+    fi
+    
+    # Save current state
+    echo "$is_charging_now" > "$state_file"
+    
+    # Notify on status change
+    if [[ "$was_charging" != "$is_charging_now" ]]; then
+        if [[ "$is_charging_now" == "true" ]]; then
+            send_notification "Charging" "Battery charging (${capacity}%)" "low" "battery-charging"
+        else
+            send_notification "Unplugged" "Running on battery (${capacity}%)" "low" "battery"
+        fi
+    fi
+}
+
+# Main monitoring function
+monitor_battery() {
+    local info=$(get_battery_info)
+    local capacity=$(echo "$info" | cut -d',' -f1)
+    local status=$(echo "$info" | cut -d',' -f2)
+    
+    local charging="false"
+    if is_charging || [[ "$status" == "Charging" ]]; then
+        charging="true"
+    fi
+    
+    # Handle charging status changes
+    handle_charging_change "$capacity" "$charging"
+    
+    # Handle low battery only when not charging
+    if [[ "$charging" == "false" ]]; then
+        handle_low_battery "$capacity"
+    fi
+    
+    # Output status for debugging
+    echo "$(date): Battery ${capacity}%, Status: ${status}, Charging: ${charging}"
+}
+
+# Run once or continuously
+if [[ "$1" == "--daemon" ]]; then
+    # Run as daemon
+    while true; do
+        monitor_battery
+        sleep 60  # Check every minute
+    done
+else
+    # Run once
+    monitor_battery
+fi

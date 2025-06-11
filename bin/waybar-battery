@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Get battery info
+capacity=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo "0")
+status=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "Unknown")
+
+# Get time remaining using acpi
+acpi_output=$(acpi -b 2>/dev/null | head -1)
+time_remaining=""
+
+if [[ -n "$acpi_output" ]]; then
+    # Extract time from acpi output
+    if [[ "$status" == "Discharging" ]]; then
+        time_remaining=$(echo "$acpi_output" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -1)
+    elif [[ "$status" == "Charging" ]]; then
+        time_remaining=$(echo "$acpi_output" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -1)
+    fi
+fi
+
+# Format time (HH:MM)
+if [[ -n "$time_remaining" ]]; then
+    time_formatted=$(echo "$time_remaining" | cut -d: -f1-2)
+    time_text=" ($time_formatted)"
+else
+    time_text=""
+fi
+
+# Determine icon based on capacity and status
+if [[ "$status" == "Charging" ]]; then
+    icon=""
+elif [[ "$status" == "Full" ]]; then
+    icon=""
+elif [[ $capacity -le 10 ]]; then
+    icon=""
+elif [[ $capacity -le 20 ]]; then
+    icon=""
+elif [[ $capacity -le 30 ]]; then
+    icon=""
+elif [[ $capacity -le 40 ]]; then
+    icon=""
+elif [[ $capacity -le 50 ]]; then
+    icon=""
+elif [[ $capacity -le 60 ]]; then
+    icon=""
+elif [[ $capacity -le 70 ]]; then
+    icon=""
+elif [[ $capacity -le 80 ]]; then
+    icon=""
+elif [[ $capacity -le 90 ]]; then
+    icon=""
+else
+    icon=""
+fi
+
+# Determine CSS class
+class=""
+if [[ $capacity -le 15 ]]; then
+    class="critical"
+elif [[ $capacity -le 30 ]]; then
+    class="warning"
+fi
+
+# Output JSON for waybar
+echo "{\"text\": \"$icon BAT ${capacity}%${time_text}\", \"class\": \"$class\", \"tooltip\": \"Battery: ${capacity}%\nStatus: ${status}${time_text}\"}"
