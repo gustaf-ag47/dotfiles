@@ -33,24 +33,24 @@ launch_browser() {
                 # Wayland environment
                 case "$browser" in
                     "firefox")
-                        MOZ_ENABLE_WAYLAND=1 firefox "$url" &
+                        env MOZ_ENABLE_WAYLAND=1 GDK_BACKEND=wayland firefox "$url" >/dev/null 2>&1 &
                         ;;
                     "chromium")
-                        chromium --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" &
+                        chromium --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" >/dev/null 2>&1 &
                         ;;
                     "google-chrome")
-                        google-chrome --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" &
+                        google-chrome --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" >/dev/null 2>&1 &
                         ;;
                     "brave")
-                        brave --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" &
+                        brave --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" >/dev/null 2>&1 &
                         ;;
                     *)
-                        "$browser" "$url" &
+                        "$browser" "$url" >/dev/null 2>&1 &
                         ;;
                 esac
             else
                 # X11 fallback
-                "$browser" "$url" &
+                "$browser" "$url" >/dev/null 2>&1 &
             fi
             
             return 0

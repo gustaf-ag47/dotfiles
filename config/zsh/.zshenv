@@ -32,6 +32,16 @@ export MANPAGER='nvim +Man!'
 # Browser setting - use our custom browser launcher for Wayland compatibility
 export BROWSER="$DOTFILES/bin/browser-launcher"
 
+# Wayland environment variables for better application support
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export MOZ_ENABLE_WAYLAND=1
+    export MOZ_WEBRENDER=1
+    export GDK_BACKEND=wayland,x11
+    export QT_QPA_PLATFORM=wayland;xcb
+    export SDL_VIDEODRIVER=wayland
+    export CLUTTER_BACKEND=wayland
+fi
+
 # Path settings
 export PYENV_ROOT="$XDG_DATA_HOME/pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
