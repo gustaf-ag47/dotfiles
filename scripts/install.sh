@@ -93,3 +93,7 @@ mkdir -p "$XDG_DATA_HOME/applications"
 cp -r "$DOTFILES/config/applications/"* "$XDG_DATA_HOME/applications/"
 
 link_config "$DOTFILES/config/mimeapps/mimeapps.list" "$XDG_CONFIG_HOME/mimeapps.list"
+
+# Link Wayland environment configuration
+mkdir -p "$XDG_CONFIG_HOME/environment.d"
+link_config "$DOTFILES/config/environment.d/wayland.conf" "$XDG_CONFIG_HOME/environment.d/wayland.conf"
