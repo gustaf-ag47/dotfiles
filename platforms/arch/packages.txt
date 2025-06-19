@@ -1,0 +1,50 @@
+# Core packages for Arch Linux
+base-devel
+git
+zsh
+tmux
+neovim
+alacritty
+
+# Wayland/Hyprland specific
+hyprland
+waybar
+wofi
+dunst
+wl-clipboard
+
+# Development tools
+docker
+docker-compose
+kubectl
+python
+python-pip
+nodejs
+npm
+rust
+go
+
+# Modern CLI tools
+bat
+eza
+fd
+ripgrep
+dust
+duf
+procs
+bottom
+starship
+zoxide
+
+# Media and utilities
+mpv
+spotify-launcher
+firefox
+chromium
+
+# System utilities
+bluez
+bluez-utils
+networkmanager
+pulseaudio
+pavucontrol

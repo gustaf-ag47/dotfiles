@@ -1,0 +1,20 @@
+# AUR packages for enhanced functionality
+yay
+paru
+
+# Development tools
+visual-studio-code-bin
+cursor-bin
+docker-desktop
+postman-bin
+
+# Utilities
+bluetuith
+gping
+httpie
+yazi
+
+# Fonts
+nerd-fonts-fira-code
+nerd-fonts-hack
+ttf-jetbrains-mono
