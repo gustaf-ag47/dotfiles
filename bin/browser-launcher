@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Browser Launcher for Wayland/X11
+# Handles proper browser launching in different display environments
+
+set -euo pipefail
+
+URL="${1:-}"
+
+if [ -z "$URL" ]; then
+    echo "Usage: browser-launcher <URL>"
+    exit 1
+fi
+
+# Function to launch browser with proper environment
+launch_browser() {
+    local url="$1"
+    
+    # Try different browsers in order of preference
+    browsers=(
+        "firefox"
+        "chromium"
+        "google-chrome"
+        "brave"
+        "webkit2gtk-4.0"
+    )
+    
+    for browser in "${browsers[@]}"; do
+        if command -v "$browser" &> /dev/null; then
+            echo "Opening $url with $browser"
+            
+            if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+                # Wayland environment
+                case "$browser" in
+                    "firefox")
+                        MOZ_ENABLE_WAYLAND=1 firefox "$url" &
+                        ;;
+                    "chromium")
+                        chromium --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" &
+                        ;;
+                    "google-chrome")
+                        google-chrome --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" &
+                        ;;
+                    "brave")
+                        brave --enable-features=UseOzonePlatform --ozone-platform=wayland "$url" &
+                        ;;
+                    *)
+                        "$browser" "$url" &
+                        ;;
+                esac
+            else
+                # X11 fallback
+                "$browser" "$url" &
+            fi
+            
+            return 0
+        fi
+    done
+    
+    echo "Error: No suitable browser found"
+    return 1
+}
+
+# Launch the browser
+launch_browser "$URL"

@@ -20,6 +20,6 @@ case "$url" in
 	qndl "$url" 'curl -LO' >/dev/null 2>&1
 	;;
 *)
-	[ -f "$url" ] && setsid -f "$TERMINAL" -e "$EDITOR" "$url" >/dev/null 2>&1 || setsid -f "$BROWSER" "$url" >/dev/null 2>&1
+	[ -f "$url" ] && setsid -f "$TERMINAL" -e "$EDITOR" "$url" >/dev/null 2>&1 || setsid -f "$DOTFILES/bin/browser-launcher" "$url" >/dev/null 2>&1
 	;;
 esac

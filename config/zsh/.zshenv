@@ -29,12 +29,8 @@ export EDITOR="nvim"
 export VISUAL="$EDITOR" # Reuse the EDITOR value
 export MANPAGER='nvim +Man!'
 
-# Browser setting, with a fallback if Firefox is not installed
-if command -v firefox >/dev/null; then
-    export BROWSER=$(command -v firefox)
-else
-    echo "Firefox is not installed. Please set the BROWSER variable manually."
-fi
+# Browser setting - use our custom browser launcher for Wayland compatibility
+export BROWSER="$DOTFILES/bin/browser-launcher"
 
 # Path settings
 export PYENV_ROOT="$XDG_DATA_HOME/pyenv"
