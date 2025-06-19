@@ -119,3 +119,34 @@ vimcmd_symbol = '[](bold fg:#e0af68)'
 vimcmd_replace_one_symbol = '[](bold fg:#bb9af7)'
 vimcmd_replace_symbol = '[](bold fg:#bb9af7)'
 vimcmd_visual_symbol = '[](bold fg:#e0af68)'
+
+# Additional modules for better productivity
+[battery]
+full_symbol = "🔋 "
+charging_symbol = "⚡️ "
+discharging_symbol = "💀 "
+format = "[$symbol$percentage]($style) "
+
+[[battery.display]]
+threshold = 15
+style = "bold red"
+
+[[battery.display]]
+threshold = 50
+style = "bold yellow"
+
+[cmd_duration]
+min_time = 2_000
+show_milliseconds = false
+format = "took [$duration](bold yellow)"
+
+[jobs]
+format = "[$symbol$number]($style) "
+symbol = "⚡"
+style = "bold blue"
+
+[time]
+disabled = false
+format = '🕙[$time]($style) '
+time_format = "%R"
+style = "bold white"

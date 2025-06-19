@@ -37,19 +37,25 @@ ceil = math.ceil
 floor = math.floor
 round = round
 
+# Store the last answer
+ans = 0
+last_result = 0
+
 def help_calc():
     print('''
 🧮 Calculator Help:
 ==================
 Basic operators: + - * / ** % //
 Functions: sqrt(), sin(), cos(), tan(), log(), log10(), exp()
-Constants: pi, e
+Constants: pi, e, ans (last result)
 Examples:
   2 + 3 * 4        → 14
   sqrt(16)         → 4.0
   sin(pi/2)        → 1.0
   2**8             → 256
   log(e)           → 1.0
+  * 2              → (multiply last result by 2)
+  ans + 10         → (add 10 to last result)
   
 Commands:
   help() or ?      → Show this help
@@ -67,6 +73,7 @@ def clear_screen():
     os.system('clear')
     print('🧮 Terminal Calculator')
     print('Type help() for commands or an expression to calculate')
+    print('Use * to continue operating on the last result (ans)')
     print('Press Ctrl+C or type quit() to exit\\n')
 
 # Add shortcuts
@@ -90,7 +97,12 @@ clear_screen()
 
 while True:
     try:
-        expr = input('📱 calc> ')
+        # Show current ans value in prompt if it exists
+        if last_result != 0:
+            prompt = f'📱 calc[ans={last_result}]> '
+        else:
+            prompt = '📱 calc> '
+        expr = input(prompt)
         
         if not expr.strip():
             continue
@@ -104,10 +116,24 @@ while True:
             help_calc()
             continue
             
+        # Handle expressions starting with operators (continue from last result)
+        if expr.strip().startswith(('*', '/', '+', '-', '**', '%', '//')):
+            if last_result != 0 or expr.strip().startswith(('+', '-')):
+                expr = f'{last_result} {expr.strip()}'
+            else:
+                print('❌ No previous result to operate on')
+                continue
+        
         # Evaluate the expression
         try:
+            # Make ans available as the last result
+            ans = last_result
             result = eval(expr)
             print(f'✅ {result}')
+            
+            # Update last result
+            last_result = result
+            ans = result
             
             # Copy result to clipboard
             if copy_to_clipboard(str(result)):

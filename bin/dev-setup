@@ -1,0 +1,337 @@
+#!/bin/bash
+
+# 10x Developer Environment Setup Script
+
+set -e
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+log() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Install essential development tools
+install_dev_tools() {
+    log "Installing essential development tools..."
+    
+    # Modern CLI tools
+    local tools=(
+        "lazygit"           # Git TUI
+        "lazydocker"        # Docker TUI  
+        "bottom"            # System monitor
+        "dust"              # Disk usage analyzer
+        "tokei"             # Code statistics
+        "hyperfine"         # Benchmarking tool
+        "tealdeer"          # Fast tldr
+        "zoxide"            # Smart cd
+        "eza"               # Better ls
+        "bat"               # Better cat
+        "fd"                # Better find
+        "ripgrep"           # Better grep
+        "fzf"               # Fuzzy finder
+        "jq"                # JSON processor
+        "yq"                # YAML processor
+        "curl"              # HTTP client
+        "wget"              # Downloader
+        "tree"              # Directory tree
+        "htop"              # Process viewer
+        "neofetch"          # System info
+        "github-cli"        # GitHub CLI
+    )
+    
+    for tool in "${tools[@]}"; do
+        if ! command -v "${tool//-/_}" &> /dev/null && ! pacman -Q "$tool" &> /dev/null; then
+            log "Installing $tool..."
+            yay -S --noconfirm "$tool" || warn "Failed to install $tool"
+        else
+            log "$tool already installed"
+        fi
+    done
+}
+
+# Install development languages and tools
+install_languages() {
+    log "Installing development languages and tools..."
+    
+    # Node.js & tools
+    if ! command -v fnm &> /dev/null; then
+        log "Installing fnm (Node.js version manager)..."
+        curl -fsSL https://fnm.vercel.app/install | bash
+        source ~/.bashrc
+        fnm install --lts
+        fnm use lts-latest
+        fnm default lts-latest
+    fi
+    
+    # Python tools
+    if command -v python3 &> /dev/null; then
+        log "Installing Python development tools..."
+        python3 -m pip install --user --upgrade pip
+        python3 -m pip install --user pipx
+        pipx install poetry
+        pipx install black
+        pipx install flake8
+        pipx install mypy
+        pipx install pytest
+        pipx install ipython
+        pipx install jupyter
+    fi
+    
+    # Rust tools
+    if ! command -v rustup &> /dev/null; then
+        log "Installing Rust..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source ~/.cargo/env
+    fi
+    
+    # Go tools
+    if command -v go &> /dev/null; then
+        log "Installing Go development tools..."
+        go install github.com/charmbracelet/glow@latest
+        go install github.com/jesseduffield/lazydocker@latest
+        go install github.com/jesseduffield/lazygit@latest
+    fi
+}
+
+# Setup development directories
+setup_directories() {
+    log "Setting up development directories..."
+    
+    local dirs=(
+        "$HOME/projects"
+        "$HOME/repos" 
+        "$HOME/scripts"
+        "$HOME/bin"
+        "$HOME/Documents/notes"
+        "$HOME/Documents/templates"
+        "$HOME/.local/share/applications"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        mkdir -p "$dir"
+        log "Created directory: $dir"
+    done
+}
+
+# Install Docker development tools
+setup_docker_dev() {
+    log "Setting up Docker development environment..."
+    
+    # Docker compose files for common services
+    mkdir -p "$HOME/docker-services"
+    
+    # PostgreSQL service
+    cat > "$HOME/docker-services/postgres.yml" << 'EOF'
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_DB: devdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+EOF
+    
+    # Redis service
+    cat > "$HOME/docker-services/redis.yml" << 'EOF'
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+EOF
+    
+    # MongoDB service
+    cat > "$HOME/docker-services/mongo.yml" << 'EOF'
+version: '3.8'
+services:
+  mongodb:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: dev
+      MONGO_INITDB_ROOT_PASSWORD: devpass
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+EOF
+    
+    log "Docker service templates created in ~/docker-services/"
+}
+
+# Setup Git configuration
+setup_git_config() {
+    log "Enhancing Git configuration..."
+    
+    # Git aliases
+    git config --global alias.st "status --short"
+    git config --global alias.br "branch -v"
+    git config --global alias.co "checkout"
+    git config --global alias.cb "checkout -b"
+    git config --global alias.cm "commit -m"
+    git config --global alias.ca "commit --amend"
+    git config --global alias.ps "push"
+    git config --global alias.pl "pull"
+    git config --global alias.lg "log --oneline --graph --decorate --all -10"
+    git config --global alias.unstage "reset HEAD --"
+    git config --global alias.undo "reset --soft HEAD~1"
+    
+    # Git settings
+    git config --global pull.rebase true
+    git config --global init.defaultBranch main
+    git config --global core.editor nvim
+    git config --global merge.tool vimdiff
+    
+    log "Git configuration enhanced"
+}
+
+# Install and configure tmux plugins
+setup_tmux_plugins() {
+    log "Setting up tmux plugins..."
+    
+    # Install TPM if not exists
+    if [[ ! -d "$HOME/.tmux/plugins/tpm" ]]; then
+        git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+        log "TPM installed"
+    fi
+    
+    # Install useful tmux plugins
+    "$HOME/.tmux/plugins/tpm/scripts/install_plugins.sh"
+    log "Tmux plugins installed"
+}
+
+# Create project templates
+create_templates() {
+    log "Creating project templates..."
+    
+    local templates_dir="$HOME/Documents/templates"
+    
+    # Node.js/TypeScript template
+    mkdir -p "$templates_dir/node-typescript"
+    cat > "$templates_dir/node-typescript/package.json" << 'EOF'
+{
+  "name": "PROJECT_NAME",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
+EOF
+    
+    # Python template
+    mkdir -p "$templates_dir/python-project"
+    cat > "$templates_dir/python-project/pyproject.toml" << 'EOF'
+[tool.poetry]
+name = "PROJECT_NAME"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0.0"
+black = "^23.0.0"
+flake8 = "^6.0.0"
+mypy = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+EOF
+    
+    log "Project templates created"
+}
+
+# Setup shell enhancements
+setup_shell_enhancements() {
+    log "Setting up shell enhancements..."
+    
+    # Add enhanced aliases and functions to zshrc
+    local zshrc="$HOME/.zshrc"
+    local dotfiles_zsh="$HOME/sync/src/dotfiles/config/zsh"
+    
+    # Source enhanced files
+    if ! grep -q "aliases-enhanced" "$zshrc"; then
+        echo "source $dotfiles_zsh/aliases-enhanced" >> "$zshrc"
+    fi
+    
+    if ! grep -q "functions-advanced" "$zshrc"; then
+        echo "source $dotfiles_zsh/functions-advanced" >> "$zshrc"
+    fi
+    
+    # Setup zoxide
+    if command -v zoxide &> /dev/null && ! grep -q "zoxide init" "$zshrc"; then
+        echo 'eval "$(zoxide init zsh)"' >> "$zshrc"
+    fi
+    
+    log "Shell enhancements added"
+}
+
+# Main execution
+main() {
+    log "Starting 10x Developer Environment Setup..."
+    
+    setup_directories
+    install_dev_tools
+    install_languages
+    setup_docker_dev
+    setup_git_config
+    setup_tmux_plugins
+    create_templates
+    setup_shell_enhancements
+    
+    log "🚀 Setup complete! Please restart your shell or run 'source ~/.zshrc'"
+    log "📝 New commands available:"
+    echo "  - create_project <name> [type]  # Create new project"
+    echo "  - dev_tools                     # Show installed tools"
+    echo "  - show_env                      # Show environment info"
+    echo "  - note [name]                   # Quick notes"
+    echo "  - bookmark [name]               # Directory bookmarks"
+    echo "  - And many more aliases and functions!"
+}
+
+# Check if running as source or executed
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

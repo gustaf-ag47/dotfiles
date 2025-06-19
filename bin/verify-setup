@@ -1,0 +1,110 @@
+#!/bin/bash
+
+# Verify 10x Developer Setup
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}✅${NC} $1"; }
+warn() { echo -e "${YELLOW}⚠️${NC} $1"; }
+error() { echo -e "${RED}❌${NC} $1"; }
+
+echo "🔍 Verifying 10x Developer Setup..."
+echo
+
+# Check if files exist
+log "Checking setup files..."
+[[ -f "$DOTFILES/config/zsh/aliases-enhanced" ]] && log "Enhanced aliases found" || error "Enhanced aliases missing"
+[[ -f "$DOTFILES/config/zsh/functions-advanced" ]] && log "Advanced functions found" || error "Advanced functions missing"
+[[ -f "$DOTFILES/bin/project-manager" ]] && log "Project manager found" || error "Project manager missing"
+[[ -f "$DOTFILES/bin/dev-monitor" ]] && log "Dev monitor found" || error "Dev monitor missing"
+[[ -f "$DOTFILES/10X-DEVELOPER-GUIDE.md" ]] && log "Guide found" || error "Guide missing"
+
+echo
+
+# Source the files
+log "Loading enhanced shell configuration..."
+source "$DOTFILES/config/zsh/aliases-enhanced"
+source "$DOTFILES/config/zsh/functions-advanced"
+
+echo
+
+# Test key commands
+log "Testing key commands..."
+
+# Test aliases
+if alias gst &>/dev/null; then
+    log "Git status alias (gst) working"
+else
+    error "Git status alias not working"
+fi
+
+if alias ll &>/dev/null; then
+    log "Enhanced ls alias (ll) working"
+else
+    error "Enhanced ls alias not working"
+fi
+
+# Test functions
+if declare -f create_project &>/dev/null; then
+    log "Create project function working"
+else
+    error "Create project function not working"
+fi
+
+if declare -f show_env &>/dev/null; then
+    log "Show environment function working"
+else
+    error "Show environment function not working"
+fi
+
+# Test executables
+if [[ -x "$DOTFILES/bin/project-manager" ]]; then
+    log "Project manager executable"
+else
+    error "Project manager not executable"
+fi
+
+if [[ -x "$DOTFILES/bin/dev-monitor" ]]; then
+    log "Dev monitor executable"
+else
+    error "Dev monitor not executable"
+fi
+
+echo
+
+# Test actual functionality
+log "Testing functionality..."
+
+# Test project manager
+if "$DOTFILES/bin/project-manager" help &>/dev/null; then
+    log "Project manager help working"
+else
+    error "Project manager help not working"
+fi
+
+# Test dev monitor
+if "$DOTFILES/bin/dev-monitor" help &>/dev/null; then
+    log "Dev monitor help working"
+else
+    error "Dev monitor help not working"
+fi
+
+echo
+
+log "Setup verification complete!"
+echo
+
+echo "🚀 Quick test commands:"
+echo "  gst                          # Git status"
+echo "  ll                           # Enhanced file listing"
+echo "  project-manager list         # List projects"
+echo "  dev-monitor status           # System status"
+echo "  show_env                     # Show development environment"
+echo "  create_project test-app node # Create test project"
+echo
+
+echo "📖 Read the full guide:"
+echo "  cat $DOTFILES/10X-DEVELOPER-GUIDE.md"

@@ -5,11 +5,11 @@
     
     ### Geometry ###
     width = (300, 600)
-    height = (50, 400)
-    origin = top-center
-    offset = (0, 50)
+    height = 500
+    origin = top-right
+    offset = 30x50
     scale = 0
-    notification_limit = 10
+    notification_limit = 0
     
     ### Progress bar ###
     progress_bar = true
@@ -17,26 +17,26 @@
     progress_bar_frame_width = 1
     progress_bar_min_width = 150
     progress_bar_max_width = 400
-    progress_bar_corner_radius = 5
+    progress_bar_corner_radius = 7
     
     ### Visual ###
     transparency = 10
-    horizontal_padding = 16
-    vertical_alignment = center
-    text_icon_padding = 16
+    horizontal_padding = 20
+    vertical_alignment = top
+    text_icon_padding = 20
     frame_width = 2
     frame_color = "#7aa2f7"
-    gap_size = 5
+    gap_size = 10
     separator_height = 1
-    padding = 16
-    corner_radius = 8
+    padding = 20
+    corner_radius = 15
     separator_color = auto
     
     ### Text ###
-    font = "JetBrainsMono Nerd Font" 14
+    font = JetBrainsMono Nerd Font Medium 11
     line_height = 4
     markup = full
-    format = "<b>%s</b>\n%b"
+    format = "<span size='large' weight='bold'>%s</span>\n%b"
     alignment = left
     vertical_alignment = center
     show_age_threshold = 60
@@ -49,14 +49,15 @@
     
     ### Icons ###
     enable_recursive_icon_lookup = true
-    icon_theme = "Adwaita"
+    icon_theme = "Papirus-Dark,Adwaita"
     icon_position = left
-    min_icon_size = 32
-    max_icon_size = 48
+    min_icon_size = 48
+    max_icon_size = 64
+    icon_path = /usr/share/icons/Papirus-Dark/48x48/status/:/usr/share/icons/Papirus-Dark/48x48/devices/:/usr/share/icons/Papirus-Dark/48x48/apps/:/usr/share/pixmaps/
     
     ### History ###
     sticky_history = yes
-    history_length = 50
+    history_length = 100
     
     ### Misc ###
     browser = /usr/bin/xdg-open
@@ -69,56 +70,71 @@
     
     ### Mouse ###
     mouse_left_click = close_current
-    mouse_middle_click = do_action, close_current
+    mouse_middle_click = context, close_current
     mouse_right_click = close_all
 
 [urgency_low]
-    background = "#16161e"
+    background = "#1a1b26ee"
     foreground = "#a9b1d6"
     frame_color = "#565f89"
-    timeout = 5
+    highlight = "#7aa2f7"
+    timeout = 8
+    icon = info
 
 [urgency_normal]
-    background = "#1a1b26"
+    background = "#1a1b26ee"
     foreground = "#c0caf5"
     frame_color = "#7aa2f7"
-    timeout = 8
+    highlight = "#7dcfff"
+    timeout = 10
+    icon = dialog-information
 
 [urgency_critical]
-    background = "#292e42"
+    background = "#1a1b26ee"
     foreground = "#f7768e"
     frame_color = "#f7768e"
+    highlight = "#ff9e64"
     timeout = 0
+    icon = dialog-error
+    default_icon = dialog-error
 
-# Application-specific rules
+# Smart rules for specific applications
 [spotify]
-    appname = "Spotify"
-    format = "<b>🎵 Spotify</b>\n%s\n%b"
-    timeout = 4
+    appname = Spotify
+    format = "<b>%s</b>\n%b"
+    new_icon = spotify
+    timeout = 5
 
 [discord]
-    appname = "discord"
-    format = "<b>💬 Discord</b>\n%s\n%b"
+    appname = discord
+    format = "<b>Discord</b>\n%s\n%b"
+    new_icon = discord
     timeout = 10
 
 [volume]
     summary = "*Volume*"
-    format = "<b>🔊 %s</b>"
+    format = "<b>%s</b>"
     history_ignore = yes
     timeout = 2
 
 [brightness]
     summary = "*Brightness*"
-    format = "<b>🔆 %s</b>"
+    format = "<b>%s</b>"
     history_ignore = yes
     timeout = 2
 
-[battery]
-    summary = "*Battery*"
-    format = "<b>🔋 %s</b>\n%b"
-    timeout = 8
+[screenshot]
+    appname = flameshot
+    format = "<b>Screenshot</b>\n%s"
+    new_icon = camera-photo
+    timeout = 3
 
-[network]
-    summary = "*Network*"
-    format = "<b>🌐 %s</b>\n%b"
-    timeout = 5
+[notify-send]
+    appname = notify-send
+    format = "<b>%s</b>\n%b"
+    
+# Make notifications from some apps more prominent
+[important]
+    appname = "Thunderbird|Evolution|Slack|Teams"
+    urgency = critical
+    timeout = 0

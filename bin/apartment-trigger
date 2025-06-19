@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# Apartment Entry Bluetooth Trigger
+# This script can be triggered when you enter your apartment
+
+BLUETOOTH_MANAGER="$HOME/sync/src/dotfiles/bin/bluetooth-manager"
+LOG_FILE="$HOME/.local/share/apartment-trigger.log"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" | tee -a "$LOG_FILE"
+}
+
+notify() {
+    # Send desktop notification if available
+    if command -v notify-send &> /dev/null; then
+        notify-send "🏠 Apartment Setup" "$1" --icon=bluetooth
+    fi
+}
+
+log "🏠 Apartment entry detected - setting up Bluetooth devices"
+
+# Wait a moment for system to stabilize
+sleep 2
+
+# Execute apartment setup
+if "$BLUETOOTH_MANAGER" apartment; then
+    log "✅ Apartment Bluetooth setup completed successfully"
+    notify "Headphones connected and ready!"
+else
+    log "❌ Apartment Bluetooth setup failed"
+    notify "Failed to connect devices - check manually"
+fi
+
+# Optional: Adjust system settings for home environment
+# Set higher audio quality, adjust power settings, etc.
+if command -v pactl &> /dev/null; then
+    # Set audio profile for better quality at home
+    log "🎵 Optimizing audio settings for home"
+    # Add your audio optimization commands here
+fi
+
+log "🏠 Apartment trigger script completed"

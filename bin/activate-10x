@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Activate 10x Developer Environment
+
+echo "🚀 Activating 10x Developer Environment..."
+
+# Source enhanced configuration
+source "$DOTFILES/config/zsh/aliases-enhanced" 2>/dev/null || echo "⚠️  Warning: Could not load enhanced aliases"
+source "$DOTFILES/config/zsh/functions-advanced" 2>/dev/null || echo "⚠️  Warning: Could not load advanced functions"
+
+echo "✅ 10x Developer Environment activated!"
+echo
+echo "🎯 Quick Commands Available:"
+echo "  gst                    - Git status (short)"
+echo "  gd                     - Git diff"
+echo "  gl                     - Git log (graph)"
+echo "  project-manager        - Project management"
+echo "  dev-monitor status     - System status"
+echo "  create_project         - Create new project"
+echo "  show_env               - Show dev environment"
+echo "  note                   - Quick notes"
+echo "  ll                     - Enhanced file listing"
+echo
+echo "📖 Full guide: cat $DOTFILES/10X-DEVELOPER-GUIDE.md"

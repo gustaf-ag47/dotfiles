@@ -1,0 +1,847 @@
+#!/bin/bash
+
+# Advanced Bluetooth Manager for Dotfiles
+# Manages Bluetooth devices, backups, and smart connections
+
+set -e
+
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Configuration
+DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
+BT_CONFIG_DIR="$DOTFILES/config/bluetooth"
+BT_BACKUP_DIR="$BT_CONFIG_DIR/backups"
+BT_PROFILES_DIR="$BT_CONFIG_DIR/profiles"
+BT_STATE_FILE="$BT_CONFIG_DIR/state.json"
+SYSTEM_BT_DIR="/var/lib/bluetooth"
+
+log() { echo -e "${GREEN}[INFO]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+info() { echo -e "${BLUE}[DEBUG]${NC} $1"; }
+highlight() { echo -e "${PURPLE}[HIGHLIGHT]${NC} $1"; }
+
+# Ensure directories exist
+mkdir -p "$BT_CONFIG_DIR" "$BT_BACKUP_DIR" "$BT_PROFILES_DIR"
+
+# Show help
+show_help() {
+    cat << EOF
+🔵 Bluetooth Manager - Smart Device Management
+
+USAGE:
+    bluetooth-manager <command> [options]
+
+COMMANDS:
+    status              Show Bluetooth status and devices
+    backup              Backup current Bluetooth configuration
+    restore [backup]    Restore from backup (latest if no backup specified)
+    connect <device>    Connect to specific device
+    disconnect <device> Disconnect from specific device
+    auto-connect        Connect to preferred devices automatically
+    scan                Scan for available devices
+    pair <mac>          Pair with new device
+    forget <device>     Remove device pairing
+    
+    profiles            Manage connection profiles
+    create-profile <name>   Create new connection profile
+    load-profile <name>     Load connection profile
+    list-profiles           List available profiles
+    
+    apartment           Connect apartment setup (headphones, etc.)
+    office              Connect office setup
+    travel              Connect travel setup
+    
+    setup               Setup automation and services
+    monitor             Monitor Bluetooth events
+    
+    devices             List all known devices with details
+
+DEVICE SHORTCUTS:
+    headphones          Connect to primary headphones
+    earbuds             Connect to earbuds
+    keyboard            Connect to keyboard
+    mouse               Connect to mouse
+
+EXAMPLES:
+    bluetooth-manager status
+    bluetooth-manager backup
+    bluetooth-manager apartment
+    bluetooth-manager connect headphones
+    bluetooth-manager create-profile office
+
+EOF
+}
+
+# Get controller MAC address
+get_controller_mac() {
+    bluetoothctl show | grep "Controller" | awk '{print $2}'
+}
+
+# Get device info
+get_device_info() {
+    local device="$1"
+    bluetoothctl info "$device" 2>/dev/null
+}
+
+# Check if device is connected
+is_device_connected() {
+    local device="$1"
+    bluetoothctl info "$device" 2>/dev/null | grep -q "Connected: yes"
+}
+
+# Get device name from MAC
+get_device_name() {
+    local mac="$1"
+    bluetoothctl info "$mac" 2>/dev/null | grep "Name:" | cut -d' ' -f2- || echo "Unknown"
+}
+
+# Get device MAC from name/alias
+get_device_mac() {
+    local name="$1"
+    
+    # Direct MAC address
+    if [[ "$name" =~ ^[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}$ ]]; then
+        echo "$name"
+        return
+    fi
+    
+    # Predefined device shortcuts
+    case "$name" in
+        "headphones"|"WH-1000XM6")
+            echo "80:99:E7:E3:EA:45"
+            ;;
+        "earbuds"|"WF-1000XM5")
+            echo "80:99:E7:68:25:40"
+            ;;
+        "keyboard"|"AnnePro2")
+            echo "64:33:DB:AD:25:55"
+            ;;
+        *)
+            # Search by name in paired devices
+            bluetoothctl devices | grep -i "$name" | head -1 | awk '{print $2}'
+            ;;
+    esac
+}
+
+# Show Bluetooth status
+show_status() {
+    highlight "🔵 Bluetooth Status"
+    
+    # Controller info
+    local controller_mac=$(get_controller_mac)
+    echo "📱 Controller: $controller_mac"
+    
+    if bluetoothctl show | grep -q "Powered: yes"; then
+        log "Bluetooth is powered on"
+    else
+        error "Bluetooth is powered off"
+        return 1
+    fi
+    
+    echo
+    highlight "📋 Paired Devices"
+    
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        local name=$(echo "$line" | cut -d' ' -f3-)
+        
+        if is_device_connected "$mac"; then
+            local status="${GREEN}✅ Connected${NC}"
+        else
+            local status="${RED}❌ Disconnected${NC}"
+        fi
+        
+        echo -e "  • $name ($mac) - $status"
+        
+        # Show additional info for connected devices
+        if is_device_connected "$mac"; then
+            local battery=$(bluetoothctl info "$mac" | grep "Battery Percentage" | awk '{print $4}' | tr -d '()')
+            if [[ -n "$battery" ]]; then
+                echo -e "    🔋 Battery: ${battery}%"
+            fi
+        fi
+    done
+    
+    echo
+    highlight "🎵 Audio Status"
+    
+    # Check for active audio streams
+    if pacmd list-sinks 2>/dev/null | grep -q "bluetooth"; then
+        log "Bluetooth audio sink active"
+    else
+        warn "No Bluetooth audio sink found"
+    fi
+}
+
+# Backup Bluetooth configuration
+backup_bluetooth() {
+    local backup_name="${1:-$(date +%Y%m%d_%H%M%S)}"
+    local backup_path="$BT_BACKUP_DIR/$backup_name"
+    
+    log "Creating Bluetooth backup: $backup_name"
+    
+    mkdir -p "$backup_path"
+    
+    # Backup bluetoothctl paired devices info
+    bluetoothctl devices > "$backup_path/devices.txt"
+    
+    # Backup individual device info
+    mkdir -p "$backup_path/device_info"
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        local name=$(echo "$line" | cut -d' ' -f3- | tr ' ' '_' | tr '/' '_')
+        
+        # Only backup if it looks like a valid MAC address
+        if [[ "$mac" =~ ^[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}$ ]]; then
+            bluetoothctl info "$mac" > "$backup_path/device_info/${name}_${mac}.txt" 2>/dev/null
+        fi
+    done
+    
+    # Backup system Bluetooth configuration (if accessible)
+    if [[ -r "/etc/bluetooth/main.conf" ]]; then
+        cp "/etc/bluetooth/main.conf" "$backup_path/main.conf" 2>/dev/null || true
+    fi
+    
+    # Create metadata
+    cat > "$backup_path/metadata.json" << EOF
+{
+    "timestamp": "$(date -Iseconds)",
+    "hostname": "$(cat /etc/hostname 2>/dev/null || echo 'unknown')",
+    "controller": "$(get_controller_mac)",
+    "kernel": "$(uname -r)",
+    "bluez_version": "$(bluetoothctl version | head -1)"
+}
+EOF
+    
+    # Create device state snapshot
+    cat > "$backup_path/device_state.json" << 'EOF'
+{
+    "devices": [
+EOF
+    
+    local first=true
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        local name=$(echo "$line" | cut -d' ' -f3-)
+        local connected=$(is_device_connected "$mac" && echo "true" || echo "false")
+        local trusted=$(bluetoothctl info "$mac" | grep -q "Trusted: yes" && echo "true" || echo "false")
+        
+        if [[ "$first" == "false" ]]; then
+            echo ","
+        fi
+        first=false
+        
+        cat << EOD
+        {
+            "mac": "$mac",
+            "name": "$name",
+            "connected": $connected,
+            "trusted": $trusted
+        }
+EOD
+    done >> "$backup_path/device_state.json"
+    
+    echo -e "\n    ]\n}" >> "$backup_path/device_state.json"
+    
+    log "✅ Backup created: $backup_path"
+    info "Backup includes device list, connection states, and metadata"
+}
+
+# Restore Bluetooth configuration
+restore_bluetooth() {
+    local backup_name="$1"
+    
+    if [[ -z "$backup_name" ]]; then
+        # Use latest backup
+        backup_name=$(ls -1t "$BT_BACKUP_DIR" | head -1)
+        if [[ -z "$backup_name" ]]; then
+            error "No backups found"
+            return 1
+        fi
+        log "Using latest backup: $backup_name"
+    fi
+    
+    local backup_path="$BT_BACKUP_DIR/$backup_name"
+    
+    if [[ ! -d "$backup_path" ]]; then
+        error "Backup not found: $backup_name"
+        return 1
+    fi
+    
+    log "Restoring Bluetooth configuration from: $backup_name"
+    
+    # Read device state
+    if [[ -f "$backup_path/device_state.json" ]]; then
+        log "Restoring device connections..."
+        
+        # This is a simplified restore - in practice, you'd need to handle pairing
+        # Here we just try to reconnect to previously connected devices
+        jq -r '.devices[] | select(.connected == true) | .mac' "$backup_path/device_state.json" 2>/dev/null | while read -r mac; do
+            if [[ -n "$mac" ]]; then
+                local name=$(get_device_name "$mac")
+                log "Attempting to connect to $name ($mac)"
+                connect_device "$mac"
+            fi
+        done
+    fi
+    
+    log "✅ Bluetooth configuration restored"
+}
+
+# Connect to device
+connect_device() {
+    local device_input="$1"
+    local mac=$(get_device_mac "$device_input")
+    
+    if [[ -z "$mac" ]]; then
+        error "Device not found: $device_input"
+        return 1
+    fi
+    
+    local name=$(get_device_name "$mac")
+    log "Connecting to $name ($mac)..."
+    
+    # Ensure Bluetooth is powered on
+    bluetoothctl power on >/dev/null
+    
+    # Connect to device
+    if bluetoothctl connect "$mac" >/dev/null 2>&1; then
+        log "✅ Connected to $name"
+        
+        # Wait for connection to stabilize
+        sleep 2
+        
+        # Verify connection
+        if is_device_connected "$mac"; then
+            log "Connection verified"
+            
+            # Update state
+            update_device_state "$mac" "connected"
+            
+            return 0
+        else
+            warn "Connection may not be stable"
+            return 1
+        fi
+    else
+        error "Failed to connect to $name"
+        return 1
+    fi
+}
+
+# Disconnect from device
+disconnect_device() {
+    local device_input="$1"
+    local mac=$(get_device_mac "$device_input")
+    
+    if [[ -z "$mac" ]]; then
+        error "Device not found: $device_input"
+        return 1
+    fi
+    
+    local name=$(get_device_name "$mac")
+    log "Disconnecting from $name ($mac)..."
+    
+    if bluetoothctl disconnect "$mac" >/dev/null 2>&1; then
+        log "✅ Disconnected from $name"
+        update_device_state "$mac" "disconnected"
+        return 0
+    else
+        error "Failed to disconnect from $name"
+        return 1
+    fi
+}
+
+# Auto-connect to preferred devices
+auto_connect() {
+    log "Auto-connecting to preferred devices..."
+    
+    # Define preferred devices in order of priority
+    local preferred_devices=("headphones" "keyboard")
+    
+    for device in "${preferred_devices[@]}"; do
+        local mac=$(get_device_mac "$device")
+        if [[ -n "$mac" ]]; then
+            if ! is_device_connected "$mac"; then
+                connect_device "$device"
+                sleep 1
+            else
+                local name=$(get_device_name "$mac")
+                info "$name already connected"
+            fi
+        fi
+    done
+}
+
+# Apartment setup - connect home devices
+apartment_setup() {
+    log "🏠 Setting up apartment Bluetooth devices..."
+    
+    # Disconnect any office/travel devices first
+    disconnect_device "keyboard" 2>/dev/null || true
+    
+    # Connect apartment devices
+    connect_device "headphones"
+    sleep 2
+    
+    # Set audio profile
+    local headphones_mac=$(get_device_mac "headphones")
+    if [[ -n "$headphones_mac" ]] && is_device_connected "$headphones_mac"; then
+        # Switch to high quality audio profile
+        log "Setting high-quality audio profile..."
+        # pacmd set-card-profile bluez_card.$headphones_mac a2dp_sink 2>/dev/null || true
+    fi
+    
+    log "✅ Apartment setup complete"
+}
+
+# Office setup
+office_setup() {
+    log "🏢 Setting up office Bluetooth devices..."
+    
+    # Connect office devices
+    connect_device "keyboard"
+    connect_device "mouse" 2>/dev/null || true
+    
+    # Disconnect headphones to save battery
+    disconnect_device "headphones" 2>/dev/null || true
+    
+    log "✅ Office setup complete"
+}
+
+# Travel setup
+travel_setup() {
+    log "✈️ Setting up travel Bluetooth devices..."
+    
+    # Connect portable devices
+    connect_device "earbuds"
+    
+    # Disconnect stationary devices
+    disconnect_device "keyboard" 2>/dev/null || true
+    
+    log "✅ Travel setup complete"
+}
+
+# Scan for devices
+scan_devices() {
+    log "🔍 Scanning for Bluetooth devices..."
+    
+    bluetoothctl power on
+    bluetoothctl scan on &
+    local scan_pid=$!
+    
+    sleep 10
+    
+    kill $scan_pid 2>/dev/null || true
+    bluetoothctl scan off
+    
+    log "Available devices:"
+    bluetoothctl devices
+}
+
+# Pair with new device
+pair_device() {
+    local mac="$1"
+    
+    if [[ -z "$mac" ]]; then
+        error "MAC address required"
+        return 1
+    fi
+    
+    log "Pairing with device: $mac"
+    
+    bluetoothctl power on
+    bluetoothctl agent on
+    bluetoothctl default-agent
+    
+    if bluetoothctl pair "$mac"; then
+        if bluetoothctl trust "$mac"; then
+            log "✅ Paired and trusted: $mac"
+            return 0
+        else
+            warn "Paired but failed to trust: $mac"
+            return 1
+        fi
+    else
+        error "Failed to pair with: $mac"
+        return 1
+    fi
+}
+
+# Update device state
+update_device_state() {
+    local mac="$1"
+    local state="$2"
+    
+    # Create or update state file
+    local timestamp=$(date -Iseconds)
+    local name=$(get_device_name "$mac")
+    
+    # Simple state tracking
+    echo "$timestamp: $name ($mac) - $state" >> "$BT_CONFIG_DIR/connection_log.txt"
+}
+
+# Create connection profile
+create_profile() {
+    local profile_name="$1"
+    
+    if [[ -z "$profile_name" ]]; then
+        error "Profile name required"
+        return 1
+    fi
+    
+    local profile_file="$BT_PROFILES_DIR/$profile_name.json"
+    
+    log "Creating profile: $profile_name"
+    
+    # Get current connected devices
+    local connected_devices=()
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        if is_device_connected "$mac"; then
+            connected_devices+=("$mac")
+        fi
+    done
+    
+    # Create profile JSON
+    cat > "$profile_file" << EOF
+{
+    "name": "$profile_name",
+    "created": "$(date -Iseconds)",
+    "devices": [
+EOF
+    
+    local first=true
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        local name=$(echo "$line" | cut -d' ' -f3-)
+        local should_connect=$(is_device_connected "$mac" && echo "true" || echo "false")
+        
+        if [[ "$first" == "false" ]]; then
+            echo ","
+        fi
+        first=false
+        
+        cat << EOD >> "$profile_file"
+        {
+            "mac": "$mac",
+            "name": "$name",
+            "connect": $should_connect
+        }
+EOD
+    done
+    
+    echo -e "\n    ]\n}" >> "$profile_file"
+    
+    log "✅ Profile created: $profile_file"
+}
+
+# Load connection profile
+load_profile() {
+    local profile_name="$1"
+    
+    if [[ -z "$profile_name" ]]; then
+        error "Profile name required"
+        return 1
+    fi
+    
+    local profile_file="$BT_PROFILES_DIR/$profile_name.json"
+    
+    if [[ ! -f "$profile_file" ]]; then
+        error "Profile not found: $profile_name"
+        return 1
+    fi
+    
+    log "Loading profile: $profile_name"
+    
+    # Disconnect all devices first
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        if is_device_connected "$mac"; then
+            disconnect_device "$mac" >/dev/null 2>&1 || true
+        fi
+    done
+    
+    sleep 2
+    
+    # Connect devices specified in profile
+    jq -r '.devices[] | select(.connect == true) | .mac' "$profile_file" 2>/dev/null | while read -r mac; do
+        if [[ -n "$mac" ]]; then
+            connect_device "$mac"
+            sleep 1
+        fi
+    done
+    
+    log "✅ Profile loaded: $profile_name"
+}
+
+# List profiles
+list_profiles() {
+    highlight "📋 Available Profiles"
+    
+    if [[ ! -d "$BT_PROFILES_DIR" ]] || [[ -z "$(ls -A "$BT_PROFILES_DIR")" ]]; then
+        warn "No profiles found"
+        return 0
+    fi
+    
+    for profile_file in "$BT_PROFILES_DIR"/*.json; do
+        if [[ -f "$profile_file" ]]; then
+            local profile_name=$(basename "$profile_file" .json)
+            local created=$(jq -r '.created' "$profile_file" 2>/dev/null || echo "unknown")
+            local device_count=$(jq -r '.devices | length' "$profile_file" 2>/dev/null || echo "0")
+            
+            echo "  • $profile_name (created: $created, devices: $device_count)"
+        fi
+    done
+}
+
+# List all devices with details
+list_devices() {
+    highlight "📱 All Bluetooth Devices"
+    
+    bluetoothctl devices | while read -r line; do
+        local mac=$(echo "$line" | awk '{print $2}')
+        local name=$(echo "$line" | cut -d' ' -f3-)
+        
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📱 $name"
+        echo "   MAC: $mac"
+        
+        local info=$(get_device_info "$mac")
+        
+        if is_device_connected "$mac"; then
+            echo -e "   Status: ${GREEN}Connected${NC}"
+        else
+            echo -e "   Status: ${RED}Disconnected${NC}"
+        fi
+        
+        local trusted=$(echo "$info" | grep "Trusted:" | awk '{print $2}' || echo "unknown")
+        echo "   Trusted: $trusted"
+        
+        local paired=$(echo "$info" | grep "Paired:" | awk '{print $2}' || echo "unknown")
+        echo "   Paired: $paired"
+        
+        local class=$(echo "$info" | grep "Class:" | cut -d' ' -f2- || echo "unknown")
+        echo "   Class: $class"
+        
+        local battery=$(echo "$info" | grep "Battery Percentage" | awk '{print $4}' | tr -d '()' || echo "")
+        if [[ -n "$battery" ]]; then
+            echo "   Battery: ${battery}%"
+        fi
+        
+        echo
+    done
+}
+
+# Setup automation
+setup_automation() {
+    log "🔧 Setting up Bluetooth automation..."
+    
+    # Create systemd user service for Bluetooth monitoring
+    local service_file="$HOME/.config/systemd/user/bluetooth-auto.service"
+    mkdir -p "$(dirname "$service_file")"
+    
+    cat > "$service_file" << EOF
+[Unit]
+Description=Bluetooth Auto-Connect Service
+After=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=$DOTFILES/bin/bluetooth-manager monitor
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+    
+    # Create location-based trigger script
+    cat > "$DOTFILES/bin/bluetooth-location-trigger" << 'EOF'
+#!/bin/bash
+
+# Location-based Bluetooth trigger
+# This script can be called by various triggers (WiFi network change, geolocation, etc.)
+
+LOCATION="$1"
+BT_MANAGER="$HOME/sync/src/dotfiles/bin/bluetooth-manager"
+
+case "$LOCATION" in
+    "apartment"|"home")
+        "$BT_MANAGER" apartment
+        ;;
+    "office"|"work")
+        "$BT_MANAGER" office
+        ;;
+    "travel"|"mobile")
+        "$BT_MANAGER" travel
+        ;;
+    *)
+        "$BT_MANAGER" auto-connect
+        ;;
+esac
+EOF
+    
+    chmod +x "$DOTFILES/bin/bluetooth-location-trigger"
+    
+    # Create WiFi network monitor
+    cat > "$DOTFILES/bin/wifi-location-monitor" << 'EOF'
+#!/bin/bash
+
+# Monitor WiFi network changes and trigger Bluetooth profiles
+
+PREVIOUS_NETWORK=""
+BT_TRIGGER="$HOME/sync/src/dotfiles/bin/bluetooth-location-trigger"
+
+while true; do
+    CURRENT_NETWORK=$(iwgetid -r 2>/dev/null || echo "")
+    
+    if [[ "$CURRENT_NETWORK" != "$PREVIOUS_NETWORK" ]] && [[ -n "$CURRENT_NETWORK" ]]; then
+        echo "WiFi network changed to: $CURRENT_NETWORK"
+        
+        # Map WiFi networks to locations
+        case "$CURRENT_NETWORK" in
+            "YourHomeWiFi"|"ApartmentWiFi")
+                "$BT_TRIGGER" apartment
+                ;;
+            "OfficeWiFi"|"WorkWiFi")
+                "$BT_TRIGGER" office
+                ;;
+            *)
+                "$BT_TRIGGER" auto-connect
+                ;;
+        esac
+        
+        PREVIOUS_NETWORK="$CURRENT_NETWORK"
+    fi
+    
+    sleep 30
+done
+EOF
+    
+    chmod +x "$DOTFILES/bin/wifi-location-monitor"
+    
+    log "✅ Automation setup complete"
+    log "To enable automatic service:"
+    echo "  systemctl --user enable bluetooth-auto.service"
+    echo "  systemctl --user start bluetooth-auto.service"
+}
+
+# Monitor Bluetooth events
+monitor_bluetooth() {
+    log "👁️  Monitoring Bluetooth events..."
+    
+    # Monitor bluetoothctl events
+    bluetoothctl | while read -r line; do
+        echo "$(date): $line" >> "$BT_CONFIG_DIR/monitor.log"
+        
+        case "$line" in
+            *"Device "*" Connected: yes"*)
+                local mac=$(echo "$line" | grep -o '[0-9A-F:]\{17\}')
+                local name=$(get_device_name "$mac")
+                log "Device connected: $name ($mac)"
+                update_device_state "$mac" "connected"
+                ;;
+            *"Device "*" Connected: no"*)
+                local mac=$(echo "$line" | grep -o '[0-9A-F:]\{17\}')
+                local name=$(get_device_name "$mac")
+                log "Device disconnected: $name ($mac)"
+                update_device_state "$mac" "disconnected"
+                ;;
+        esac
+    done
+}
+
+# Main command dispatcher
+main() {
+    case "${1:-status}" in
+        "status")
+            show_status
+            ;;
+        "backup")
+            backup_bluetooth "$2"
+            ;;
+        "restore")
+            restore_bluetooth "$2"
+            ;;
+        "connect")
+            connect_device "$2"
+            ;;
+        "disconnect")
+            disconnect_device "$2"
+            ;;
+        "auto-connect")
+            auto_connect
+            ;;
+        "apartment"|"home")
+            apartment_setup
+            ;;
+        "office"|"work")
+            office_setup
+            ;;
+        "travel")
+            travel_setup
+            ;;
+        "scan")
+            scan_devices
+            ;;
+        "pair")
+            pair_device "$2"
+            ;;
+        "forget")
+            local mac=$(get_device_mac "$2")
+            [[ -n "$mac" ]] && bluetoothctl remove "$mac"
+            ;;
+        "profiles")
+            list_profiles
+            ;;
+        "create-profile")
+            create_profile "$2"
+            ;;
+        "load-profile")
+            load_profile "$2"
+            ;;
+        "list-profiles")
+            list_profiles
+            ;;
+        "devices")
+            list_devices
+            ;;
+        "setup")
+            setup_automation
+            ;;
+        "monitor")
+            monitor_bluetooth
+            ;;
+        "headphones")
+            connect_device "headphones"
+            ;;
+        "earbuds")
+            connect_device "earbuds"
+            ;;
+        "keyboard")
+            connect_device "keyboard"
+            ;;
+        "mouse")
+            connect_device "mouse"
+            ;;
+        "help"|"--help"|"-h")
+            show_help
+            ;;
+        *)
+            error "Unknown command: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"

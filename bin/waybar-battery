@@ -54,7 +54,9 @@ fi
 
 # Determine CSS class
 class=""
-if [[ $capacity -le 15 ]]; then
+if [[ "$status" == "Charging" ]]; then
+    class="charging"
+elif [[ $capacity -le 15 ]]; then
     class="critical"
 elif [[ $capacity -le 30 ]]; then
     class="warning"

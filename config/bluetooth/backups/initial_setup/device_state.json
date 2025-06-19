@@ -1,0 +1,74 @@
+{
+    "devices": [
+        {
+            "mac": "80:99:E7:E3:EA:45",
+            "name": "WH-1000XM6",
+            "connected": true,
+            "trusted": true
+        }
+,
+        {
+            "mac": "64:33:DB:AD:25:55",
+            "name": "AnnePro2 P1",
+            "connected": true,
+            "trusted": true
+        }
+,
+        {
+            "mac": "80:99:E7:68:25:40",
+            "name": "WF-1000XM5",
+            "connected": false,
+            "trusted": true
+        }
+,
+        {
+            "mac": "Media",
+            "name": "/org/bluez/hci0",
+            "connected": false,
+            "trusted": false
+        }
+,
+        {
+            "mac": "0000110a-0000-1000-8000-00805f9b34fb",
+            "name": "",
+            "connected": false,
+            "trusted": false
+        }
+,
+        {
+            "mac": "0000110b-0000-1000-8000-00805f9b34fb",
+            "name": "",
+            "connected": false,
+            "trusted": false
+        }
+,
+        {
+            "mac": "Endpoint",
+            "name": "/org/bluez/hci0/dev_80_99_E7_E3_EA_45/sep3",
+            "connected": false,
+            "trusted": false
+        }
+,
+        {
+            "mac": "Transport",
+            "name": "/org/bluez/hci0/dev_80_99_E7_E3_EA_45/sep3/fd2",
+            "connected": false,
+            "trusted": false
+        }
+,
+        {
+            "mac": "Endpoint",
+            "name": "/org/bluez/hci0/dev_80_99_E7_E3_EA_45/sep2",
+            "connected": false,
+            "trusted": false
+        }
+,
+        {
+            "mac": "Endpoint",
+            "name": "/org/bluez/hci0/dev_80_99_E7_E3_EA_45/sep1",
+            "connected": false,
+            "trusted": false
+        }
+
+    ]
+}

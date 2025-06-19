@@ -1,0 +1,23 @@
+Device 64:33:DB:AD:25:55 (public)
+	Name: AnnePro2 P1
+	Alias: AnnePro2 P1
+	Appearance: 0x03c1 (961)
+	Icon: input-keyboard
+	Paired: yes
+	Bonded: yes
+	Trusted: yes
+	Blocked: no
+	Connected: no
+	WakeAllowed: no
+	LegacyPairing: no
+	CablePairing: no
+	UUID: Generic Access Profile    (00001800-0000-1000-8000-00805f9b34fb)
+	UUID: Generic Attribute Profile (00001801-0000-1000-8000-00805f9b34fb)
+	UUID: Device Information        (0000180a-0000-1000-8000-00805f9b34fb)
+	UUID: Battery Service           (0000180f-0000-1000-8000-00805f9b34fb)
+	UUID: Human Interface Device    (00001812-0000-1000-8000-00805f9b34fb)
+	UUID: Scan Parameters           (00001813-0000-1000-8000-00805f9b34fb)
+	Modalias: bluetooth:v000Dp0000d0110
+[[0;92mNEW[0m] Media /org/bluez/hci0 
+	SupportedUUIDs: 0000110a-0000-1000-8000-00805f9b34fb
+	SupportedUUIDs: 0000110b-0000-1000-8000-00805f9b34fb

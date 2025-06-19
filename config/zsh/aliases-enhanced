@@ -1,0 +1,122 @@
+#!/bin/bash
+
+# Enhanced Git Workflow (using gst to avoid ghostscript conflict)
+alias gst='git status --short'
+alias gd='git diff'
+alias gdc='git diff --cached'
+alias gl='git log --oneline --graph --decorate --all -10'
+alias gla='git log --oneline --graph --decorate --all'
+alias gb='git branch -v'
+alias gco='git checkout'
+alias gcb='git checkout -b'
+alias gm='git merge --no-ff'
+alias gr='git rebase -i'
+alias gundo='git reset --soft HEAD~1'
+alias gwip='git add . && git commit -m "WIP: work in progress"'
+alias gunwip='git log -n 1 | grep -q -c "WIP" && git reset HEAD~1'
+
+# Smart Git Functions
+gclone() { git clone "$1" && cd "$(basename "$1" .git)" }
+gfind() { git log --all --grep="$1" --oneline }
+gfiles() { git diff-tree --no-commit-id --name-only -r "${1:-HEAD}" }
+
+# Enhanced Docker Workflow  
+alias dps='docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+alias dimg='docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"'
+alias dlogs='docker logs -f'
+alias dexec='docker exec -it'
+alias dclean='docker system prune -a'
+alias dstop='docker stop $(docker ps -q)'
+
+# Development Shortcuts
+alias v='nvim'
+alias vim='nvim'
+alias lg='lazygit'
+alias ld='lazydocker'
+alias py='python3'
+alias pym='python3 -m'
+alias serve='python3 -m http.server 8000'
+alias jsonpp='python3 -m json.tool'
+
+# Enhanced File Operations
+alias ll='eza -la --git --header --group-directories-first'
+alias lt='eza -T --git --level=2'
+alias lsize='eza -la --sort=size'
+alias ltime='eza -la --sort=modified'
+
+# Process & System Monitoring
+alias psg='ps aux | grep -v grep | grep'
+alias ports='ss -tuln'
+alias listening='ss -tuln | grep LISTEN'
+alias memtop='ps aux --sort=-%mem | head'
+alias cputop='ps aux --sort=-%cpu | head'
+
+# Network & Debugging
+alias myip='curl -s ipinfo.io/ip'
+alias localip='ip route get 1 | awk "{print \$7}" | head -1'
+alias ping='ping -c 5'
+alias wget='wget -c'
+
+# Quick Navigation & Search
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+alias ~='cd ~'
+alias -- -='cd -'
+
+# FZF Enhanced Commands
+alias preview='fzf --preview "bat --style=numbers --color=always --line-range :500 {}"'
+alias vf='nvim $(fzf --preview "bat --style=numbers --color=always --line-range :500 {}")'
+alias cf='cd $(find . -type d | fzf)'
+
+# Project Management
+alias projects='cd ~/projects && find . -maxdepth 2 -type d | fzf | xargs -I {} bash -c "cd {} && pwd"'
+alias repos='cd ~/repos && find . -maxdepth 2 -type d | fzf | xargs -I {} bash -c "cd {} && pwd"'
+
+# Tmux Enhancements
+alias t='tmux'
+alias ta='tmux attach'
+alias tls='tmux list-sessions'
+alias tnew='tmux new-session -s'
+
+# Quick Edit Configs
+alias vimrc='nvim ~/.config/nvim/init.lua'
+alias zshrc='nvim ~/.zshrc'
+alias tmuxrc='nvim ~/.config/tmux/tmux.conf'
+alias hyprrc='nvim ~/.config/hypr/hyprland.conf'
+
+# Development Environment
+alias npmg='npm list -g --depth=0'
+alias pipg='pip list'
+alias cargo-update='cargo install-update -a'
+
+# Productivity Helpers
+alias todo='nvim ~/Documents/todo.md'
+alias notes='nvim ~/Documents/notes.md'
+alias scratch='nvim /tmp/scratch.md'
+alias weather='curl wttr.in'
+alias cheat='curl cht.sh'
+
+# Enhanced Grep
+alias grep='rg'
+alias fgrep='rg -F'
+alias egrep="rg -E"
+
+# Bluetooth Manager Aliases
+alias bt='bluetooth-manager'
+alias bt-status='bluetooth-manager status'
+alias bt-apartment='bluetooth-manager apartment'
+alias bt-office='bluetooth-manager office'
+alias bt-headphones='bluetooth-manager headphones'
+alias bt-earbuds='bluetooth-manager earbuds'
+alias bt-keyboard='bluetooth-manager keyboard'
+alias bt-backup='bluetooth-manager backup'
+alias bt-restore='bluetooth-manager restore'
+alias bt-devices='bluetooth-manager devices'
+
+# Dunst Notification Manager Aliases
+alias notify='dunst-manager'
+alias notify-test='dunst-manager test'
+alias notify-restart='dunst-manager restart'
+alias notify-center='dunst-manager center'
+alias notify-status='dunst-manager status'

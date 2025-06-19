@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Bluetooth Backup Cleanup Script
+# Manages bluetooth backup rotation, keeping only the most recent 3 backups
+
+BACKUP_DIR="$DOTFILES/config/bluetooth/backups"
+MAX_BACKUPS=3
+
+if [ ! -d "$BACKUP_DIR" ]; then
+    echo "Backup directory not found: $BACKUP_DIR"
+    exit 1
+fi
+
+echo "🧹 Cleaning up bluetooth backups..."
+echo "📁 Backup directory: $BACKUP_DIR"
+
+# List all auto backup directories by date (newest first)
+auto_backups=($(ls -dt "$BACKUP_DIR"/auto_* 2>/dev/null || true))
+
+if [ ${#auto_backups[@]} -eq 0 ]; then
+    echo "ℹ️  No auto backups found to clean up"
+    exit 0
+fi
+
+echo "📊 Found ${#auto_backups[@]} auto backups"
+
+# Keep only the most recent MAX_BACKUPS
+if [ ${#auto_backups[@]} -gt $MAX_BACKUPS ]; then
+    echo "🗂️  Keeping most recent $MAX_BACKUPS backups:"
+    for i in $(seq 0 $((MAX_BACKUPS - 1))); do
+        if [ $i -lt ${#auto_backups[@]} ]; then
+            backup_name=$(basename "${auto_backups[$i]}")
+            echo "  ✅ $backup_name"
+        fi
+    done
+    
+    echo "🗑️  Removing old backups:"
+    for i in $(seq $MAX_BACKUPS $((${#auto_backups[@]} - 1))); do
+        backup_to_remove="${auto_backups[$i]}"
+        backup_name=$(basename "$backup_to_remove")
+        echo "  ❌ $backup_name"
+        rm -rf "$backup_to_remove"
+    done
+    
+    echo "✅ Cleanup completed. Kept $MAX_BACKUPS most recent backups."
+else
+    echo "✅ Only ${#auto_backups[@]} backups found, no cleanup needed."
+fi
+
+# Show current backup status
+echo ""
+echo "📋 Current backups:"
+ls -la "$BACKUP_DIR" | grep "^d" | grep -E "(auto_|initial_)" | awk '{print "  " $9 " (" $6 " " $7 " " $8 ")"}'

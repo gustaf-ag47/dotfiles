@@ -5,7 +5,7 @@
   "spacing": 0,
   "modules-left": ["hyprland/workspaces", "custom/separator", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["cpu", "memory", "custom/battery", "network", "tray"],
+  "modules-right": ["cpu", "memory", "pulseaudio", "custom/battery", "network", "tray"],
 
   "hyprland/workspaces": {
     "format": "{icon}",
@@ -72,6 +72,25 @@
     "format": "󰧑 RAM {used:0.1f}G",
     "interval": 2,
     "tooltip-format": "Memory: {used:0.1f}G / {total:0.1f}G ({percentage}%)\nSwap: {swapUsed:0.1f}G / {swapTotal:0.1f}G"
+  },
+
+  "pulseaudio": {
+    "format": "{icon} VOL {volume}%",
+    "format-muted": "󰖁 MUTE",
+    "format-icons": {
+      "headphone": "󰋋",
+      "hands-free": "󰋎",
+      "headset": "󰋎",
+      "phone": "",
+      "portable": "",
+      "car": "",
+      "default": ["", "", ""]
+    },
+    "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+    "on-click-right": "pavucontrol",
+    "on-scroll-up": "pactl set-sink-volume @DEFAULT_SINK@ +5%",
+    "on-scroll-down": "pactl set-sink-volume @DEFAULT_SINK@ -5%",
+    "tooltip-format": "Volume: {volume}%\nDevice: {desc}"
   },
 
   "custom/battery": {

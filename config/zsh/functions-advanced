@@ -1,0 +1,251 @@
+#!/bin/bash
+
+# Advanced Development Functions
+
+# Project Creation & Management
+create_project() {
+    local name="$1"
+    local type="${2:-node}"
+    
+    if [[ -z "$name" ]]; then
+        echo "Usage: create_project <name> [type]"
+        echo "Types: node, python, rust, go, react, vue"
+        return 1
+    fi
+    
+    mkdir -p ~/projects/"$name" && cd ~/projects/"$name"
+    
+    case "$type" in
+        "node")
+            npm init -y
+            echo "node_modules/" > .gitignore
+            echo "# $name" > README.md
+            ;;
+        "python")
+            python3 -m venv venv
+            echo "venv/" > .gitignore
+            echo "__pycache__/" >> .gitignore
+            echo "*.pyc" >> .gitignore
+            echo "# $name" > README.md
+            ;;
+        "rust")
+            cargo init .
+            ;;
+        "go")
+            go mod init "$name"
+            echo "# $name" > README.md
+            ;;
+        "react")
+            npx create-react-app .
+            ;;
+        "vue")
+            npx create-vue .
+            ;;
+    esac
+    
+    git init
+    git add .
+    git commit -m "Initial commit"
+    echo "Project $name created successfully!"
+}
+
+# Smart Git Functions
+git_clean_branches() {
+    echo "Cleaning up merged branches..."
+    git branch --merged main | grep -v "main\|master\|develop" | xargs -n 1 git branch -d
+}
+
+git_squash() {
+    local commits="${1:-2}"
+    git reset --soft HEAD~"$commits"
+    git commit --edit -m"$(git log --format=%B --reverse HEAD..HEAD@{1})"
+}
+
+git_backup() {
+    local branch=$(git symbolic-ref --short HEAD)
+    git push origin "$branch:backup/$branch-$(date +%Y%m%d-%H%M%S)"
+    echo "Backup created: backup/$branch-$(date +%Y%m%d-%H%M%S)"
+}
+
+# Development Environment Switchers
+use_node() {
+    local version="${1:-lts}"
+    if command -v fnm &> /dev/null; then
+        fnm use "$version"
+    elif command -v nvm &> /dev/null; then
+        nvm use "$version"
+    fi
+}
+
+use_python() {
+    local version="${1:-3.11}"
+    if command -v pyenv &> /dev/null; then
+        pyenv global "$version"
+    fi
+}
+
+# Docker Development Helpers
+docker_dev() {
+    local service="$1"
+    if [[ -f "docker-compose.yml" ]] || [[ -f "compose.yml" ]]; then
+        docker-compose up -d "$service"
+        docker-compose logs -f "$service"
+    else
+        echo "No docker-compose file found"
+        return 1
+    fi
+}
+
+docker_shell() {
+    local container="$1"
+    if [[ -z "$container" ]]; then
+        container=$(docker ps --format "{{.Names}}" | fzf)
+    fi
+    docker exec -it "$container" /bin/bash
+}
+
+# Database Helpers
+pg_connect() {
+    local db="${1:-postgres}"
+    local host="${2:-localhost}"
+    local port="${3:-5432}"
+    local user="${4:-postgres}"
+    psql -h "$host" -p "$port" -U "$user" -d "$db"
+}
+
+redis_connect() {
+    local host="${1:-localhost}"
+    local port="${2:-6379}"
+    redis-cli -h "$host" -p "$port"
+}
+
+# Performance & Monitoring
+port_check() {
+    local port="$1"
+    if [[ -z "$port" ]]; then
+        echo "Usage: port_check <port>"
+        return 1
+    fi
+    lsof -i :"$port"
+}
+
+process_monitor() {
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        echo "Usage: process_monitor <process_name>"
+        return 1
+    fi
+    watch -n 1 "ps aux | grep $name | grep -v grep"
+}
+
+disk_usage_top() {
+    local dir="${1:-.}"
+    du -ah "$dir" | sort -rh | head -20
+}
+
+# File & Text Operations
+extract() {
+    if [[ -f "$1" ]]; then
+        case "$1" in
+            *.tar.bz2)   tar xjf "$1"     ;;
+            *.tar.gz)    tar xzf "$1"     ;;
+            *.bz2)       bunzip2 "$1"     ;;
+            *.rar)       unrar x "$1"     ;;
+            *.gz)        gunzip "$1"      ;;
+            *.tar)       tar xf "$1"      ;;
+            *.tbz2)      tar xjf "$1"     ;;
+            *.tgz)       tar xzf "$1"     ;;
+            *.zip)       unzip "$1"       ;;
+            *.Z)         uncompress "$1"  ;;
+            *.7z)        7z x "$1"        ;;
+            *)           echo "'$1' cannot be extracted" ;;
+        esac
+    else
+        echo "'$1' is not a valid file"
+    fi
+}
+
+backup_file() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        cp "$file" "${file}.bak.$(date +%Y%m%d_%H%M%S)"
+        echo "Backup created: ${file}.bak.$(date +%Y%m%d_%H%M%S)"
+    else
+        echo "File not found: $file"
+    fi
+}
+
+# Quick Servers
+serve_dir() {
+    local port="${1:-8000}"
+    local dir="${2:-.}"
+    echo "Serving $dir on http://localhost:$port"
+    python3 -m http.server "$port" --directory "$dir"
+}
+
+# FZF Enhanced Functions
+fzf_cd() {
+    local dir
+    dir=$(find . -type d 2> /dev/null | fzf +m) && cd "$dir"
+}
+
+fzf_history() {
+    local selected
+    selected=$(history | fzf --tac | awk '{$1=""; print substr($0,2)}')
+    [[ -n "$selected" ]] && eval "$selected"
+}
+
+fzf_kill() {
+    local pid
+    pid=$(ps -ef | sed 1d | fzf -m | awk '{print $2}')
+    if [[ -n "$pid" ]]; then
+        echo "$pid" | xargs kill -9
+    fi
+}
+
+# Environment Management
+show_env() {
+    echo "=== Development Environment ==="
+    echo "Node: $(node --version 2>/dev/null || echo 'Not installed')"
+    echo "Python: $(python3 --version 2>/dev/null || echo 'Not installed')"
+    echo "Rust: $(rustc --version 2>/dev/null || echo 'Not installed')"
+    echo "Go: $(go version 2>/dev/null || echo 'Not installed')"
+    echo "Docker: $(docker --version 2>/dev/null || echo 'Not installed')"
+    echo "Git: $(git --version 2>/dev/null || echo 'Not installed')"
+    echo "=== System Info ==="
+    echo "OS: $(uname -s)"
+    echo "Arch: $(uname -m)"
+    echo "Shell: $SHELL"
+    echo "Terminal: $TERM"
+}
+
+# Quick Notes & Bookmarks
+note() {
+    local note_dir="$HOME/Documents/notes"
+    mkdir -p "$note_dir"
+    
+    if [[ -z "$1" ]]; then
+        # List and select notes
+        local note_file
+        note_file=$(ls "$note_dir"/*.md 2>/dev/null | fzf --preview 'cat {}')
+        [[ -n "$note_file" ]] && nvim "$note_file"
+    else
+        # Create or edit specific note
+        nvim "$note_dir/$1.md"
+    fi
+}
+
+bookmark() {
+    local bookmark_file="$HOME/.bookmarks"
+    
+    if [[ -z "$1" ]]; then
+        # List bookmarks
+        if [[ -f "$bookmark_file" ]]; then
+            cat "$bookmark_file" | fzf | awk '{print $2}' | xargs -I {} bash -c 'cd {}'
+        fi
+    else
+        # Add current directory as bookmark
+        echo "$1 $(pwd)" >> "$bookmark_file"
+        echo "Bookmark '$1' added for $(pwd)"
+    fi
+}

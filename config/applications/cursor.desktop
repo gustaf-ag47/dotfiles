@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Cursor
+Comment=AI-powered code editor
+Exec=/home/gustaf/.local/share/applications/cursor.desktop
+Terminal=false
+Categories=Development;TextEditor;
+StartupWMClass=cursor

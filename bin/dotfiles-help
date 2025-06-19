@@ -1,0 +1,258 @@
+#!/bin/bash
+
+# Dotfiles Help System
+# Provides information about available tools and features
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+
+show_banner() {
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║                   🚀 DOTFILES HELP                  ║"
+    echo "║             Complete Development Environment         ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+show_usage() {
+    echo -e "${WHITE}Usage:${NC} dotfiles-help [COMMAND]"
+    echo ""
+    echo -e "${WHITE}Commands:${NC}"
+    echo -e "  ${GREEN}keys${NC}        Show key bindings quick reference"
+    echo -e "  ${GREEN}tools${NC}       List available tools and scripts"
+    echo -e "  ${GREEN}setup${NC}       Show setup and installation info"
+    echo -e "  ${GREEN}calc${NC}        Calculator help and examples"
+    echo -e "  ${GREEN}git${NC}         Git workflow commands"
+    echo -e "  ${GREEN}tmux${NC}        Tmux commands and shortcuts"
+    echo -e "  ${GREEN}nvim${NC}        Neovim plugins and keybindings"
+    echo -e "  ${GREEN}bluetooth${NC}   Bluetooth management commands"
+    echo -e "  ${GREEN}system${NC}      System monitoring and controls"
+    echo -e "  ${GREEN}theme${NC}       Theme and appearance info"
+    echo ""
+    echo -e "${WHITE}Examples:${NC}"
+    echo -e "  ${YELLOW}dotfiles-help keys${NC}      # Show most used keybindings"
+    echo -e "  ${YELLOW}dotfiles-help calc${NC}      # Calculator usage examples"
+    echo -e "  ${YELLOW}dotfiles-help tools${NC}     # List all custom scripts"
+}
+
+show_keys() {
+    echo -e "${WHITE}🔑 Essential Keybindings${NC}"
+    echo ""
+    echo -e "${GREEN}Window Management (Hyprland):${NC}"
+    echo -e "  Super + Enter       Open terminal"
+    echo -e "  Super + Space       Application launcher"
+    echo -e "  Super + C           Popup calculator"
+    echo -e "  Super + V           Clipboard manager"
+    echo -e "  Super + h/j/k/l     Focus windows (vim-style)"
+    echo -e "  Super + 1-9         Switch workspaces"
+    echo -e "  Super + Shift + Q   Kill window"
+    echo ""
+    echo -e "${GREEN}Tmux (Prefix: Ctrl+Space):${NC}"
+    echo -e "  Ctrl+Space + c      New window"
+    echo -e "  Ctrl+Space + %      Split horizontal"
+    echo -e "  Ctrl+Space + \"      Split vertical"
+    echo -e "  Ctrl+Space + h/j/k/l Navigate panes"
+    echo ""
+    echo -e "${GREEN}Neovim (Leader: Space):${NC}"
+    echo -e "  Space + e           File explorer"
+    echo -e "  Space + ff          Find files"
+    echo -e "  Space + fg          Live grep"
+    echo -e "  Space + fb          Find buffers"
+    echo ""
+    echo -e "${BLUE}📖 For complete reference: ${YELLOW}cat $DOTFILES/KEYBINDINGS.md${NC}"
+}
+
+show_tools() {
+    echo -e "${WHITE}🛠️  Available Tools and Scripts${NC}"
+    echo ""
+    
+    if [ -d "$DOTFILES/bin" ]; then
+        echo -e "${GREEN}Custom Scripts:${NC}"
+        for script in "$DOTFILES/bin"/*; do
+            if [ -x "$script" ]; then
+                script_name=$(basename "$script")
+                case "$script_name" in
+                    *calc*) echo -e "  📱 ${YELLOW}$script_name${NC} - Calculator tools" ;;
+                    *bluetooth*) echo -e "  📶 ${BLUE}$script_name${NC} - Bluetooth management" ;;
+                    *dev*) echo -e "  💻 ${PURPLE}$script_name${NC} - Development tools" ;;
+                    *git*) echo -e "  🌱 ${GREEN}$script_name${NC} - Git utilities" ;;
+                    *power*) echo -e "  🔋 ${RED}$script_name${NC} - Power management" ;;
+                    *) echo -e "  🔧 ${CYAN}$script_name${NC}" ;;
+                esac
+            fi
+        done
+    fi
+    
+    echo ""
+    echo -e "${GREEN}Modern CLI Tools:${NC}"
+    echo -e "  🐱 bat          Better cat with syntax highlighting"
+    echo -e "  📁 eza          Better ls with colors and icons"
+    echo -e "  🔍 fd           Better find command"
+    echo -e "  🦄 ripgrep      Better grep (rg)"
+    echo -e "  💨 dust         Better du disk usage"
+    echo -e "  📊 duf          Better df filesystem info"
+    echo -e "  ⚡ procs        Better ps process viewer"
+}
+
+show_calc() {
+    echo -e "${WHITE}🧮 Calculator Usage${NC}"
+    echo ""
+    echo -e "${GREEN}Quick Access:${NC}"
+    echo -e "  Super + C           Popup calculator (compact)"
+    echo -e "  Super + Shift + C   Terminal calculator (full-featured)"
+    echo ""
+    echo -e "${GREEN}Examples:${NC}"
+    echo -e "  ${YELLOW}2 + 3 * 4${NC}           → 14"
+    echo -e "  ${YELLOW}sqrt(16)${NC}            → 4.0"
+    echo -e "  ${YELLOW}sin(pi/2)${NC}           → 1.0"
+    echo -e "  ${YELLOW}2**8${NC}                → 256"
+    echo ""
+    echo -e "${GREEN}Answer Continuation:${NC}"
+    echo -e "  ${YELLOW}10 * 5${NC}              → 50"
+    echo -e "  ${YELLOW}* 2${NC}                 → 100 (operates on last result)"
+    echo -e "  ${YELLOW}+ 23${NC}                → 123"
+    echo -e "  ${YELLOW}ans / 3${NC}             → 41 (using ans variable)"
+    echo ""
+    echo -e "${GREEN}Available Functions:${NC}"
+    echo -e "  sqrt(), sin(), cos(), tan(), log(), exp()"
+    echo -e "  Constants: pi, e, ans (last result)"
+}
+
+show_git() {
+    echo -e "${WHITE}🌱 Git Workflow Commands${NC}"
+    echo ""
+    echo -e "${GREEN}Custom Functions:${NC}"
+    echo -e "  ${YELLOW}g${NC}        Amend commit and force push"
+    echo -e "  ${YELLOW}r${NC}        Rebase current branch to master"
+    echo -e "  ${YELLOW}fglog${NC}    Interactive git log with preview"
+    echo -e "  ${YELLOW}fgco${NC}     Fuzzy checkout branch"
+    echo -e "  ${YELLOW}fgbr${NC}     Switch to recent branch"
+    echo ""
+    echo -e "${GREEN}Enhanced Commands:${NC}"
+    echo -e "  git log     Enhanced with delta diff viewer"
+    echo -e "  git diff    Side-by-side diff with syntax highlighting"
+    echo -e "  git show    Beautiful commit display"
+}
+
+show_system() {
+    echo -e "${WHITE}🖥️  System Monitoring & Controls${NC}"
+    echo ""
+    echo -e "${GREEN}Power Management:${NC}"
+    echo -e "  Super + Ctrl + Q           Power menu"
+    echo -e "  Super + Ctrl + Shift + L   Lock screen"
+    echo -e "  ${YELLOW}toggle-power-mode${NC}        Switch power profiles"
+    echo ""
+    echo -e "${GREEN}Monitoring:${NC}"
+    echo -e "  ${YELLOW}battery-monitor${NC}          Battery status and alerts"
+    echo -e "  ${YELLOW}dev-monitor${NC}              Development environment monitor"
+    echo ""
+    echo -e "${GREEN}Bluetooth:${NC}"
+    echo -e "  ${YELLOW}bluetooth-manager${NC}        Full bluetooth management interface"
+    echo -e "  ${YELLOW}bluetooth-backup-auto${NC}    Create automatic backup"
+    echo -e "  ${YELLOW}bluetooth-backup-cleanup${NC} Clean old backups"
+}
+
+main() {
+    case "${1:-}" in
+        "keys"|"key"|"k")
+            show_banner
+            show_keys
+            ;;
+        "tools"|"scripts"|"t")
+            show_banner
+            show_tools
+            ;;
+        "calc"|"calculator"|"c")
+            show_banner
+            show_calc
+            ;;
+        "git"|"g")
+            show_banner
+            show_git
+            ;;
+        "system"|"sys"|"s")
+            show_banner
+            show_system
+            ;;
+        "setup"|"install")
+            echo -e "${WHITE}🚀 Setup Instructions${NC}"
+            echo ""
+            echo -e "1. Clone repository: ${YELLOW}git clone <repo> ~/.dotfiles${NC}"
+            echo -e "2. Run installer: ${YELLOW}cd ~/.dotfiles && make install${NC}"
+            echo -e "3. Set zsh as default: ${YELLOW}chsh -s \$(which zsh)${NC}"
+            echo -e "4. Install tmux plugins: ${YELLOW}tmux${NC} then ${YELLOW}Ctrl+Space + I${NC}"
+            echo ""
+            echo -e "${BLUE}📖 Full documentation: ${YELLOW}cat $DOTFILES/README.md${NC}"
+            ;;
+        "theme")
+            echo -e "${WHITE}🎨 Tokyo Night Theme Colors${NC}"
+            echo ""
+            echo -e "Background: ${CYAN}#1a1b26${NC}"
+            echo -e "Foreground: ${WHITE}#c0caf5${NC}"
+            echo -e "Blue:       ${BLUE}#7aa2f7${NC}"
+            echo -e "Green:      ${GREEN}#9ece6a${NC}"
+            echo -e "Yellow:     ${YELLOW}#e0af68${NC}"
+            echo -e "Red:        ${RED}#f7768e${NC}"
+            echo -e "Purple:     ${PURPLE}#bb9af7${NC}"
+            echo -e "Cyan:       ${CYAN}#7dcfff${NC}"
+            ;;
+        "tmux")
+            echo -e "${WHITE}📺 Tmux Commands (Prefix: Ctrl+Space)${NC}"
+            echo ""
+            echo -e "${GREEN}Windows:${NC}"
+            echo -e "  Ctrl+Space + c     New window"
+            echo -e "  Ctrl+Space + &     Kill window"
+            echo -e "  Ctrl+Space + ,     Rename window"
+            echo -e "  Ctrl+Space + n/p   Next/Previous window"
+            echo ""
+            echo -e "${GREEN}Panes:${NC}"
+            echo -e "  Ctrl+Space + %     Split horizontal"
+            echo -e "  Ctrl+Space + \"     Split vertical"
+            echo -e "  Ctrl+Space + x     Kill pane"
+            echo -e "  Ctrl+Space + h/j/k/l Navigate panes"
+            ;;
+        "nvim"|"neovim")
+            echo -e "${WHITE}✏️  Neovim Plugins & Commands${NC}"
+            echo ""
+            echo -e "${GREEN}File Operations:${NC}"
+            echo -e "  Space + e          Neo-tree file explorer"
+            echo -e "  Space + ff         Telescope find files"
+            echo -e "  Space + fg         Telescope live grep"
+            echo -e "  Space + fb         Telescope buffers"
+            echo ""
+            echo -e "${GREEN}LSP & Development:${NC}"
+            echo -e "  gd                 Go to definition"
+            echo -e "  gr                 Go to references"
+            echo -e "  K                  Hover documentation"
+            echo -e "  Space + ca         Code actions"
+            ;;
+        "bluetooth")
+            echo -e "${WHITE}📶 Bluetooth Management${NC}"
+            echo ""
+            echo -e "${GREEN}Main Tools:${NC}"
+            echo -e "  ${YELLOW}bluetooth-manager${NC}     Full management interface"
+            echo -e "  ${YELLOW}bluetooth${NC}             Quick device switching"
+            echo ""
+            echo -e "${GREEN}Backup Management:${NC}"
+            echo -e "  ${YELLOW}bluetooth-backup-auto${NC}     Create backup"
+            echo -e "  ${YELLOW}bluetooth-backup-cleanup${NC}  Clean old backups"
+            echo -e "  ${YELLOW}setup-bluetooth-automation${NC} Setup auto-backup"
+            ;;
+        "help"|"h"|""|*)
+            show_banner
+            show_usage
+            ;;
+    esac
+}
+
+main "$@"

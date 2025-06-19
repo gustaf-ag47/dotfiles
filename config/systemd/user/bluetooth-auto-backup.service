@@ -1,0 +1,10 @@
+[Unit]
+Description=Bluetooth Automatic Backup Service
+After=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/sync/src/dotfiles/bin/bluetooth-backup-auto
+
+[Install]
+WantedBy=default.target

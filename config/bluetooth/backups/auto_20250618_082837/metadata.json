@@ -1,0 +1,7 @@
+{
+    "timestamp": "2025-06-18T08:28:37+02:00",
+    "hostname": "arch",
+    "controller": "14:75:5B:F0:46:8B",
+    "kernel": "6.15.2-arch1-1",
+    "bluez_version": "Version 5.83"
+}

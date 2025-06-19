@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Automated Bluetooth Backup Script
+# Runs regular backups and maintains backup history
+
+BLUETOOTH_MANAGER="$HOME/sync/src/dotfiles/bin/bluetooth-manager"
+BACKUP_DIR="$HOME/sync/src/dotfiles/config/bluetooth/backups"
+MAX_BACKUPS=10
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1"
+}
+
+log "🔄 Starting automated Bluetooth backup"
+
+# Create backup with timestamp
+BACKUP_NAME="auto_$(date +%Y%m%d_%H%M%S)"
+
+if "$BLUETOOTH_MANAGER" backup "$BACKUP_NAME"; then
+    log "✅ Backup created: $BACKUP_NAME"
+    
+    # Clean up old backups (keep only latest MAX_BACKUPS)
+    cd "$BACKUP_DIR" || exit 1
+    
+    # Count backups starting with "auto_"
+    auto_backups=$(ls -1t auto_* 2>/dev/null | wc -l)
+    
+    if [[ $auto_backups -gt $MAX_BACKUPS ]]; then
+        log "🧹 Cleaning up old backups (keeping $MAX_BACKUPS)"
+        ls -1t auto_* | tail -n +$((MAX_BACKUPS + 1)) | xargs rm -rf
+        log "✅ Cleanup completed"
+    fi
+    
+    log "📊 Current backup count: $(ls -1 auto_* 2>/dev/null | wc -l)"
+else
+    log "❌ Backup failed"
+    exit 1
+fi
+
+log "🔄 Automated Bluetooth backup completed"

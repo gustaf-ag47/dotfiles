@@ -45,6 +45,16 @@ source $ZDOTDIR/scripts/fzf.sh
 source $ZDOTDIR/scripts/functions.zsh
 source $ZDOTDIR/aliases
 
+# 10x Developer Enhancements
+source $DOTFILES/config/zsh/aliases-enhanced
+source $DOTFILES/config/zsh/functions-advanced
+
+# Initialize modern tools
+if command -v zoxide &> /dev/null; then
+    eval "$(zoxide init zsh)"
+    alias cd="z"
+fi
+
 # zsh line editor
 zle -N edit-command-line
 zle -N paste-from-clipboard

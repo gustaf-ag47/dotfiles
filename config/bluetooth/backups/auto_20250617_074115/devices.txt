@@ -1,0 +1,6 @@
+Device 80:99:E7:E3:EA:45 WH-1000XM6
+Device 64:33:DB:AD:25:55 AnnePro2 P1
+Device 80:99:E7:68:25:40 WF-1000XM5
+[[0;92mNEW[0m] Media /org/bluez/hci0 
+	SupportedUUIDs: 0000110a-0000-1000-8000-00805f9b34fb
+	SupportedUUIDs: 0000110b-0000-1000-8000-00805f9b34fb

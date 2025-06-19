@@ -1,0 +1,59 @@
+#!/bin/bash
+
+# Test Dunst Notifications Script
+# Tests various notification types to verify dunst is working
+
+echo "🧪 Testing Dunst Notifications..."
+echo "Notifications should appear in top-right corner"
+echo
+
+# Test basic notification
+echo "1. Testing basic notification..."
+notify-send "Basic Test" "This is a basic notification test" &
+sleep 2
+
+# Test with urgency levels
+echo "2. Testing urgency levels..."
+notify-send -u low "Low Priority" "This should have a gray frame" &
+sleep 1
+notify-send -u normal "Normal Priority" "This should have a blue frame" &
+sleep 1
+notify-send -u critical "Critical Priority" "This should have a red frame and stay visible" &
+sleep 2
+
+# Test with icons
+echo "3. Testing with system icons..."
+notify-send -i dialog-information "Info Icon" "Notification with info icon" &
+sleep 1
+notify-send -i dialog-warning "Warning Icon" "Notification with warning icon" &
+sleep 1
+notify-send -i dialog-error "Error Icon" "Notification with error icon" &
+sleep 2
+
+# Test long message
+echo "4. Testing long message..."
+notify-send "Long Message Test" "This is a very long notification message that should wrap properly across multiple lines. It tests the word wrapping functionality and ensures that the notification window resizes appropriately to accommodate longer content while maintaining readability." &
+sleep 3
+
+# Test application-specific (simulated)
+echo "5. Testing app-specific formatting..."
+notify-send -a "discord" "Discord Message" "Simulated Discord notification with custom formatting" &
+sleep 1
+notify-send -a "Spotify" "Now Playing" "Artist - Song Title" &
+sleep 2
+
+# Test battery notification (simulated)
+echo "6. Testing battery notification..."
+notify-send "Battery" "Battery at 75% and charging" &
+sleep 1
+
+# Test volume notification (simulated)
+echo "7. Testing volume notification..."
+notify-send "Volume" "Volume: 50%" &
+sleep 2
+
+echo "✅ Notification tests completed!"
+echo "If you didn't see notifications, check:"
+echo "- Dunst is running: pgrep dunst"
+echo "- Check dunst config: ~/.config/dunst/dunstrc"
+echo "- Monitor setup: Multiple monitors might affect positioning"
