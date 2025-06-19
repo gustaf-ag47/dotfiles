@@ -1,0 +1,126 @@
+#!/bin/bash
+
+# Better Popup Calculator Script
+# Creates a compact calculator window with history and answer continuation
+
+# Check if we're in Wayland or X11
+if [ -n "$WAYLAND_DISPLAY" ]; then
+    LAUNCHER="wofi"
+    COPY_CMD="wl-copy"
+else
+    LAUNCHER="rofi"
+    COPY_CMD="xclip -selection clipboard"
+fi
+
+# Calculator with compact interface
+calculate() {
+    local input="$1"
+    local history="$2"
+    
+    # Build the menu with history and options
+    local menu_items=""
+    
+    # Add history if available
+    if [ -n "$history" ]; then
+        menu_items="$history\n"
+    fi
+    
+    # Add quick calculation buttons
+    menu_items+="\n🧮 Calculator\n"
+    menu_items+="➕ Basic: 2 + 3 * 4\n"
+    menu_items+="📐 Math: sqrt(16), sin(pi/2)\n"
+    menu_items+="💰 Finance: (1000 * 1.05)^10\n"
+    menu_items+="🔢 Binary: obase=2; 42\n"
+    menu_items+="📊 Percent: 150 * 0.20\n"
+    menu_items+="⚡ Answer Continuation: * 2, + 10, / 3\n"
+    menu_items+="\n💡 Tips:\n"
+    menu_items+="• Use 'pi' for π, 'e' for Euler's number\n"
+    menu_items+="• Start with operator (* + - /) to continue from last result\n"
+    menu_items+="• Functions: sqrt(), sin(), cos(), log()\n"
+    menu_items+="• Powers: 2^8 or 2**8\n"
+    menu_items+="• Type 'q' to quit, 'c' to clear\n"
+    
+    # Show calculator interface
+    if [ -n "$WAYLAND_DISPLAY" ]; then
+        result=$(echo -e "$menu_items" | wofi \
+            --dmenu \
+            --prompt "🧮 Calculator" \
+            --width 400 \
+            --height 500 \
+            --cache-file /dev/null \
+            --allow-markup \
+            --insensitive)
+    else
+        result=$(echo -e "$menu_items" | rofi \
+            -dmenu \
+            -p "🧮 Calculator" \
+            -width 30 \
+            -lines 15 \
+            -i)
+    fi
+    
+    # Handle the input
+    if [ -z "$result" ]; then
+        exit 0
+    fi
+    
+    # Skip if user clicked on info/tips
+    if [[ "$result" =~ ^[🧮➕📐💰🔢📊⚡💡•] ]] || [[ "$result" =~ ^Tips: ]] || [[ "$result" =~ ^Calculator ]] || [[ "$result" =~ ^Use ]] || [[ "$result" =~ ^Functions: ]] || [[ "$result" =~ ^Powers: ]] || [[ "$result" =~ ^Type ]] || [[ "$result" =~ ^Start ]]; then
+        calculate "" "$history"
+        return
+    fi
+    
+    # Handle special commands
+    case "$result" in
+        "q"|"quit"|"exit")
+            exit 0
+            ;;
+        "c"|"clear")
+            calculate "" ""
+            return
+            ;;
+        *)
+            # Try to calculate
+            if command -v bc &> /dev/null; then
+                # Prepare the expression for bc
+                expr=$(echo "$result" | sed 's/pi/3.14159265358979323846/g' | sed 's/e/2.71828182845904523536/g')
+                calc_result=$(echo "scale=10; $expr" | bc -l 2>/dev/null)
+                
+                if [ $? -eq 0 ] && [ -n "$calc_result" ]; then
+                    # Format the result nicely
+                    formatted_result=$(echo "$calc_result" | sed 's/^\./0./' | sed 's/\.0*$//' | sed 's/\(.*\)\.\([0-9]*[1-9]\)0*$/\1.\2/')
+                    
+                    # Copy to clipboard
+                    echo "$formatted_result" | $COPY_CMD
+                    
+                    # Add to history
+                    new_history_line="$result = $formatted_result ✅"
+                    if [ -n "$history" ]; then
+                        new_history="$new_history_line\n$history"
+                    else
+                        new_history="$new_history_line"
+                    fi
+                    
+                    # Limit history to 5 items
+                    new_history=$(echo -e "$new_history" | head -5)
+                    
+                    # Show result and continue
+                    calculate "" "$new_history"
+                else
+                    # Error in calculation
+                    error_history="❌ Error: Invalid expression"
+                    if [ -n "$history" ]; then
+                        error_history="$error_history\n$history"
+                    fi
+                    calculate "" "$error_history"
+                fi
+            else
+                echo "Error: bc calculator not installed"
+                exit 1
+            fi
+            ;;
+    esac
+}
+
+# Start the calculator
+calculate "" ""
