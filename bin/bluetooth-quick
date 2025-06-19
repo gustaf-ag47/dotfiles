@@ -1,0 +1,192 @@
+#!/bin/bash
+
+# Quick Bluetooth Device Switcher
+# Simple script to quickly connect to your common devices
+
+set -euo pipefail
+
+# Your device MAC addresses (update these with your actual devices)
+HEADPHONES="80:99:E7:E3:EA:45"  # WH-1000XM6
+EARBUDS="80:99:E7:68:25:40"     # WF-1000XM5
+KEYBOARD="64:33:DB:AD:25:55"    # AnnePro2 P1
+
+# Check if device is connected
+is_connected() {
+    bluetoothctl info "$1" | grep -q "Connected: yes"
+}
+
+# Connect to device
+connect_device() {
+    local mac="$1"
+    local name="$2"
+    
+    if is_connected "$mac"; then
+        echo "$name is already connected"
+        return 0
+    fi
+    
+    echo "Connecting to $name..."
+    if bluetoothctl connect "$mac" >/dev/null 2>&1; then
+        echo "✅ Connected to $name"
+        # Send notification
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send "Bluetooth" "Connected to $name" -i bluetooth
+        fi
+    else
+        echo "❌ Failed to connect to $name"
+        return 1
+    fi
+}
+
+# Disconnect from device
+disconnect_device() {
+    local mac="$1"
+    local name="$2"
+    
+    if ! is_connected "$mac"; then
+        echo "$name is not connected"
+        return 0
+    fi
+    
+    echo "Disconnecting from $name..."
+    if bluetoothctl disconnect "$mac" >/dev/null 2>&1; then
+        echo "✅ Disconnected from $name"
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send "Bluetooth" "Disconnected from $name" -i bluetooth
+        fi
+    else
+        echo "❌ Failed to disconnect from $name"
+        return 1
+    fi
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+🎧 Quick Bluetooth Device Switcher
+
+USAGE:
+    bluetooth-quick <command> [device]
+
+COMMANDS:
+    status                  Show device status
+    connect <device>        Connect to device
+    disconnect <device>     Disconnect from device
+    toggle <device>         Toggle device connection
+
+DEVICES:
+    headphones             WH-1000XM6 headphones
+    earbuds               WF-1000XM5 earbuds
+    keyboard              AnnePro2 P1 keyboard
+
+EXAMPLES:
+    bluetooth-quick status
+    bluetooth-quick connect headphones
+    bluetooth-quick toggle earbuds
+
+EOF
+}
+
+# Show device status
+show_status() {
+    echo "🎧 Bluetooth Device Status:"
+    echo ""
+    
+    if is_connected "$HEADPHONES"; then
+        echo "  🎧 Headphones (WH-1000XM6): ✅ Connected"
+    else
+        echo "  🎧 Headphones (WH-1000XM6): ❌ Disconnected"
+    fi
+    
+    if is_connected "$EARBUDS"; then
+        echo "  🎵 Earbuds (WF-1000XM5): ✅ Connected"
+    else
+        echo "  🎵 Earbuds (WF-1000XM5): ❌ Disconnected"
+    fi
+    
+    if is_connected "$KEYBOARD"; then
+        echo "  ⌨️  Keyboard (AnnePro2): ✅ Connected"
+    else
+        echo "  ⌨️  Keyboard (AnnePro2): ❌ Disconnected"
+    fi
+}
+
+# Main function
+main() {
+    case "${1:-status}" in
+        "status")
+            show_status
+            ;;
+        "connect")
+            case "${2:-}" in
+                "headphones"|"headphone")
+                    connect_device "$HEADPHONES" "WH-1000XM6"
+                    ;;
+                "earbuds"|"earbud")
+                    connect_device "$EARBUDS" "WF-1000XM5"
+                    ;;
+                "keyboard"|"kbd")
+                    connect_device "$KEYBOARD" "AnnePro2"
+                    ;;
+                *)
+                    echo "Unknown device: ${2:-}"
+                    show_usage
+                    exit 1
+                    ;;
+            esac
+            ;;
+        "disconnect")
+            case "${2:-}" in
+                "headphones"|"headphone")
+                    disconnect_device "$HEADPHONES" "WH-1000XM6"
+                    ;;
+                "earbuds"|"earbud")
+                    disconnect_device "$EARBUDS" "WF-1000XM5"
+                    ;;
+                "keyboard"|"kbd")
+                    disconnect_device "$KEYBOARD" "AnnePro2"
+                    ;;
+                *)
+                    echo "Unknown device: ${2:-}"
+                    show_usage
+                    exit 1
+                    ;;
+            esac
+            ;;
+        "toggle")
+            case "${2:-}" in
+                "headphones"|"headphone")
+                    if is_connected "$HEADPHONES"; then
+                        disconnect_device "$HEADPHONES" "WH-1000XM6"
+                    else
+                        connect_device "$HEADPHONES" "WH-1000XM6"
+                    fi
+                    ;;
+                "earbuds"|"earbud")
+                    if is_connected "$EARBUDS"; then
+                        disconnect_device "$EARBUDS" "WF-1000XM5"
+                    else
+                        connect_device "$EARBUDS" "WF-1000XM5"
+                    fi
+                    ;;
+                "keyboard"|"kbd")
+                    if is_connected "$KEYBOARD"; then
+                        disconnect_device "$KEYBOARD" "AnnePro2"
+                    else
+                        connect_device "$KEYBOARD" "AnnePro2"
+                    fi
+                    ;;
+                *)
+                    echo "Unknown device: ${2:-}"
+                    show_usage
+                    exit 1
+                    ;;
+            esac
+            ;;
+        "help"|*)
+            show_usage
+            ;;
+    esac
+}
+
+main "$@"

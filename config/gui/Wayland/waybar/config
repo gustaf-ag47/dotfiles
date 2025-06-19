@@ -1,6 +1,6 @@
 {
     "layer": "top",
-    "modules-left": ["battery"],
+    "modules-left": ["battery", "bluetooth"],
     "modules-center": [],
     "modules-right": ["clock"],
     "battery": {
@@ -9,6 +9,17 @@
         "ac": "AC",
         "adapter": "BAT0",
         "percentage-interval": 1
+    },
+    "bluetooth": {
+        "format": "󰂯 {status}",
+        "format-disabled": "󰂲",
+        "format-off": "󰂲",
+        "interval": 30,
+        "on-click": "bluetooth",
+        "tooltip-format": "{controller_alias}\t{controller_address}\n\n{num_connections} connected",
+        "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{num_connections} connected\n\n{device_enumerate}",
+        "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
+        "tooltip-format-enumerate-connected-battery": "{device_alias}\t{device_address}\t{device_battery_percentage}%"
     },
     "clock": {
         "format": "{:%Y-%m-%d %H:%M:%S}"

@@ -11,6 +11,25 @@
   color: #c0caf5;
 }
 
+#bluetooth {
+  background: #1a1b26;
+  padding: 5px;
+  border-radius: 5px;
+  color: #7dcfff; /* Cyan for bluetooth */
+}
+
+#bluetooth.on {
+  color: #7dcfff; /* Cyan when on */
+}
+
+#bluetooth.off {
+  color: #565f89; /* Dimmed when off */
+}
+
+#bluetooth.connected {
+  color: #9ece6a; /* Green when connected */
+}
+
 #clock {
   background: #1a1b26;
   padding: 5px;
