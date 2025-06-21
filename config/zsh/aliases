@@ -8,7 +8,7 @@ alias glog='git glog'
 alias visudo="sudo EDITOR=nvim visudo"
 alias gcheat="curl cheat.sh/git"
 
-alias bigf= 'find / -xdev -type f -size +500M'
+alias bigf='find / -xdev -type f -size +500M'
 
 alias d='dirs -v'
 for index ({1..9}) alias "$index"="cd +${index} > /dev/null"; unset index 
@@ -25,3 +25,37 @@ alias rm='rm -iv'
 alias la='ls -alh'
 
 alias grep="grep -P -i --color=auto"
+
+# Modern CLI tool aliases
+if command -v bat &> /dev/null; then
+    alias cat='bat --paging=never'
+    alias bathelp='bat --help'
+fi
+
+if command -v eza &> /dev/null; then
+    alias ls='eza --icons'
+    alias ll='eza -la --icons --git'
+    alias la='eza -a --icons'
+    alias lls='eza -la --icons --git --sort=modified'
+    alias tree='eza --tree --icons'
+fi
+
+if command -v fd &> /dev/null; then
+    alias find='fd'
+fi
+
+if command -v dust &> /dev/null; then
+    alias du='dust'
+fi
+
+if command -v duf &> /dev/null; then
+    alias df='duf'
+fi
+
+if command -v procs &> /dev/null; then
+    alias ps='procs'
+fi
+
+if command -v rg &> /dev/null; then
+    alias grep='rg'
+fi
