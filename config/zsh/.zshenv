@@ -29,11 +29,17 @@ export EDITOR="nvim"
 export VISUAL="$EDITOR" # Reuse the EDITOR value
 export MANPAGER='nvim +Man!'
 
-# Browser setting, with a fallback if Firefox is not installed
-if command -v firefox >/dev/null; then
-    export BROWSER=$(command -v firefox)
-else
-    echo "Firefox is not installed. Please set the BROWSER variable manually."
+# Browser setting - use our custom browser launcher for Wayland compatibility
+export BROWSER="$DOTFILES/bin/browser-launcher"
+
+# Wayland environment variables for better application support
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export MOZ_ENABLE_WAYLAND=1
+    export MOZ_WEBRENDER=1
+    export GDK_BACKEND=wayland,x11
+    export QT_QPA_PLATFORM=wayland;xcb
+    export SDL_VIDEODRIVER=wayland
+    export CLUTTER_BACKEND=wayland
 fi
 
 # Path settings
