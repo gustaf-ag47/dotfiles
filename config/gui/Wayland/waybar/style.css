@@ -1,21 +1,20 @@
 * {
-  font-family: "monospace";
-  font-size: 12px;
+  font-family: "SF Pro Display", "Helvetica Neue", "Arial", sans-serif;
+  font-size: 13px;
   color: #c0caf5;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
 }
 
 #battery {
-  background: #1a1b26;
-  padding: 5px;
-  border-radius: 5px;
   color: #c0caf5;
+  padding: 0 8px;
 }
 
 #bluetooth {
-  background: #1a1b26;
-  padding: 5px;
-  border-radius: 5px;
-  color: #7dcfff; /* Cyan for bluetooth */
+  color: #7dcfff;
+  padding: 0 8px;
 }
 
 #bluetooth.on {
@@ -31,10 +30,9 @@
 }
 
 #clock {
-  background: #1a1b26;
-  padding: 5px;
-  border-radius: 5px;
   color: #c0caf5;
+  padding: 0 8px;
+  font-weight: bold;
 }
 
 /* Additional styling for modules */
@@ -58,11 +56,49 @@
   color: #f7768e; /* Red */
 }
 
-/* General background for bar */
-#bar {
+window#waybar {
+  background: transparent;
+  border-bottom: 3px solid transparent;
+}
+
+.modules-left, .modules-center, .modules-right {
   background: #1a1b26;
-  border-bottom: 1px solid #414868;
-  padding: 5px 10px;
+  margin: 5px;
+  border-radius: 10px;
+  padding: 0 10px;
+}
+
+#workspaces {
+  background: transparent;
+  margin: 0;
+  padding: 0;
+}
+
+#workspaces button {
+  background: transparent;
+  color: #565f89;
+  border: none;
+  border-radius: 8px;
+  margin: 4px 2px;
+  padding: 4px 12px;
+  min-width: 25px;
+  transition: all 0.3s ease;
+}
+
+#workspaces button.active {
+  background: #7aa2f7;
+  color: #1a1b26;
+}
+
+#workspaces button:hover {
+  background: #32344a;
+  color: #c0caf5;
+}
+
+#window {
+  color: #c0caf5;
+  font-style: italic;
+  margin-left: 10px;
 }
 
 /* Separator styling */
@@ -80,8 +116,28 @@
   border-radius: 5px;
 }
 
-/* Hover effects */
-#battery:hover,
-#clock:hover {
-  background: #32344a;
+#network {
+  color: #7aa2f7;
+  padding: 0 8px;
+}
+
+#pulseaudio {
+  color: #bb9af7;
+  padding: 0 8px;
+}
+
+#tray {
+  padding: 0 8px;
+}
+
+#custom-power {
+  color: #f7768e;
+  padding: 0 8px;
+  font-size: 16px;
+}
+
+#custom-power:hover {
+  background: #f7768e;
+  color: #1a1b26;
+  border-radius: 5px;
 }

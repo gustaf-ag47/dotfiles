@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# Bluetooth dropdown menu for waybar
+# Shows connected devices and allows quick switching
+
+ROFI_THEME="~/.config/rofi/themes/tokyo-night.rasi"
+
+get_bluetooth_status() {
+    if bluetoothctl show | grep -q "Powered: yes"; then
+        echo "on"
+    else
+        echo "off"
+    fi
+}
+
+get_connected_devices() {
+    bluetoothctl devices Connected | while read -r line; do
+        mac=$(echo "$line" | awk '{print $2}')
+        name=$(echo "$line" | cut -d' ' -f3-)
+        battery=$(bluetoothctl info "$mac" | grep "Battery Percentage" | awk '{print $4}' | tr -d '()')
+        
+        if [ -n "$battery" ]; then
+            echo "󰂱 $name ($battery%)"
+        else
+            echo "󰂱 $name"
+        fi
+    done
+}
+
+get_paired_devices() {
+    bluetoothctl devices Paired | while read -r line; do
+        mac=$(echo "$line" | awk '{print $2}')
+        name=$(echo "$line" | cut -d' ' -f3-)
+        
+        if bluetoothctl info "$mac" | grep -q "Connected: yes"; then
+            continue # Skip connected devices (already shown above)
+        fi
+        
+        echo "󰂯 $name"
+    done
+}
+
+show_menu() {
+    local options=""
+    local bt_status=$(get_bluetooth_status)
+    
+    if [ "$bt_status" = "off" ]; then
+        options="󰂲 Turn On Bluetooth"
+    else
+        options="󰂲 Turn Off Bluetooth\n"
+        
+        # Add connected devices
+        local connected=$(get_connected_devices)
+        if [ -n "$connected" ]; then
+            options="${options}── Connected ──\n$connected\n"
+        fi
+        
+        # Add paired but disconnected devices
+        local paired=$(get_paired_devices)
+        if [ -n "$paired" ]; then
+            options="${options}── Available ──\n$paired\n"
+        fi
+        
+        options="${options}󰐊 Scan for Devices\n󰒓 Open Settings"
+    fi
+    
+    echo -e "$options" | rofi -dmenu -i -p "Bluetooth" \
+        -theme-str 'window {width: 350px;}' \
+        -theme-str 'listview {lines: 8;}' \
+        -no-custom
+}
+
+handle_selection() {
+    local selection="$1"
+    
+    case "$selection" in
+        "󰂲 Turn On Bluetooth")
+            bluetoothctl power on
+            notify-send "Bluetooth" "Turned on" -i bluetooth
+            ;;
+        "󰂲 Turn Off Bluetooth")
+            bluetoothctl power off
+            notify-send "Bluetooth" "Turned off" -i bluetooth
+            ;;
+        "󰐊 Scan for Devices")
+            /home/gustaf/sync/src/dotfiles/bin/bluetooth
+            ;;
+        "󰒓 Open Settings")
+            blueman-manager &
+            ;;
+        "󰂱 "*)
+            # Connected device - disconnect
+            device_name=$(echo "$selection" | sed 's/󰂱 //' | sed 's/ (.*)$//')
+            mac=$(bluetoothctl devices | grep "$device_name" | awk '{print $2}')
+            if [ -n "$mac" ]; then
+                bluetoothctl disconnect "$mac"
+                notify-send "Bluetooth" "Disconnected from $device_name" -i bluetooth
+            fi
+            ;;
+        "󰂯 "*)
+            # Available device - connect
+            device_name=$(echo "$selection" | sed 's/󰂯 //')
+            mac=$(bluetoothctl devices | grep "$device_name" | awk '{print $2}')
+            if [ -n "$mac" ]; then
+                bluetoothctl connect "$mac"
+                notify-send "Bluetooth" "Connecting to $device_name..." -i bluetooth
+            fi
+            ;;
+    esac
+}
+
+# Main execution
+if command -v rofi >/dev/null 2>&1; then
+    selection=$(show_menu)
+    if [ -n "$selection" ]; then
+        handle_selection "$selection"
+    fi
+else
+    # Fallback to fzf if rofi not available
+    /home/gustaf/sync/src/dotfiles/bin/bluetooth
+fi
