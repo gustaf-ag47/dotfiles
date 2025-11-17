@@ -16,10 +16,19 @@ function M.setup()
   end
   vim.opt.rtp:prepend(lazypath)
 
-  -- Configure lazy.nvim
-  require('lazy').setup({
-    { import = 'plugins' },
-  }, {
+  -- Load modular system and collect plugin specifications
+  local modules = require('core.modules')
+  local module_plugins = modules.setup()
+  
+  -- Configure lazy.nvim with both modular and traditional plugins
+  local plugin_specs = {
+    { import = 'plugins' }, -- Traditional plugin directory
+  }
+  
+  -- Add modular plugin specifications
+  vim.list_extend(plugin_specs, module_plugins)
+  
+  require('lazy').setup(plugin_specs, {
     ui = {
       icons = vim.g.have_nerd_font and {} or {
         cmd = '⌘',

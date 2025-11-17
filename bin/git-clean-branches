@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Clean up merged and stale branches
+# Safe cleanup with user confirmation
+
+set -e
+
+echo "🧹 Git Branch Cleanup Tool"
+echo "=========================="
+
+# Ensure we're on master
+current_branch=$(git branch --show-current)
+if [ "$current_branch" != "master" ]; then
+    echo "⚠️  Not on master branch. Switching to master..."
+    git checkout master
+fi
+
+# Update master
+echo "🔄 Updating master..."
+git pull origin master
+
+# Find merged branches (excluding master and current)
+merged_branches=$(git branch --merged master | grep -v "master" | grep -v "^\*" | xargs -n1 2>/dev/null || true)
+
+if [ -z "$merged_branches" ]; then
+    echo "✅ No merged branches to clean up"
+else
+    echo "📋 Merged branches found:"
+    echo "$merged_branches" | sed 's/^/  - /'
+    echo ""
+    read -p "Delete these merged branches? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "$merged_branches" | xargs -n1 git branch -d
+        echo "✅ Merged branches deleted"
+    else
+        echo "⏭️  Skipped merged branch cleanup"
+    fi
+fi
+
+# Find stale remote tracking branches
+echo ""
+echo "🔍 Checking for stale remote branches..."
+git remote prune origin
+
+# Find local branches with no remote
+orphaned_branches=$(git branch -vv | grep ': gone]' | awk '{print $1}' | grep -v "master" || true)
+
+if [ -n "$orphaned_branches" ]; then
+    echo "🗑️  Orphaned branches (remote deleted):"
+    echo "$orphaned_branches" | sed 's/^/  - /'
+    echo ""
+    read -p "Delete these orphaned branches? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "$orphaned_branches" | xargs -n1 git branch -D
+        echo "✅ Orphaned branches deleted"
+    else
+        echo "⏭️  Skipped orphaned branch cleanup"
+    fi
+fi
+
+# Show remaining branches
+echo ""
+echo "📊 Remaining branches:"
+git branch -v
+
+echo ""
+echo "✨ Branch cleanup complete!"

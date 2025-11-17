@@ -1,0 +1,134 @@
+#!/bin/bash
+
+# Pre-commit hook for dotfiles repository
+# Performs linting and validation before commits
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Check for merge conflict markers
+if git diff --cached --check; then
+    echo "✅ No merge conflict markers found"
+else
+    echo "❌ Merge conflict markers detected"
+    exit 1
+fi
+
+# Check for large files (>1MB)
+large_files=$(git diff --cached --name-only | xargs -I {} sh -c 'if [ -f "{}" ] && [ $(stat -c%s "{}") -gt 1048576 ]; then echo "{}"; fi' | head -5)
+if [ -n "$large_files" ]; then
+    echo "⚠️  Large files detected (>1MB):"
+    echo "$large_files"
+    echo "Consider using Git LFS for large files"
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+# Check for secrets/sensitive data
+echo "🔐 Checking for secrets..."
+
+# Check for sensitive filenames
+sensitive_files=$(git diff --cached --name-only | grep -iE '\.(env|pem|key|cert|crt|p12|pfx|asc|gpg)$|id_rsa|id_dsa|id_ecdsa|credentials|secret|password|apikey' || true)
+if [ -n "$sensitive_files" ]; then
+    echo "❌ Sensitive files detected:"
+    echo "$sensitive_files"
+    echo "These file types should not be committed. Add them to .gitignore"
+    exit 1
+fi
+
+# Enhanced secret patterns
+declare -a secret_patterns=(
+    # Generic secrets
+    "password\s*[:=]\s*['\"][^'\"]{6,}['\"]"
+    "secret\s*[:=]\s*['\"][^'\"]{8,}['\"]"
+    "api[_-]?key\s*[:=]\s*['\"][^'\"]{8,}['\"]"
+    "token\s*[:=]\s*['\"][^'\"]{8,}['\"]"
+    "private[_-]?key\s*[:=]"
+
+    # AWS
+    "AKIA[0-9A-Z]{16}"                          # AWS Access Key ID
+    "aws[_-]?secret[_-]?access[_-]?key"
+
+    # GitHub
+    "gh[pousr]_[0-9a-zA-Z]{36}"                 # GitHub token
+    "github[_-]?token"
+
+    # Stripe
+    "sk_live_[0-9a-zA-Z]{24}"
+    "rk_live_[0-9a-zA-Z]{24}"
+
+    # Google/GCP
+    "AIza[0-9A-Za-z\\-_]{35}"                   # Google API Key
+
+    # Slack
+    "xox[baprs]-[0-9a-zA-Z-]+"                  # Slack token
+
+    # Private keys
+    "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
+)
+
+# Check each pattern
+for pattern in "${secret_patterns[@]}"; do
+    if git diff --cached | grep -iE "$pattern" >/dev/null 2>&1; then
+        echo "❌ Potential secret detected matching pattern: $pattern"
+        echo "Matched content:"
+        git diff --cached | grep -iE "$pattern" | head -3
+        echo ""
+        echo "Please remove sensitive data before committing"
+        echo "Use environment variables or secret management tools instead"
+        exit 1
+    fi
+done
+
+# Check for high-entropy strings (possible secrets)
+# This catches base64-encoded secrets and random strings
+suspicious_strings=$(git diff --cached | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
+if [ -n "$suspicious_strings" ]; then
+    echo "⚠️  High-entropy strings detected (possible secrets):"
+    echo "$suspicious_strings" | head -3
+    echo ""
+    read -p "These look like possible secrets. Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+echo "✅ No secrets detected"
+
+# Validate shell scripts
+shell_files=$(git diff --cached --name-only | grep -E '\.(sh|bash)$' || true)
+if [ -n "$shell_files" ]; then
+    echo "📝 Checking shell scripts..."
+    for file in $shell_files; do
+        if [ -f "$file" ]; then
+            if ! bash -n "$file"; then
+                echo "❌ Shell script syntax error in $file"
+                exit 1
+            fi
+        fi
+    done
+    echo "✅ Shell scripts syntax valid"
+fi
+
+# Check Lua files (for Neovim config)
+lua_files=$(git diff --cached --name-only | grep '\.lua$' || true)
+if [ -n "$lua_files" ] && command -v lua >/dev/null 2>&1; then
+    echo "📝 Checking Lua files..."
+    for file in $lua_files; do
+        if [ -f "$file" ]; then
+            if ! lua -e "dofile('$file')"; then
+                echo "❌ Lua syntax error in $file"
+                exit 1
+            fi
+        fi
+    done
+    echo "✅ Lua files syntax valid"
+fi
+
+echo "✅ Pre-commit checks passed"
+exit 0

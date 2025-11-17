@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# Git commit message validation hook
+# Enforces conventional commit format
+
+commit_regex='^(feat|fix|docs|style|refactor|test|chore|perf|build|ci)(\([a-z0-9-]+\))?: .{1,50}$'
+merge_regex='^Merge '
+
+commit_msg_file=$1
+commit_msg=$(cat "$commit_msg_file")
+
+# Skip validation for merge commits
+if [[ $commit_msg =~ $merge_regex ]]; then
+    exit 0
+fi
+
+# Skip validation for commits with Co-authored-by (from Claude Code)
+if echo "$commit_msg" | grep -q "Co-Authored-By: Claude"; then
+    exit 0
+fi
+
+# Validate first line (subject)
+first_line=$(echo "$commit_msg" | head -n1)
+
+if ! [[ $first_line =~ $commit_regex ]]; then
+    echo "❌ Invalid commit message format!"
+    echo ""
+    echo "Format: <type>(<scope>): <subject>"
+    echo ""
+    echo "Types: feat, fix, docs, style, refactor, test, chore, perf, build, ci"
+    echo "Scope: optional, lowercase, kebab-case"
+    echo "Subject: imperative, present tense, lowercase, no period, max 50 chars"
+    echo ""
+    echo "Examples:"
+    echo "  feat(auth): add OAuth2 integration"
+    echo "  fix(ui): resolve button alignment on mobile"
+    echo "  docs: update installation instructions"
+    echo ""
+    echo "Your commit: $first_line"
+    exit 1
+fi
+
+# Check subject length
+subject_length=${#first_line}
+if [ $subject_length -gt 50 ]; then
+    echo "❌ Commit subject too long: $subject_length characters (max 50)"
+    echo "Subject: $first_line"
+    exit 1
+fi
+
+# Check for capitalized subject
+if [[ $first_line =~ ^[a-z]+(\([a-z0-9-]+\))?: [A-Z] ]]; then
+    echo "❌ Commit subject should not start with capital letter"
+    echo "Subject: $first_line"
+    exit 1
+fi
+
+# Check for period at end of subject
+if [[ $first_line =~ \.$ ]]; then
+    echo "❌ Commit subject should not end with period"
+    echo "Subject: $first_line"
+    exit 1
+fi
+
+echo "✅ Commit message format is valid"
+exit 0

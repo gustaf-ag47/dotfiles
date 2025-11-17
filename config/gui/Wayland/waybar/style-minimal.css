@@ -1,0 +1,53 @@
+/* Minimal Tokyo Night Waybar Theme */
+
+* {
+  border: none;
+  border-radius: 0;
+  font-family: "SF Pro Display", "JetBrainsMono Nerd Font", sans-serif;
+  font-size: 14px;
+  min-height: 0;
+  font-weight: 500;
+}
+
+window#waybar {
+  background: rgba(26, 27, 38, 0.9);
+  color: #c0caf5;
+  padding: 4px 8px;
+}
+
+#workspaces button {
+  background: rgba(86, 95, 137, 0.3);
+  color: #565f89;
+  border: none;
+  border-radius: 8px;
+  margin: 2px;
+  padding: 4px 8px;
+  min-width: 30px;
+}
+
+#workspaces button.active {
+  background: #7aa2f7;
+  color: #1a1b26;
+}
+
+#clock {
+  color: #c0caf5;
+  padding: 8px 12px;
+  font-weight: 600;
+}
+
+#network,
+#bluetooth,
+#pulseaudio,
+#battery,
+#language {
+  color: #c0caf5;
+  padding: 4px 8px;
+  margin: 0 2px;
+}
+
+#custom-power {
+  color: #f7768e;
+  padding: 4px 8px;
+  margin: 0 2px;
+}

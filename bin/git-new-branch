@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# Create a new feature branch with standardized naming
+# Usage: git new-branch <type> <description>
+# Example: git new-branch feature add-dark-mode
+
+set -e
+
+if [ $# -lt 2 ]; then
+    echo "Usage: git new-branch <type> <description>"
+    echo ""
+    echo "Types:"
+    echo "  feature    - New functionality"
+    echo "  fix        - Bug fixes"
+    echo "  hotfix     - Critical production fixes"
+    echo "  refactor   - Code restructuring"
+    echo "  experiment - Experimental changes"
+    echo ""
+    echo "Examples:"
+    echo "  git new-branch feature add-dark-mode"
+    echo "  git new-branch fix resolve-clipboard-issue"
+    echo "  git new-branch hotfix critical-security-patch"
+    exit 1
+fi
+
+TYPE=$1
+DESCRIPTION=$2
+
+# Validate branch type
+case $TYPE in
+    feature|fix|hotfix|refactor|experiment)
+        ;;
+    *)
+        echo "❌ Invalid branch type: $TYPE"
+        echo "Valid types: feature, fix, hotfix, refactor, experiment"
+        exit 1
+        ;;
+esac
+
+# Sanitize description (lowercase, replace spaces/special chars with hyphens)
+CLEAN_DESC=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+
+# Generate branch name with timestamp for uniqueness
+TIMESTAMP=$(date +%Y%m%d)
+BRANCH_NAME="${TYPE}/${CLEAN_DESC}-${TIMESTAMP}"
+
+# Ensure we're on master and up to date
+echo "🔄 Ensuring master is up to date..."
+git checkout master
+git pull origin master
+
+# Create and checkout new branch
+echo "🌿 Creating branch: $BRANCH_NAME"
+git checkout -b "$BRANCH_NAME"
+
+echo "✅ Successfully created and switched to branch: $BRANCH_NAME"
+echo ""
+echo "📝 Branch naming convention:"
+echo "   Type: $TYPE"
+echo "   Description: $CLEAN_DESC"
+echo "   Date: $TIMESTAMP"
+echo ""
+echo "🚀 Ready to start working! Remember to:"
+echo "   - Make small, focused commits"
+echo "   - Follow conventional commit format"
+echo "   - Rebase on master before merging"

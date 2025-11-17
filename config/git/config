@@ -2,10 +2,43 @@
 	email =
 	name =
 [alias]
-  	glog = log --all --pretty='format:%d %Cgreen%h%Creset %an - %s' --graph
+	# Existing alias
+	glog = log --all --pretty='format:%d %Cgreen%h%Creset %an - %s' --graph
+	
+	# Trunk-based development workflow aliases
+	sync = !git checkout master && git pull origin master
+	nb = new-branch
+	clean = clean-branches
+	
+	# Enhanced commit and branch management
+	co = checkout
+	br = branch -v
+	st = status -s
+	cm = commit -m
+	ca = commit --amend
+	
+	# Safe force push for amended commits
+	pushf = push --force-with-lease
+	
+	# Interactive rebase on master
+	rim = rebase -i master
+	
+	# Show commits not in master
+	ahead = log master..HEAD --oneline
+	
+	# Quick commit with conventional format
+	feat = "!f() { git commit -m \"feat: $1\"; }; f"
+	fix = "!f() { git commit -m \"fix: $1\"; }; f"
+	docs = "!f() { git commit -m \"docs: $1\"; }; f"
+	style = "!f() { git commit -m \"style: $1\"; }; f"
+	refactor = "!f() { git commit -m \"refactor: $1\"; }; f"
+	test = "!f() { git commit -m \"test: $1\"; }; f"
+	chore = "!f() { git commit -m \"chore: $1\"; }; f"
 [core]
 	pager = diff-so-fancy | less --tabs=4 -RFX
 	excludesfile = gitignore_global
+[commit]
+	template = ~/.config/git/commit-template
 [interactive]
 	diffFilter = diff-so-fancy --patch
 [color]
@@ -29,3 +62,13 @@
 	format = ssh
 [push]
 	autoSetupRemote = true
+# [safe]
+#	# Add safe directories if needed for repositories owned by different users
+#	# Example: directory = /path/to/trusted/repo
+#	# To add: git config --global --add safe.directory /path/to/repo
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential

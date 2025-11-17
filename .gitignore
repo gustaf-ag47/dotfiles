@@ -1,2 +1,9 @@
 config/zsh/.zcompdump
 config/zsh/.zhistory
+.mcp.json
+
+# Tmux plugins (installed via tpm during make install)
+config/tmux/plugins/
+
+# Claude Code local settings
+.claude/settings.local.json

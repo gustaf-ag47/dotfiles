@@ -12,6 +12,8 @@ return {
     'nvim-tree/nvim-web-devicons',
   },
   opts = {
-    storage = { home = '/home/$USER/sync/src/problems/leetcode' },
+    storage = {
+      home = vim.fn.expand('$SYNC/src/problems/leetcode')
+    },
   },
 }

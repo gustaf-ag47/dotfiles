@@ -8,7 +8,15 @@ alias glog='git glog'
 alias visudo="sudo EDITOR=nvim visudo"
 alias gcheat="curl cheat.sh/git"
 
-alias bigf= 'find / -xdev -type f -size +500M'
+# Tmux session management aliases
+alias ts='tmux-save'
+alias tr='tmux-restore'
+alias tc='tmux-clean-old-sessions'
+alias tl='tmux list-sessions'
+alias ta='tmux attach-session'
+alias tn='tmux new-session'
+
+alias bigf='find / -xdev -type f -size +500M'
 
 alias d='dirs -v'
 for index ({1..9}) alias "$index"="cd +${index} > /dev/null"; unset index 
@@ -25,3 +33,69 @@ alias rm='rm -iv'
 alias la='ls -alh'
 
 alias grep="grep -P -i --color=auto"
+
+# Modern CLI tool aliases
+if command -v bat &> /dev/null; then
+    alias cat='bat --paging=never'
+    alias bathelp='bat --help'
+fi
+
+if command -v eza &> /dev/null; then
+    alias ls='eza --icons'
+    alias ll='eza -la --icons --git'
+    alias la='eza -a --icons'
+    alias lls='eza -la --icons --git --sort=modified'
+    alias tree='eza --tree --icons'
+fi
+
+if command -v fd &> /dev/null; then
+    alias find='fd'
+fi
+
+if command -v dust &> /dev/null; then
+    alias du='dust'
+fi
+
+if command -v duf &> /dev/null; then
+    alias df='duf'
+fi
+
+if command -v procs &> /dev/null; then
+    alias ps='procs'
+fi
+
+if command -v rg &> /dev/null; then
+    alias grep='rg'
+fi
+
+# Additional modern CLI tools
+if command -v zoxide &> /dev/null; then
+    alias cd='z'
+    alias cdi='zi'  # Interactive cd
+fi
+
+if command -v gping &> /dev/null; then
+    alias ping='gping'
+fi
+
+if command -v bottom &> /dev/null; then
+    alias htop='btm'
+    alias top='btm'
+fi
+
+if command -v tokei &> /dev/null; then
+    alias cloc='tokei'
+fi
+
+if command -v hyperfine &> /dev/null; then
+    alias bench='hyperfine'
+fi
+
+if command -v tldr &> /dev/null; then
+    alias help='tldr'
+fi
+
+# Git delta (better git diff)
+if command -v delta &> /dev/null; then
+    alias diff='delta'
+fi

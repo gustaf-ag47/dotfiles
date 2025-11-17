@@ -118,3 +118,37 @@ r() {
 	git rebase $target_branch
 	echo "Rebase complete."
 }
+
+# Tmux session management functions
+tmux-save() {
+	if [[ -n $TMUX ]]; then
+		echo "Saving tmux session..."
+		tmux run-shell "$XDG_DATA_HOME/tmux/plugins/tmux-resurrect/scripts/save.sh"
+		echo "Session saved!"
+	else
+		echo "Not in a tmux session"
+	fi
+}
+
+tmux-restore() {
+	if [[ -n $TMUX ]]; then
+		echo "Restoring tmux session..."
+		tmux run-shell "$XDG_DATA_HOME/tmux/plugins/tmux-resurrect/scripts/restore.sh"
+		echo "Session restored!"
+	else
+		echo "Not in a tmux session. Starting new session with restore..."
+		tmux new-session -d
+		tmux run-shell "$XDG_DATA_HOME/tmux/plugins/tmux-resurrect/scripts/restore.sh"
+		tmux attach-session
+	fi
+}
+
+tmux-clean-old-sessions() {
+	echo "Cleaning up old tmux sessions..."
+	resurrect_dir="$XDG_DATA_HOME/tmux/resurrect"
+	if [[ -d "$resurrect_dir" ]]; then
+		# Keep only the last 5 session files
+		ls -t "$resurrect_dir"/tmux_resurrect_*.txt 2>/dev/null | tail -n +6 | xargs rm -f
+		echo "Old session files cleaned up"
+	fi
+}

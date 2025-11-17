@@ -7,6 +7,8 @@ return {
       local lint = require 'lint'
       lint.linters_by_ft = {
         markdown = { 'markdownlint' },
+        -- Explicitly disable linting for .env files
+        dotenv = {},
       }
 
       -- To allow other plugins to add linters to require('lint').linters_by_ft,

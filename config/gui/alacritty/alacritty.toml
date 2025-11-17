@@ -49,6 +49,9 @@ style = "Italic"
 family = "Hack Nerd Font Mono"
 style = "Regular"
 
+[selection]
+save_to_clipboard = true
+
 [[keyboard.bindings]]
 action = "IncreaseFontSize"
 key = "Plus"
@@ -58,5 +61,20 @@ mods = "Control"
 action = "DecreaseFontSize"
 key = "Minus"
 mods = "Control"
+
+[[keyboard.bindings]]
+action = "Paste"
+key = "V"
+mods = "Control|Shift"
+
+[[keyboard.bindings]]
+action = "Copy"
+key = "C"
+mods = "Control|Shift"
+
+[[keyboard.bindings]]
+action = "PasteSelection"
+key = "Insert"
+mods = "Shift"
 
 

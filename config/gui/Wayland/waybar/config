@@ -1,18 +1,19 @@
 {
   "layer": "top",
-  "position": "top",
-  "height": 36,
-  "spacing": 0,
-  "modules-left": ["hyprland/workspaces", "custom/separator", "hyprland/window"],
+  "position": "top", 
+  "height": 50,
+  "spacing": 8,
+  "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["cpu", "memory", "custom/battery", "network", "tray"],
-
+  "modules-right": ["tray", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
+  
   "hyprland/workspaces": {
+    "disable-scroll": true,
+    "all-outputs": true,
     "format": "{icon}",
-    "on-click": "activate",
     "format-icons": {
       "1": "󰎤",
-      "2": "󰎧",
+      "2": "󰎧", 
       "3": "󰎪",
       "4": "󰎭",
       "5": "󰎱",
@@ -21,10 +22,10 @@
       "8": "󰎹",
       "9": "󰎼",
       "10": "󰎡",
-      "urgent": "",
+      "urgent": "󰗖",
       "default": "󰊠"
     },
-    "persistent_workspaces": {
+    "persistent-workspaces": {
       "1": [],
       "2": [],
       "3": [],
@@ -32,68 +33,105 @@
       "5": []
     }
   },
-
-  "custom/separator": {
-    "format": "|",
-    "interval": "once",
-    "tooltip": false
-  },
-
+  
   "hyprland/window": {
-    "format": "󰖯 {title}",
-    "max-length": 50,
+    "format": "󰖯 {}",
+    "max-length": 60,
     "separate-outputs": true
   },
-
+  
+  "tray": {
+    "icon-size": 18,
+    "spacing": 8,
+    "show-passive-items": true
+  },
+  
   "clock": {
-    "format": "󰃭 {:%Y-%m-%d  󰥔 %H:%M}",
+    "format": "󰃭 {:%a %b %d  󰥔 %H:%M}",
     "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
+    "format-alt": "󰸗 {:%Y-%m-%d}",
     "calendar": {
       "mode": "month",
       "mode-mon-col": 3,
       "on-scroll": 1,
       "format": {
-        "months": "<span color='#a9b1d6'><b>{}</b></span>",
-        "days": "<span color='#a9b1d6'><b>{}</b></span>",
+        "months": "<span color='#7aa2f7'><b>{}</b></span>",
+        "days": "<span color='#c0caf5'><b>{}</b></span>",
         "weekdays": "<span color='#e0af68'><b>{}</b></span>",
-        "today": "<span color='#7aa2f7'><b><u>{}</u></b></span>"
+        "today": "<span color='#f7768e'><b><u>{}</u></b></span>"
       }
     }
   },
-
-  "cpu": {
-    "format": "󰍛 CPU {usage}%",
-    "interval": 2,
-    "tooltip": true,
-    "tooltip-format": "CPU Usage: {usage}%\nLoad Average: {load}"
+  
+  "battery": {
+    "states": {
+      "good": 80,
+      "warning": 30,
+      "critical": 15
+    },
+    "format": "{icon} {capacity}%",
+    "format-charging": "󰂄 {capacity}%",
+    "format-plugged": "󰚥 {capacity}%",
+    "format-alt": "{icon} {time}",
+    "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+    "on-click": "gnome-power-statistics"
   },
-
-  "memory": {
-    "format": "󰧑 RAM {used:0.1f}G",
-    "interval": 2,
-    "tooltip-format": "Memory: {used:0.1f}G / {total:0.1f}G ({percentage}%)\nSwap: {swapUsed:0.1f}G / {swapTotal:0.1f}G"
+  
+  "bluetooth": {
+    "format": "󰂯",
+    "format-disabled": "󰂲",
+    "format-off": "󰂲",
+    "format-on": "󰂯",
+    "format-connected": "󰂱 {num_connections}",
+    "format-connected-battery": "󰂱 {device_battery_percentage}%",
+    "interval": 10,
+    "on-click": "bluetooth-waybar",
+    "tooltip-format": "{controller_alias}\t{controller_address}\n\n{num_connections} connected",
+    "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{num_connections} connected\n\n{device_enumerate}",
+    "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
+    "tooltip-format-enumerate-connected-battery": "{device_alias}\t{device_address}\t{device_battery_percentage}%"
   },
-
-  "custom/battery": {
-    "exec": "$HOME/sync/src/dotfiles/bin/waybar-battery",
-    "return-type": "json",
-    "interval": 30,
-    "format": "{}",
-    "on-click": "$HOME/sync/src/dotfiles/bin/battery-monitor"
-  },
-
+  
   "network": {
-    "format-wifi": "󰤨 {essid}",
-    "format-ethernet": "󰈀 ETH",
-    "format-linked": "󱘖 No IP",
-    "format-disconnected": "󰤭 Offline",
-    "tooltip-format-wifi": "Signal: {signalStrength}%\nFrequency: {frequency}MHz\nIP: {ipaddr}",
-    "tooltip-format-ethernet": "Interface: {ifname}\nIP: {ipaddr}",
+    "format-wifi": "󰤨 {signalStrength}%",
+    "format-ethernet": "󰈀",
+    "format-linked": "󱘖",
+    "format-disconnected": "󰤭",
+    "format-alt": "{ifname}: {ipaddr}/{cidr}",
+    "tooltip-format": "{ifname} via {gwaddr}",
+    "tooltip-format-wifi": "󰤨 {essid} ({signalStrength}%)\n󰩟 {frequency}MHz\n󰩠 {ipaddr}",
+    "tooltip-format-ethernet": "󰈀 {ifname}\n󰩠 {ipaddr}",
+    "tooltip-format-disconnected": "󰤭 Disconnected",
     "on-click": "nm-connection-editor"
   },
+  
+  "pulseaudio": {
+    "format": "{icon} {volume}%",
+    "format-bluetooth": "󰂯 {icon} {volume}%",
+    "format-bluetooth-muted": "󰂯 󰝟",
+    "format-muted": "󰝟",
+    "format-source": "󰍬 {volume}%",
+    "format-source-muted": "󰍭",
+    "format-icons": {
+      "headphone": "󰋋",
+      "hands-free": "󱡏",
+      "headset": "󰋎",
+      "phone": "󰏲",
+      "portable": "󰦧",
+      "car": "󰄋",
+      "default": ["󰕿", "󰖀", "󰕾"]
+    },
+    "on-click": "pulsemixer",
+    "on-click-right": "pavucontrol",
+    "scroll-step": 5,
+    "smooth-scrolling-threshold": 1
+  },
 
-  "tray": {
-    "icon-size": 20,
-    "spacing": 10
+  
+  "custom/power": {
+    "format": "⏻",
+    "tooltip": "Power Menu",
+    "on-click": "wlogout",
+    "on-click-right": "systemctl poweroff"
   }
 }

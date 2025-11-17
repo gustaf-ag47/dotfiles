@@ -93,3 +93,18 @@ mkdir -p "$XDG_DATA_HOME/applications"
 cp -r "$DOTFILES/config/applications/"* "$XDG_DATA_HOME/applications/"
 
 link_config "$DOTFILES/config/mimeapps/mimeapps.list" "$XDG_CONFIG_HOME/mimeapps.list"
+
+# Link Wayland environment configuration
+mkdir -p "$XDG_CONFIG_HOME/environment.d"
+link_config "$DOTFILES/config/environment.d/wayland.conf" "$XDG_CONFIG_HOME/environment.d/wayland.conf"
+
+# Link starship configuration
+link_config "$DOTFILES/config/starship.toml" "$XDG_CONFIG_HOME/starship.toml"
+
+# Link bin directory (utility scripts)
+mkdir -p "$HOME/.local/bin"
+for script in "$DOTFILES/bin/"*; do
+    if [ -f "$script" ]; then
+        ln -sf "$script" "$HOME/.local/bin/$(basename "$script")"
+    fi
+done

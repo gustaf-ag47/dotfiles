@@ -1,8 +1,12 @@
 # Personal directories
+# DOTFILES: Root directory for dotfiles repository
+# Used by: Hyprland, Waybar, shell scripts, installation scripts
 export DOTFILES="$HOME/sync/src/dotfiles"
 
-export NOTES="$HOME/sync/Vault"
+# SYNC: Parent directory for synced files
+# Used by: Neovim (leetcode storage), backup scripts
 export SYNC="$HOME/sync"
+export NOTES="$SYNC/Vault"
 export BACKUP_DIR="$SYNC/backup"
 
 export OBSIDIAN_PATH="$HOME/.local/bin/Obsidian-1.5.12.AppImage"
@@ -29,11 +33,17 @@ export EDITOR="nvim"
 export VISUAL="$EDITOR" # Reuse the EDITOR value
 export MANPAGER='nvim +Man!'
 
-# Browser setting, with a fallback if Firefox is not installed
-if command -v firefox >/dev/null; then
-    export BROWSER=$(command -v firefox)
-else
-    echo "Firefox is not installed. Please set the BROWSER variable manually."
+# Browser setting - use our custom browser launcher for Wayland compatibility
+export BROWSER="$DOTFILES/bin/browser-launcher"
+
+# Wayland environment variables for better application support
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export MOZ_ENABLE_WAYLAND=1
+    export MOZ_WEBRENDER=1
+    export GDK_BACKEND=wayland,x11
+    export QT_QPA_PLATFORM=wayland;xcb
+    export SDL_VIDEODRIVER=wayland
+    export CLUTTER_BACKEND=wayland
 fi
 
 # Path settings
@@ -51,7 +61,8 @@ fi
 export PATH="$DOTFILES/bin/:$PATH"
 
 # Cleanup
-export GOPATH="$XDG_DATA_HOME"/go
+export GOPATH="${XDG_DATA_HOME:-$HOME/.local/share}"/go
+export PATH="$GOPATH/bin:$PATH"
 export GOMODCACHE="$XDG_CACHE_HOME"/go/mod
 export NPM_CONFIG_USERCONFIG=$XDG_CONFIG_HOME/npm/npmrc
 export RUSTUP_HOME="$XDG_DATA_HOME"/rustup

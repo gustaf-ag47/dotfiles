@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Setup Git hooks for the current repository
+# Links hooks from dotfiles config to local repo
+
+set -e
+
+DOTFILES_HOOKS="$HOME/.config/git/hooks"
+REPO_HOOKS=".git/hooks"
+
+echo "🔧 Setting up Git hooks..."
+
+# Check if we're in a git repository
+if [ ! -d ".git" ]; then
+    echo "❌ Not in a Git repository"
+    exit 1
+fi
+
+# Check if dotfiles hooks exist
+if [ ! -d "$DOTFILES_HOOKS" ]; then
+    echo "❌ Dotfiles hooks not found at $DOTFILES_HOOKS"
+    echo "Make sure dotfiles are installed with 'make install'"
+    exit 1
+fi
+
+# Create hooks directory if it doesn't exist
+mkdir -p "$REPO_HOOKS"
+
+# Link each hook
+for hook in "$DOTFILES_HOOKS"/*; do
+    if [ -f "$hook" ]; then
+        hook_name=$(basename "$hook")
+        target="$REPO_HOOKS/$hook_name"
+        
+        # Remove existing hook if it exists
+        if [ -f "$target" ] || [ -L "$target" ]; then
+            rm "$target"
+        fi
+        
+        # Create symlink
+        ln -s "$hook" "$target"
+        chmod +x "$target"
+        
+        echo "✅ Linked $hook_name hook"
+    fi
+done
+
+echo ""
+echo "🎉 Git hooks setup complete!"
+echo ""
+echo "Active hooks:"
+ls -la "$REPO_HOOKS" | grep -v "sample" | grep "^l"
+echo ""
+echo "📝 Hooks will now enforce:"
+echo "  - Commit message format validation"
+echo "  - Pre-commit code quality checks"
+echo "  - Syntax validation for scripts"
+echo "  - Secret detection"

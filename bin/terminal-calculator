@@ -37,6 +37,9 @@ ceil = math.ceil
 floor = math.floor
 round = round
 
+# Answer variable for continuation
+ans = 0
+
 def help_calc():
     print('''
 🧮 Calculator Help:
@@ -50,6 +53,8 @@ Examples:
   sin(pi/2)        → 1.0
   2**8             → 256
   log(e)           → 1.0
+  * 2              → Multiply last answer by 2
+  + 5              → Add 5 to last answer
   
 Commands:
   help() or ?      → Show this help
@@ -90,7 +95,13 @@ clear_screen()
 
 while True:
     try:
-        expr = input('📱 calc> ')
+        # Show prompt with current answer if available
+        if ans != 0:
+            prompt = f'📱 calc[ans={ans}]> '
+        else:
+            prompt = '📱 calc> '
+            
+        expr = input(prompt)
         
         if not expr.strip():
             continue
@@ -104,9 +115,14 @@ while True:
             help_calc()
             continue
             
+        # Handle answer continuation (expressions starting with operators)
+        if expr.strip().startswith(('*', '/', '+', '-', '%', '**')):
+            expr = f'ans {expr.strip()}'
+            
         # Evaluate the expression
         try:
             result = eval(expr)
+            ans = result  # Store result for next calculation
             print(f'✅ {result}')
             
             # Copy result to clipboard

@@ -1,0 +1,132 @@
+# Global gitignore for sensitive files and common patterns
+
+# ===================================
+# Secrets & Credentials
+# ===================================
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.sample
+
+# Credentials & Keys
+*secret*
+*credential*
+*password*
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.asc
+*.gpg
+
+# API & Service Keys
+*apikey*
+*api-key*
+*api_key*
+.gcp-key.json
+.aws-credentials
+.aws-secrets
+gcloud-auth.json
+service-account*.json
+
+# Config files that may contain secrets
+.netrc
+.npmrc
+.pypirc
+.cargo/credentials
+.docker/config.json
+
+# ===================================
+# Development Tools
+# ===================================
+# Claude Code local settings
+**/.claude/settings.local.json
+.claude/settings.local.json
+
+# VSCode/Cursor
+.vscode/
+.cursor/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===================================
+# Language-specific
+# ===================================
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
+env/
+.venv
+
+# Go
+vendor/
+
+# Rust
+target/
+Cargo.lock
+
+# ===================================
+# Build artifacts & logs
+# ===================================
+*.log
+*.tmp
+*.temp
+*.cache
+dist/
+build/
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# ===================================
+# Backup files
+# ===================================
+*.bak
+*.backup
+*.old
+*~
+
+# ===================================
+# Database
+# ===================================
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+
+# ===================================
+# Archives
+# ===================================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z

@@ -34,6 +34,16 @@ if [ $(command -v "fzf") ]; then
   source /usr/share/fzf/key-bindings.zsh
 fi
 
+# Initialize zoxide (smart cd replacement)
+if command -v zoxide > /dev/null; then
+  eval "$(zoxide init zsh)"
+fi
+
+# Initialize starship prompt (if available)
+if command -v starship > /dev/null; then
+  eval "$(starship init zsh)"
+fi
+
 _comp_options+=(globdots)
 source $ZDOTDIR/external/completion.zsh
 source $ZDOTDIR/external/bd.zsh
