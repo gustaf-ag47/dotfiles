@@ -97,7 +97,9 @@ if [ -f "$DOTFILES/local/env/.env" ]; then
 fi
 
 # Source personal zsh configurations
+# Use nullglob to avoid errors when no .zsh files exist
 if [ -d "$DOTFILES/local/config/zsh" ]; then
+	setopt local_options nullglob
 	for file in "$DOTFILES/local/config/zsh"/*.zsh; do
 		[ -f "$file" ] && source "$file"
 	done
