@@ -7,3 +7,9 @@ config/tmux/plugins/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Local/private configurations (personal, company-specific, etc.)
+# See local/README.md for usage
+local/*
+!local/README.md
+!local/.gitkeep

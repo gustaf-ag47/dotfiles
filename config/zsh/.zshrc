@@ -90,6 +90,24 @@ for km in viopp visual; do
   done
 done
 
+# Load local/private configurations (gitignored, personal use)
+# Source personal environment variables
+if [ -f "$DOTFILES/local/env/.env" ]; then
+	source "$DOTFILES/local/env/.env"
+fi
+
+# Source personal zsh configurations
+if [ -d "$DOTFILES/local/config/zsh" ]; then
+	for file in "$DOTFILES/local/config/zsh"/*.zsh; do
+		[ -f "$file" ] && source "$file"
+	done
+fi
+
+# Add local bin to PATH
+if [ -d "$DOTFILES/local/bin" ]; then
+	export PATH="$DOTFILES/local/bin:$PATH"
+fi
+
 if [ "$(tty)" = "/dev/tty1" ]; then
     choice=$(echo -e "Wayland\nXorg" | fzf)
     case $choice in

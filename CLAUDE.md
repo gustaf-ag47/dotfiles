@@ -226,6 +226,16 @@ The system uses enhanced versions of standard tools:
 - **Auto-detection**: System detects Wayland/X11 and loads appropriate configs
 - **Modular independence**: Components (shell, editor, WM) function independently
 
+### Local/Private Configurations
+- **Purpose**: Store personal, company-specific, or sensitive configs in `local/` (gitignored)
+- **Structure**: `local/{applications,bin,config,env}/` - automatically loaded during installation
+- **Use cases**:
+  - Company-specific `.desktop` launchers
+  - Personal API keys in `local/env/.env`
+  - Work aliases in `local/config/zsh/*.zsh`
+  - Private scripts in `local/bin/`
+- **See**: `local/README.md` for complete documentation
+
 ### Auto-start Behavior
 - **tty1**: Automatically launches Hyprland (see `config/zsh/.zshrc`)
 - **Other terminals**: Automatically starts tmux with session restoration

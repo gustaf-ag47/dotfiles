@@ -92,6 +92,14 @@ link_config "$DOTFILES/config/gui/Xorg/X11" "$XDG_CONFIG_HOME/X11"
 mkdir -p "$XDG_DATA_HOME/applications"
 cp -r "$DOTFILES/config/applications/"* "$XDG_DATA_HOME/applications/"
 
+# Copy local/personal desktop files (if they exist)
+if [ -d "$DOTFILES/local/applications" ]; then
+	echo "Installing personal desktop files..."
+	for file in "$DOTFILES/local/applications"/*.desktop; do
+		[ -f "$file" ] && cp "$file" "$XDG_DATA_HOME/applications/" && echo "  - $(basename "$file")"
+	done
+fi
+
 link_config "$DOTFILES/config/mimeapps/mimeapps.list" "$XDG_CONFIG_HOME/mimeapps.list"
 
 # Link Wayland environment configuration
