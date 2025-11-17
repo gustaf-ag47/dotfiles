@@ -9,7 +9,6 @@ config/tmux/plugins/
 .claude/settings.local.json
 
 # Local/private configurations (personal, company-specific, etc.)
-# See local/README.md for usage
-local/*
-!local/README.md
-!local/.gitkeep
+# Now stored in $SYNC/dotfiles-local and symlinked
+# See $SYNC/dotfiles-local/README.md for usage
+local

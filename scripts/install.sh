@@ -21,6 +21,22 @@ fi
 mkdir -p "$XDG_CONFIG_HOME"
 mkdir -p "$XDG_DATA_HOME"
 
+# Setup local configuration directory in $SYNC
+# This allows personal configs to be backed up and synced
+if [ ! -d "$SYNC/dotfiles-local" ]; then
+	echo "Creating local configuration directory in $SYNC..."
+	mkdir -p "$SYNC/dotfiles-local"/{applications,bin,config/zsh,config/git,env}
+	echo "✅ Created $SYNC/dotfiles-local/"
+fi
+
+# Create symlink from dotfiles/local to $SYNC/dotfiles-local
+if [ ! -L "$DOTFILES/local" ]; then
+	echo "Creating symlink: $DOTFILES/local → $SYNC/dotfiles-local"
+	rm -rf "$DOTFILES/local"
+	ln -s "$SYNC/dotfiles-local" "$DOTFILES/local"
+	echo "✅ Local configurations will be stored in $SYNC/dotfiles-local"
+fi
+
 link_config() {
 	local src=$1 dst=$2
 	rm -rf "$dst"

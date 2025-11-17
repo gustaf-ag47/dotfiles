@@ -4,10 +4,14 @@
 export DOTFILES="$HOME/sync/src/dotfiles"
 
 # SYNC: Parent directory for synced files
-# Used by: Neovim (leetcode storage), backup scripts
+# Used by: Neovim (leetcode storage), backup scripts, local configs
 export SYNC="$HOME/sync"
 export NOTES="$SYNC/Vault"
 export BACKUP_DIR="$SYNC/backup"
+
+# LOCAL_CONFIG: Personal/private configurations (symlinked in dotfiles)
+# Stored in $SYNC for automatic backup and sync between machines
+export LOCAL_CONFIG="$SYNC/dotfiles-local"
 
 export OBSIDIAN_PATH="$HOME/.local/bin/Obsidian-1.5.12.AppImage"
 

@@ -227,8 +227,10 @@ The system uses enhanced versions of standard tools:
 - **Modular independence**: Components (shell, editor, WM) function independently
 
 ### Local/Private Configurations
-- **Purpose**: Store personal, company-specific, or sensitive configs in `local/` (gitignored)
+- **Location**: `$SYNC/dotfiles-local/` (symlinked as `$DOTFILES/local/`)
+- **Purpose**: Store personal, company-specific, or sensitive configs (gitignored but backed up)
 - **Structure**: `local/{applications,bin,config,env}/` - automatically loaded during installation
+- **Backup**: Automatically backed up via `$SYNC` and synced across machines
 - **Use cases**:
   - Company-specific `.desktop` launchers
   - Personal API keys in `local/env/.env`
