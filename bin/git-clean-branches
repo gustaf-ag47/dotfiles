@@ -3,7 +3,7 @@
 # Clean up merged and stale branches
 # Safe cleanup with user confirmation
 
-set -e
+set -euo pipefail
 
 echo "🧹 Git Branch Cleanup Tool"
 echo "=========================="

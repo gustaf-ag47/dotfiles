@@ -1,1 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+# Clipboard manager using cliphist and wofi
 cliphist list | wofi --dmenu | cliphist decode | wl-copy

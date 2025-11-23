@@ -4,10 +4,15 @@
 [alias]
 	glog = log --all --pretty='format:%d %Cgreen%h%Creset %an - %s' --graph
 [core]
-	pager = diff-so-fancy | less --tabs=4 -RFX
-	excludesfile = gitignore_global
+	pager = delta
+	excludesfile = ~/.config/git/ignore
 [interactive]
-	diffFilter = diff-so-fancy --patch
+	diffFilter = delta --color-only
+[delta]
+	navigate = true
+	light = false
+	line-numbers = true
+	side-by-side = true
 [color]
 	ui = true
 [color "diff-highlight"]
@@ -24,7 +29,7 @@
 	new = green bold
 	whitespace = red reverse
 [init]
-	deafultBranch = main
+	defaultBranch = master
 [gpg]
 	format = ssh
 [push]

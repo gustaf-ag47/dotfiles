@@ -37,8 +37,9 @@ for hook in "$DOTFILES_HOOKS"/*; do
             rm "$target"
         fi
         
-        # Create symlink
-        ln -s "$hook" "$target"
+        # Create symlink with absolute path
+        hook_abs_path="$(cd "$(dirname "$hook")" && pwd)/$(basename "$hook")"
+        ln -s "$hook_abs_path" "$target"
         chmod +x "$target"
         
         echo "✅ Linked $hook_name hook"

@@ -13,7 +13,9 @@ export BACKUP_DIR="$SYNC/backup"
 # Stored in $SYNC for automatic backup and sync between machines
 export LOCAL_CONFIG="$SYNC/dotfiles-local"
 
-export OBSIDIAN_PATH="$HOME/.local/bin/Obsidian-1.5.12.AppImage"
+# Find latest Obsidian AppImage dynamically
+OBSIDIAN_PATH="$(ls -t "$HOME/.local/bin"/Obsidian-*.AppImage 2>/dev/null | head -1)"
+export OBSIDIAN_PATH="${OBSIDIAN_PATH:-}"
 
 # XDG Base Directory Specification
 export XDG_CONFIG_HOME="$HOME/.config"
@@ -25,7 +27,7 @@ export XDG_STATE_HOME="$HOME/.local/state"
 export ZDOTDIR="$XDG_CONFIG_HOME/zsh"
 export HISTFILE="$ZDOTDIR/.zhistory"
 # X11
-export XINITRC="$XDG_CONFIG_HOME/X11/.xinitc"
+export XINITRC="$XDG_CONFIG_HOME/X11/.xinitrc"
 
 # History configuration
 export HISTSIZE=10000

@@ -1,1 +1,21 @@
-alacritty
+#!/bin/bash
+set -euo pipefail
+
+# Terminal emulator launcher with fallbacks
+if command -v alacritty &>/dev/null; then
+    exec alacritty "$@"
+elif command -v kitty &>/dev/null; then
+    exec kitty "$@"
+elif command -v wezterm &>/dev/null; then
+    exec wezterm "$@"
+elif command -v foot &>/dev/null; then
+    exec foot "$@"
+elif command -v terminator &>/dev/null; then
+    exec terminator "$@"
+elif command -v xterm &>/dev/null; then
+    exec xterm "$@"
+else
+    echo "Error: No terminal emulator found" >&2
+    echo "Please install: alacritty, kitty, wezterm, foot, terminator, or xterm" >&2
+    exit 1
+fi

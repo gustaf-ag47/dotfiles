@@ -30,6 +30,18 @@ extract() {
 docker-nuke() {
 	local project=$1
 
+	# Check if docker is available
+	if ! command -v docker &>/dev/null; then
+		echo "Error: Docker is not installed or not in PATH"
+		return 1
+	fi
+
+	# Check if docker daemon is running
+	if ! docker info &>/dev/null; then
+		echo "Error: Docker daemon is not running"
+		return 1
+	fi
+
 	if [ -z "$project" ]; then
 		echo "Please provide a project name."
 		return 1
@@ -52,7 +64,13 @@ docker-nuke() {
 # This keeps work-related code separate from public dotfiles
 
 paste-from-clipboard() {
-	LBUFFER+=$(xclip -o -selection clipboard)
+	if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+		LBUFFER+=$(wl-paste)
+	elif [ -n "${DISPLAY:-}" ]; then
+		LBUFFER+=$(xclip -o -selection clipboard)
+	else
+		echo "No display server detected"
+	fi
 }
 
 vman() {
@@ -64,7 +82,16 @@ vman() {
 }
 
 uuid() {
-	uuidgen | wl-copy
+	local generated_uuid=$(uuidgen)
+	if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+		echo "$generated_uuid" | wl-copy
+	elif [ -n "${DISPLAY:-}" ]; then
+		echo "$generated_uuid" | xclip -selection clipboard
+	else
+		echo "$generated_uuid"
+		return
+	fi
+	echo "UUID copied to clipboard: $generated_uuid"
 }
 
 g() {

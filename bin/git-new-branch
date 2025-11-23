@@ -4,7 +4,7 @@
 # Usage: git new-branch <type> <description>
 # Example: git new-branch feature add-dark-mode
 
-set -e
+set -euo pipefail
 
 if [ $# -lt 2 ]; then
     echo "Usage: git new-branch <type> <description>"

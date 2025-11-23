@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Battery Monitor Script
 # Monitors battery status, sends notifications, and handles low battery situations

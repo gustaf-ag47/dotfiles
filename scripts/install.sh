@@ -80,7 +80,10 @@ link_config "$DOTFILES/config/transmission/settings.json" "$XDG_CONFIG_HOME/tran
 link_config "$DOTFILES/config/newsboat" "$XDG_CONFIG_HOME/newsboat"
 link_config "$DOTFILES/config/pulsemixer" "$XDG_CONFIG_HOME/pulsemixer"
 
-link_config "$SYNC/dotfiles/tmuxp" "$XDG_CONFIG_HOME/tmuxp"
+# Link tmuxp configs from local directory (project/work-specific sessions)
+if [ -d "$LOCAL_CONFIG/config/tmuxp" ]; then
+    link_config "$LOCAL_CONFIG/config/tmuxp" "$XDG_CONFIG_HOME/tmuxp"
+fi
 link_config "$DOTFILES/config/tmux" "$XDG_CONFIG_HOME/tmux"
 
 if [ ! -d "$XDG_DATA_HOME/tmux" ]; then

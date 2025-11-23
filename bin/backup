@@ -2,6 +2,14 @@
 
 set -euo pipefail
 
+# Check required commands
+for cmd in sudo find stat chmod cp mkdir date; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: Required command '$cmd' not found" >&2
+        exit 1
+    fi
+done
+
 : "${BACKUP_DIR:?Environment variable BACKUP_DIR is not set}"
 
 BACKUP_FOLDER="${BACKUP_DIR}/$(date +%Y-%m-%d_%H-%M-%S)"

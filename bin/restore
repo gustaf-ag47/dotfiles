@@ -1,3 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+# Check required commands
+for cmd in cp chmod find; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: Required command '$cmd' not found" >&2
+        exit 1
+    fi
+done
+
 BACKUP_DIR="$HOME/sync/backup" 
 
 restore_dir() {
