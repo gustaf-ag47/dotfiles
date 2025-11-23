@@ -8,14 +8,6 @@ alias glog='git glog'
 alias visudo="sudo EDITOR=nvim visudo"
 alias gcheat="curl cheat.sh/git"
 
-# Tmux session management aliases
-alias ts='tmux-save'
-alias tr='tmux-restore'
-alias tc='tmux-clean-old-sessions'
-alias tl='tmux list-sessions'
-alias ta='tmux attach-session'
-alias tn='tmux new-session'
-
 alias bigf='find / -xdev -type f -size +500M'
 
 alias d='dirs -v'
@@ -66,36 +58,4 @@ fi
 
 if command -v rg &> /dev/null; then
     alias grep='rg'
-fi
-
-# Additional modern CLI tools
-if command -v zoxide &> /dev/null; then
-    alias cd='z'
-    alias cdi='zi'  # Interactive cd
-fi
-
-if command -v gping &> /dev/null; then
-    alias ping='gping'
-fi
-
-if command -v bottom &> /dev/null; then
-    alias htop='btm'
-    alias top='btm'
-fi
-
-if command -v tokei &> /dev/null; then
-    alias cloc='tokei'
-fi
-
-if command -v hyperfine &> /dev/null; then
-    alias bench='hyperfine'
-fi
-
-if command -v tldr &> /dev/null; then
-    alias help='tldr'
-fi
-
-# Git delta (better git diff)
-if command -v delta &> /dev/null; then
-    alias diff='delta'
 fi

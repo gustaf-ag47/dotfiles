@@ -86,7 +86,8 @@ done
 
 # Check for high-entropy strings (possible secrets)
 # This catches base64-encoded secrets and random strings
-suspicious_strings=$(git diff --cached | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
+# Exclude lazy-lock.json (contains git commit SHAs) and only check added lines
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3
@@ -121,8 +122,11 @@ if [ -n "$lua_files" ] && command -v lua >/dev/null 2>&1; then
     echo "📝 Checking Lua files..."
     for file in $lua_files; do
         if [ -f "$file" ]; then
-            if ! lua -e "dofile('$file')"; then
+            # Use luac -p for syntax check without execution
+            # This avoids errors from undefined globals like 'vim' in Neovim configs
+            if ! luac -p "$file" >/dev/null 2>&1; then
                 echo "❌ Lua syntax error in $file"
+                luac -p "$file"
                 exit 1
             fi
         fi

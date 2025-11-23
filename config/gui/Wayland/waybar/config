@@ -1,11 +1,11 @@
 {
   "layer": "top",
   "position": "top", 
-  "height": 50,
+  "height": 42,
   "spacing": 8,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["tray", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
+  "modules-right": ["tray", "language", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
   
   "hyprland/workspaces": {
     "disable-scroll": true,
@@ -127,6 +127,12 @@
     "smooth-scrolling-threshold": 1
   },
 
+  "language": {
+    "format": "󰌌 {}",
+    "format-en": "EN",
+    "format-sv": "SV",
+    "on-click": "hyprctl switchxkblayout at-translated-set-2-keyboard next"
+  },
   
   "custom/power": {
     "format": "⏻",

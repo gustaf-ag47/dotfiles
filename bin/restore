@@ -42,26 +42,6 @@ restore_file "$BACKUP_DIR/zhistory" "$ZDOTDIR/zhistory"
 
 restore_dir "$BACKUP_DIR/gnupg" "$HOME/.gnupg"
 
-restore_dir "$BACKUP_DIR/aws" "$HOME/.aws"
-
-restore_dir "$BACKUP_DIR/kube" "$HOME/.kube"
-
-restore_dir "$BACKUP_DIR/password-store" "$HOME/.password-store"
-
-restore_dir "$BACKUP_DIR/claude" "$HOME/.claude"
-
-restore_dir "$BACKUP_DIR/docker" "$HOME/.docker"
-
-restore_dir "$BACKUP_DIR/cargo" "$HOME/.cargo"
-
-restore_dir "$BACKUP_DIR/terraform.d" "$HOME/.terraform.d"
-
-restore_dir "$BACKUP_DIR/pulumi" "$HOME/.pulumi"
-
-restore_file "$BACKUP_DIR/claude.json" "$HOME/.claude.json"
-
-restore_file "$BACKUP_DIR/env" "$HOME/.env"
-
 echo "Restoration completed."
 
 echo "Some changes may require a system restart or re-login to take effect."

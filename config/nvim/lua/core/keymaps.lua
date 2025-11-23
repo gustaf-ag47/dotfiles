@@ -41,8 +41,8 @@ map('v', 'p', '"_dP', opts 'Paste without yanking')
 -- Diagnostic navigation
 map('n', '[d', vim.diagnostic.goto_prev, opts 'Previous diagnostic')
 map('n', ']d', vim.diagnostic.goto_next, opts 'Next diagnostic')
-map('n', '<leader>d', vim.diagnostic.open_float, opts 'Show diagnostic message')
-map('n', '<leader>ql', vim.diagnostic.setloclist, opts 'Open diagnostic list')
+map('n', '<leader>e', vim.diagnostic.open_float, opts 'Show diagnostic message')
+map('n', '<leader>q', vim.diagnostic.setloclist, opts 'Open diagnostic list')
 
 -- Terminal navigation
 map('t', '<C-h>', '<C-\\><C-N><C-w>h', opts 'Terminal navigate left')
@@ -52,7 +52,7 @@ map('t', '<C-l>', '<C-\\><C-N><C-w>l', opts 'Terminal navigate right')
 map('t', '<Esc><Esc>', '<C-\\><C-n>', opts 'Exit terminal mode')
 
 -- File explorer
-map('n', '<leader>o', ':Oil<CR>', opts 'Open file explorer')
+map('n', '<leader>e', ':Oil<CR>', opts 'Open file explorer')
 
 -- Quickfix navigation
 map('n', '[q', ':cprevious<CR>', opts 'Previous quickfix item')

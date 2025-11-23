@@ -75,6 +75,12 @@ window#waybar {
 #workspaces button.urgent {
   background: linear-gradient(135deg, #f7768e, #ff9e64);
   color: #1a1b26;
+  animation: urgent-blink 1s infinite;
+}
+
+@keyframes urgent-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
 }
 
 /* Window title */
@@ -161,7 +167,12 @@ window#waybar {
 }
 
 #bluetooth.discovering {
-  opacity: 0.7;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* Audio - Dynamic styling */
@@ -215,6 +226,12 @@ window#waybar {
 #battery.critical {
   background: rgba(247, 118, 142, 0.1);
   color: #f7768e;
+  animation: battery-blink 1s infinite;
+}
+
+@keyframes battery-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 /* Power button - Stylish hover effect */
@@ -234,6 +251,15 @@ window#waybar {
   box-shadow: 0 4px 12px rgba(247, 118, 142, 0.4);
 }
 
+/* Language indicator */
+#language {
+  color: #bb9af7;
+  padding: 8px 12px;
+  margin: 0 2px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: rgba(187, 154, 247, 0.1);
+}
 
 /* Tooltips */
 tooltip {
@@ -257,7 +283,8 @@ tooltip label {
 #bluetooth,
 #pulseaudio,
 #battery,
-#custom-power {
+#custom-power,
+#language {
   transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
@@ -267,6 +294,6 @@ tooltip label {
 #bluetooth:hover,
 #pulseaudio:hover,
 #battery:hover,
-#custom-power:hover {
+#language:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }

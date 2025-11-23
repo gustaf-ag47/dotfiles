@@ -41,22 +41,6 @@ backup_item "$HOME/.ssh" "$BACKUP_FOLDER/ssh-keys" "600" "700"
 backup_item "$HOME/.mozilla/firefox" "$BACKUP_FOLDER/firefox-data"
 backup_item "$HOME/.thunderbird" "$BACKUP_FOLDER/thunderbird-data"
 backup_item "$HOME/.gnupg" "$BACKUP_FOLDER/gnupg" "600" "700"
-backup_item "$HOME/.aws" "$BACKUP_FOLDER/aws" "600" "700"
-backup_item "$HOME/.kube" "$BACKUP_FOLDER/kube" "600" "700"
-backup_item "$HOME/.password-store" "$BACKUP_FOLDER/password-store" "600" "700"
-backup_item "$HOME/.claude" "$BACKUP_FOLDER/claude" "600" "700"
-backup_item "$HOME/.docker" "$BACKUP_FOLDER/docker" "600" "700"
-backup_item "$HOME/.cargo" "$BACKUP_FOLDER/cargo"
-backup_item "$HOME/.terraform.d" "$BACKUP_FOLDER/terraform.d"
-backup_item "$HOME/.pulumi" "$BACKUP_FOLDER/pulumi" "600" "700"
-
-if [ -f "$HOME/.claude.json" ]; then
-	cp "$HOME/.claude.json" "$BACKUP_FOLDER/claude.json" && chmod 600 "$BACKUP_FOLDER/claude.json"
-fi
-
-if [ -f "$HOME/.env" ]; then
-	cp "$HOME/.env" "$BACKUP_FOLDER/env" && chmod 600 "$BACKUP_FOLDER/env"
-fi
 
 cp /etc/fstab "$BACKUP_FOLDER/fstab" && chmod 644 "$BACKUP_FOLDER/fstab"
 cp /etc/hostname "$BACKUP_FOLDER/hostname" && chmod 644 "$BACKUP_FOLDER/hostname"
