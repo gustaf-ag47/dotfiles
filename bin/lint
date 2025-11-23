@@ -1,0 +1,197 @@
+#!/bin/bash
+set -euo pipefail
+
+# Linting script - uses Docker for platform-independent linting
+# Can fall back to local tools if Docker is not available
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DOTFILES_DIR="$(dirname "$SCRIPT_DIR")"
+DOCKER_IMAGE="dotfiles-linters:latest"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if Docker is available
+has_docker() {
+    command -v docker &>/dev/null && docker info &>/dev/null 2>&1
+}
+
+# Build Docker image if needed
+ensure_docker_image() {
+    if ! docker image inspect "$DOCKER_IMAGE" &>/dev/null; then
+        echo "Building linters Docker image..."
+        docker build -f "$DOTFILES_DIR/Dockerfile.linters" -t "$DOCKER_IMAGE" "$DOTFILES_DIR"
+    fi
+}
+
+# Run linter in Docker
+run_docker_linter() {
+    local linter=$1
+    shift
+    docker run --rm -v "$DOTFILES_DIR:/workspace:ro" -w /workspace "$DOCKER_IMAGE" "$linter" "$@"
+}
+
+# Run linter locally
+run_local_linter() {
+    local linter=$1
+    shift
+    if ! command -v "$linter" &>/dev/null; then
+        echo -e "${YELLOW}⚠️  $linter not found locally. Install it or use Docker mode.${NC}"
+        return 1
+    fi
+    "$linter" "$@"
+}
+
+# Main linting function
+lint() {
+    local linter=$1
+    shift
+
+    if has_docker; then
+        ensure_docker_image
+        run_docker_linter "$linter" "$@"
+    else
+        run_local_linter "$linter" "$@"
+    fi
+}
+
+# Show usage
+usage() {
+    cat <<EOF
+Usage: lint [OPTIONS] [FILES...]
+
+Platform-independent linting using Docker (with local fallback).
+
+Options:
+    --shellcheck    Run shellcheck on shell scripts
+    --luacheck      Run luacheck on Lua files
+    --shfmt         Run shfmt formatter on shell scripts
+    --yamllint      Run yamllint on YAML files
+    --all           Run all linters on appropriate files
+    --local         Force local tools (skip Docker)
+    --docker        Force Docker mode
+    --build         Rebuild Docker image
+    --help          Show this help message
+
+Examples:
+    lint --shellcheck bin/*           # Check all scripts in bin/
+    lint --luacheck config/nvim/      # Check Neovim config
+    lint --all                        # Run all linters
+    lint --build                      # Rebuild linter image
+
+Environment:
+    LINT_USE_DOCKER=1    Force Docker mode
+    LINT_USE_LOCAL=1     Force local tools
+EOF
+}
+
+# Parse arguments
+FORCE_DOCKER=${LINT_USE_DOCKER:-0}
+FORCE_LOCAL=${LINT_USE_LOCAL:-0}
+ACTION=""
+FILES=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --shellcheck|--luacheck|--shfmt|--yamllint)
+            ACTION="${1#--}"
+            shift
+            ;;
+        --all)
+            ACTION="all"
+            shift
+            ;;
+        --local)
+            FORCE_LOCAL=1
+            shift
+            ;;
+        --docker)
+            FORCE_DOCKER=1
+            shift
+            ;;
+        --build)
+            if has_docker; then
+                echo "Rebuilding Docker image..."
+                docker build -f "$DOTFILES_DIR/Dockerfile.linters" -t "$DOCKER_IMAGE" "$DOTFILES_DIR"
+                echo -e "${GREEN}✅ Docker image rebuilt${NC}"
+            else
+                echo -e "${RED}❌ Docker not available${NC}"
+                exit 1
+            fi
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+        *)
+            FILES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Override Docker check if forced
+if [[ $FORCE_LOCAL -eq 1 ]]; then
+    has_docker() { return 1; }
+elif [[ $FORCE_DOCKER -eq 1 ]]; then
+    if ! command -v docker &>/dev/null; then
+        echo -e "${RED}❌ Docker forced but not available${NC}"
+        exit 1
+    fi
+fi
+
+# Execute linting
+case $ACTION in
+    shellcheck)
+        echo "🔍 Running shellcheck..."
+        if [[ ${#FILES[@]} -eq 0 ]]; then
+            FILES=(bin/* config/zsh/scripts/*.zsh)
+        fi
+        lint shellcheck -x "${FILES[@]}"
+        ;;
+    luacheck)
+        echo "📝 Running luacheck..."
+        if [[ ${#FILES[@]} -eq 0 ]]; then
+            FILES=(config/nvim/lua/)
+        fi
+        lint luacheck "${FILES[@]}"
+        ;;
+    shfmt)
+        echo "✨ Running shfmt..."
+        if [[ ${#FILES[@]} -eq 0 ]]; then
+            FILES=(bin/* config/zsh/scripts/*.zsh)
+        fi
+        lint shfmt -d "${FILES[@]}"
+        ;;
+    yamllint)
+        echo "📄 Running yamllint..."
+        if [[ ${#FILES[@]} -eq 0 ]]; then
+            FILES=(*.yml *.yaml)
+        fi
+        lint yamllint "${FILES[@]}" 2>/dev/null || true
+        ;;
+    all)
+        echo "🚀 Running all linters..."
+        echo ""
+        $0 --shellcheck
+        echo ""
+        $0 --luacheck
+        echo ""
+        $0 --yamllint
+        echo ""
+        echo -e "${GREEN}✅ All linters complete${NC}"
+        ;;
+    "")
+        usage
+        exit 1
+        ;;
+esac

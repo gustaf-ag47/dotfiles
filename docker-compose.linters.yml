@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  linters:
+    build:
+      context: .
+      dockerfile: Dockerfile.linters
+    image: dotfiles-linters:latest
+    container_name: dotfiles-linters
+    volumes:
+      - .:/workspace:ro
+    working_dir: /workspace
+    command: sh -c "echo 'Linter container ready. Use: docker compose -f docker-compose.linters.yml run --rm linters <command>'"
+
+  # Service for running shellcheck
+  shellcheck:
+    image: dotfiles-linters:latest
+    volumes:
+      - .:/workspace:ro
+    working_dir: /workspace
+    entrypoint: shellcheck
+
+  # Service for running luacheck
+  luacheck:
+    image: dotfiles-linters:latest
+    volumes:
+      - .:/workspace:ro
+    working_dir: /workspace
+    entrypoint: luacheck
+
+  # Service for running shfmt
+  shfmt:
+    image: dotfiles-linters:latest
+    volumes:
+      - .:/workspace:ro
+    working_dir: /workspace
+    entrypoint: shfmt
+
+  # Service for running yamllint
+  yamllint:
+    image: dotfiles-linters:latest
+    volumes:
+      - .:/workspace:ro
+    working_dir: /workspace
+    entrypoint: yamllint

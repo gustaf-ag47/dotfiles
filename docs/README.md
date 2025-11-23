@@ -83,6 +83,8 @@ All configurations are organized in the `config/` directory:
 
 - Complete keybinding reference: [KEYBINDINGS.md](KEYBINDINGS.md)
 - Git workflow and standards: [GIT_WORKFLOW.md](GIT_WORKFLOW.md)
+- Security and secret prevention: [SECURITY.md](SECURITY.md)
+- Linting and code quality: [LINTING.md](LINTING.md)
 - Installation troubleshooting in individual config directories
 
 ---

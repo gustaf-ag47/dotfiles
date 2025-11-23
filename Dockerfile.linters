@@ -1,0 +1,36 @@
+FROM alpine:3.19
+
+# Install linters and tools
+RUN apk add --no-cache \
+    # Shell linters
+    shellcheck \
+    shfmt \
+    bash \
+    # Lua linter
+    lua5.3 \
+    luarocks5.3 \
+    gcc \
+    musl-dev \
+    lua5.3-dev \
+    # YAML linter
+    yamllint \
+    # Git (for hooks)
+    git \
+    # Other useful tools
+    make
+
+# Install luacheck via luarocks
+RUN luarocks-5.3 install luacheck
+
+# Create symlink for lua command
+RUN ln -s /usr/bin/lua5.3 /usr/bin/lua
+
+# Set working directory
+WORKDIR /workspace
+
+# Default command - show versions
+CMD ["sh", "-c", "echo 'Linters installed:' && \
+     echo 'shellcheck:' $(shellcheck --version | head -2 | tail -1) && \
+     echo 'shfmt:' $(shfmt -version) && \
+     echo 'luacheck:' $(luacheck --version) && \
+     echo 'yamllint:' $(yamllint --version)"]
