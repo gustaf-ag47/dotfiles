@@ -12,3 +12,7 @@ config/tmux/plugins/
 # Now stored in $SYNC/dotfiles-local and symlinked
 # See $SYNC/dotfiles-local/README.md for usage
 local
+
+# Syncthing conflict files
+*.sync-conflict-*
+.sync-conflict-*

@@ -48,38 +48,8 @@ docker-nuke() {
 	echo "Docker resources for project '$project' have been cleaned up."
 }
 
-ss-code-nuke() {
-	docker-nuke
-	sudo rm -rf docker/mysql/data
-	sudo rm -rf var
-	sudo rm -rf vendor
-	make build
-	make uph && make composer && make refresh-db
-}
-
-ss-update() {
-	base_dir=$HOME/src
-	folders=("frontend-repo" "work-company-api" "work-company-api-platform")
-
-	for folder in "${folders[@]}"; do
-		cd "$base_dir/$folder" || continue
-		echo "Updating '$folder'"
-
-		current_branch=$(git symbolic-ref --short HEAD)
-
-		saved_branch="$current_branch"
-
-		git checkout master
-		git pull --rebase
-
-		git checkout develop
-		git pull --rebase
-
-		git checkout "$saved_branch"
-
-		echo "Switched back to branch '$saved_branch' in '$folder'"
-	done
-}
+# Company-specific functions have been moved to local/config/zsh/work.zsh
+# This keeps work-related code separate from public dotfiles
 
 paste-from-clipboard() {
 	LBUFFER+=$(xclip -o -selection clipboard)
@@ -117,38 +87,4 @@ r() {
 	git checkout $current_branch
 	git rebase $target_branch
 	echo "Rebase complete."
-}
-
-# Tmux session management functions
-tmux-save() {
-	if [[ -n $TMUX ]]; then
-		echo "Saving tmux session..."
-		tmux run-shell "$XDG_DATA_HOME/tmux/plugins/tmux-resurrect/scripts/save.sh"
-		echo "Session saved!"
-	else
-		echo "Not in a tmux session"
-	fi
-}
-
-tmux-restore() {
-	if [[ -n $TMUX ]]; then
-		echo "Restoring tmux session..."
-		tmux run-shell "$XDG_DATA_HOME/tmux/plugins/tmux-resurrect/scripts/restore.sh"
-		echo "Session restored!"
-	else
-		echo "Not in a tmux session. Starting new session with restore..."
-		tmux new-session -d
-		tmux run-shell "$XDG_DATA_HOME/tmux/plugins/tmux-resurrect/scripts/restore.sh"
-		tmux attach-session
-	fi
-}
-
-tmux-clean-old-sessions() {
-	echo "Cleaning up old tmux sessions..."
-	resurrect_dir="$XDG_DATA_HOME/tmux/resurrect"
-	if [[ -d "$resurrect_dir" ]]; then
-		# Keep only the last 5 session files
-		ls -t "$resurrect_dir"/tmux_resurrect_*.txt 2>/dev/null | tail -n +6 | xargs rm -f
-		echo "Old session files cleaned up"
-	fi
 }

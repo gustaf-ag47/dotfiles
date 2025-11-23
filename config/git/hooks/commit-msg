@@ -49,7 +49,7 @@ if [ $subject_length -gt 50 ]; then
 fi
 
 # Check for capitalized subject
-if [[ $first_line =~ ^[a-z]+(\([a-z0-9-]+\))?: [A-Z] ]]; then
+if [[ $first_line =~ ^[a-z]+(\([a-z0-9-]+\))?: [[:upper:]] ]]; then
     echo "❌ Commit subject should not start with capital letter"
     echo "Subject: $first_line"
     exit 1
