@@ -1,16 +1,19 @@
-#!/bin/sh
+#!/bin/bash
 
+# Fuzzy search and checkout git branches
 fsb() {
-	local pattern=$@
+	local pattern="$*"
 	local branches branch
-	branches=$(git branch --all | awk 'tolower($0) ~ /'$pattern'/') &&
+
+	branches=$(git branch --all | awk "tolower(\$0) ~ /$pattern/") &&
 		branch=$(echo "$branches" |
 			fzf-tmux --height 30% --reverse -1 -0 +m) &&
 		if [ "$branch" = "" ]; then
 			echo "[$0] No branch matches the provided pattern"
 			return
 		fi
-	git checkout $(echo "$branch" | sed "s/.* //" | sed "s#remotes/[^/]*/##")
+
+	git checkout "$(echo "$branch" | sed "s/.* //" | sed "s#remotes/[^/]*/##")"
 }
 
 fsb "$@"

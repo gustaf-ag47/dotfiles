@@ -102,18 +102,47 @@ fi
 echo "✅ No secrets detected"
 
 # Validate shell scripts
-shell_files=$(git diff --cached --name-only | grep -E '\.(sh|bash)$' || true)
+shell_files=$(git diff --cached --name-only | grep -E '\.(sh|bash)$|^bin/' || true)
 if [ -n "$shell_files" ]; then
-    echo "📝 Checking shell scripts..."
+    echo "📝 Checking shell script syntax..."
     for file in $shell_files; do
         if [ -f "$file" ]; then
-            if ! bash -n "$file"; then
+            # Skip if not a shell script
+            if ! head -1 "$file" | grep -q '^#!.*sh'; then
+                continue
+            fi
+
+            if ! bash -n "$file" 2>/dev/null; then
                 echo "❌ Shell script syntax error in $file"
                 exit 1
             fi
         fi
     done
-    echo "✅ Shell scripts syntax valid"
+    echo "✅ Shell script syntax valid"
+
+    # Run shellcheck if available
+    if command -v shellcheck >/dev/null 2>&1; then
+        echo "🔍 Running shellcheck..."
+        for file in $shell_files; do
+            if [ -f "$file" ]; then
+                # Skip if not a shell script or is a zsh script
+                first_line=$(head -1 "$file")
+                if ! echo "$first_line" | grep -q '^#!.*sh'; then
+                    continue
+                fi
+                if echo "$first_line" | grep -q 'zsh'; then
+                    continue
+                fi
+
+                if ! shellcheck -x "$file"; then
+                    echo "❌ ShellCheck failed for $file"
+                    echo "Fix the issues or use # shellcheck disable=SCXXXX to suppress specific warnings"
+                    exit 1
+                fi
+            fi
+        done
+        echo "✅ ShellCheck passed"
+    fi
 fi
 
 # Check Lua files (for Neovim config)

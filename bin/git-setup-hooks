@@ -50,7 +50,11 @@ echo ""
 echo "🎉 Git hooks setup complete!"
 echo ""
 echo "Active hooks:"
-ls -la "$REPO_HOOKS" | grep -v "sample" | grep "^l"
+for hook in "$REPO_HOOKS"/*; do
+    if [ -L "$hook" ] && [[ "$(basename "$hook")" != *"sample"* ]]; then
+        ls -la "$hook"
+    fi
+done
 echo ""
 echo "📝 Hooks will now enforce:"
 echo "  - Commit message format validation"

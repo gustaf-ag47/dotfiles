@@ -1,25 +1,28 @@
+#!/usr/bin/env zsh
+# Zsh functions - sourced by .zshrc
+
 function up() {
-	cd "$(printf "%0.s../" $(seq 1 $1))"
+	cd "$(printf "%0.s../" $(seq 1 "$1"))" || return
 }
 
 function mkcd() {
-	mkdir -p "$1" && cd "$1"
+	mkdir -p "$1" && cd "$1" || return
 }
 
 extract() {
-	if [ -f $1 ]; then
-		case $1 in
-		*.tar.bz2) tar xjf $1 ;;
-		*.tar.gz) tar xzf $1 ;;
-		*.bz2) bunzip2 $1 ;;
-		*.rar) rar x $1 ;;
-		*.gz) gunzip $1 ;;
-		*.tar) tar xf $1 ;;
-		*.tbz2) tar xjf $1 ;;
-		*.tgz) tar xzf $1 ;;
-		*.zip) unzip $1 ;;
-		*.Z) uncompress $1 ;;
-		*.7z) 7z x $1 ;;
+	if [ -f "$1" ]; then
+		case "$1" in
+		*.tar.bz2) tar xjf "$1" ;;
+		*.tar.gz) tar xzf "$1" ;;
+		*.bz2) bunzip2 "$1" ;;
+		*.rar) rar x "$1" ;;
+		*.gz) gunzip "$1" ;;
+		*.tar) tar xf "$1" ;;
+		*.tbz2) tar xjf "$1" ;;
+		*.tgz) tar xzf "$1" ;;
+		*.zip) unzip "$1" ;;
+		*.Z) uncompress "$1" ;;
+		*.7z) 7z x "$1" ;;
 		*) echo "'$1' cannot be extracted via extract()" ;;
 		esac
 	else
@@ -47,14 +50,20 @@ docker-nuke() {
 		return 1
 	fi
 
+	# shellcheck disable=SC2046
 	docker stop $(docker ps -qa --filter "name=${project}") 2>/dev/null
+	# shellcheck disable=SC2046
 	docker rm $(docker ps -qa --filter "name=${project}") 2>/dev/null
 
+	# shellcheck disable=SC2046
 	docker rmi -f $(docker images -q --filter "label=project=$project") 2>/dev/null
+	# shellcheck disable=SC2046
 	docker rmi -f $(docker images -q --filter "reference=${project}*") 2>/dev/null
 
+	# shellcheck disable=SC2046
 	docker volume rm $(docker volume ls -q --filter "name=${project}") 2>/dev/null
 
+	# shellcheck disable=SC2046
 	docker network rm $(docker network ls -q --filter "name=${project}") 2>/dev/null
 
 	echo "Docker resources for project '$project' have been cleaned up."
@@ -74,15 +83,14 @@ paste-from-clipboard() {
 }
 
 vman() {
-	nvim -c "SuperMan $*"
-
-	if [ "$?" != "0" ]; then
+	if ! nvim -c "SuperMan $*"; then
 		echo "No manual entry for $*"
 	fi
 }
 
 uuid() {
-	local generated_uuid=$(uuidgen)
+	local generated_uuid
+	generated_uuid=$(uuidgen)
 	if [ -n "${WAYLAND_DISPLAY:-}" ]; then
 		echo "$generated_uuid" | wl-copy
 	elif [ -n "${DISPLAY:-}" ]; then
@@ -109,9 +117,9 @@ r() {
 
 	echo "Rebasing $current_branch to $target_branch..."
 	git fetch
-	git checkout $target_branch
-	git pull origin $target_branch --rebase
-	git checkout $current_branch
-	git rebase $target_branch
+	git checkout "$target_branch"
+	git pull origin "$target_branch" --rebase
+	git checkout "$current_branch"
+	git rebase "$target_branch"
 	echo "Rebase complete."
 }

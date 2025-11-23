@@ -31,12 +31,11 @@ get_battery_info() {
 
 # Check if AC adapter is connected
 is_charging() {
-    local ac_path="/sys/class/power_supply/ADP1"
-    
     # Try different AC adapter paths
     for ac in /sys/class/power_supply/A{C,DP,CAD}*; do
         if [[ -d "$ac" ]]; then
-            local online=$(cat "$ac/online" 2>/dev/null || echo "0")
+            local online
+            online=$(cat "$ac/online" 2>/dev/null || echo "0")
             if [[ "$online" == "1" ]]; then
                 return 0
             fi
@@ -66,7 +65,8 @@ handle_low_battery() {
         last_notif_time=$(cat "$LAST_NOTIFICATION_FILE")
     fi
     
-    local current_time=$(date +%s)
+    local current_time
+    current_time=$(date +%s)
     local time_diff=$((current_time - last_notif_time))
     
     # Only notify every 5 minutes to avoid spam
@@ -82,8 +82,10 @@ handle_low_battery() {
         sleep 30
         
         # Check again if still critical and not charging
-        local new_info=$(get_battery_info)
-        local new_capacity=$(echo "$new_info" | cut -d',' -f1)
+        local new_info
+        new_info=$(get_battery_info)
+        local new_capacity
+        new_capacity=$(echo "$new_info" | cut -d',' -f1)
         
         if [[ $new_capacity -le $VERY_CRITICAL_THRESHOLD ]] && ! is_charging; then
             send_notification "Hibernating Now" "Battery critically low. Hibernating system." "critical" "battery-caution"
@@ -126,9 +128,12 @@ handle_charging_change() {
 
 # Main monitoring function
 monitor_battery() {
-    local info=$(get_battery_info)
-    local capacity=$(echo "$info" | cut -d',' -f1)
-    local status=$(echo "$info" | cut -d',' -f2)
+    local info
+    info=$(get_battery_info)
+    local capacity
+    capacity=$(echo "$info" | cut -d',' -f1)
+    local status
+    status=$(echo "$info" | cut -d',' -f2)
     
     local charging="false"
     if is_charging || [[ "$status" == "Charging" ]]; then

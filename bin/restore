@@ -35,9 +35,20 @@ restore_file() {
 
 echo "Starting restoration process..."
 
-sudo restore_dir "$BACKUP_DIR/bluetooth" "/var/lib/bluetooth"
+# Restore system directories (requires sudo)
+if [ -d "$BACKUP_DIR/bluetooth" ]; then
+    echo "Restoring $BACKUP_DIR/bluetooth to /var/lib/bluetooth"
+    sudo cp -r "$BACKUP_DIR/bluetooth" "/var/lib/bluetooth"
+else
+    echo "Directory $BACKUP_DIR/bluetooth not found in the backup"
+fi
 
-sudo restore_dir "$BACKUP_DIR/network-connections" "/etc/NetworkManager/system-connections"
+if [ -d "$BACKUP_DIR/network-connections" ]; then
+    echo "Restoring $BACKUP_DIR/network-connections to /etc/NetworkManager/system-connections"
+    sudo cp -r "$BACKUP_DIR/network-connections" "/etc/NetworkManager/system-connections"
+else
+    echo "Directory $BACKUP_DIR/network-connections not found in the backup"
+fi
 
 restore_dir "$BACKUP_DIR/ssh-keys" "$HOME/.ssh"
 
