@@ -101,7 +101,7 @@ M.base_servers = {
       },
     },
   },
-  
+
   lua_ls = {
     settings = {
       Lua = {
@@ -123,7 +123,7 @@ M.base_servers = {
       },
     },
   },
-  
+
   -- JSON language server
   jsonls = {
     settings = {
@@ -139,7 +139,7 @@ M.base_servers = {
       end
     end,
   },
-  
+
   -- YAML language server
   yamlls = {
     settings = {
@@ -164,7 +164,7 @@ M.base_servers = {
       end
     end,
   },
-  
+
   -- TOML language server
   taplo = {
     settings = {
@@ -178,7 +178,7 @@ M.base_servers = {
       },
     },
   },
-  
+
   -- Dockerfile language server
   dockerls = {
     settings = {
@@ -215,7 +215,7 @@ M.setup_mason = function()
     },
     install_root_dir = vim.fn.stdpath('data') .. '/mason',
   })
-  
+
   -- Modern language servers and tools
   local ensure_installed = vim.tbl_keys(M.base_servers or {})
   vim.list_extend(ensure_installed, {
@@ -230,31 +230,31 @@ M.setup_mason = function()
     'dockerfile-language-server',
     'taplo', -- TOML language server
     'bash-language-server',
-    
+
     -- Formatters
     'stylua', -- Lua formatter
     'prettier', -- JS/TS/JSON/YAML formatter
     'ruff', -- Python formatter/linter
     'rustfmt', -- Rust formatter
-    
+
     -- Linters
     'eslint_d', -- Fast ESLint
     'mypy', -- Python type checker
-    
+
     -- Debug adapters
     'js-debug-adapter', -- JavaScript/TypeScript debugger
     'debugpy', -- Python debugger
     'codelldb', -- Rust/C++ debugger
   })
-  
-  require('mason-tool-installer').setup { 
+
+  require('mason-tool-installer').setup {
     ensure_installed = ensure_installed,
     auto_update = true,
     run_on_start = true,
     start_delay = 3000, -- 3 second delay
     debounce_hours = 5, -- at least 5 hours between attempts
   }
-  
+
   require('mason-lspconfig').setup {
     automatic_installation = true,
     handlers = {
@@ -272,11 +272,11 @@ M.register_server = function(server_name, config)
   if not M.base_servers then
     M.base_servers = {}
   end
-  
+
   M.base_servers[server_name] = vim.tbl_deep_extend('force', {
     capabilities = M.get_capabilities(),
   }, config or {})
-  
+
   -- If LSP is already setup, configure this server immediately
   if package.loaded['lspconfig'] then
     require('lspconfig')[server_name].setup(M.base_servers[server_name])
@@ -316,10 +316,10 @@ end
 M.setup = function()
   -- Setup LSP diagnostics first
   M.setup_diagnostics()
-  
+
   -- Setup LSP attach behavior
   M.setup_lsp_attach()
-  
+
   -- Setup Mason and LSP servers
   M.setup_mason()
 end

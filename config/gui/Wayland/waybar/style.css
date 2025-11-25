@@ -79,8 +79,9 @@ window#waybar {
 }
 
 @keyframes urgent-blink {
-  0%, 100% { opacity: 1; }
+  0% { opacity: 1; }
   50% { opacity: 0.8; }
+  100% { opacity: 1; }
 }
 
 /* Window title */
@@ -171,8 +172,9 @@ window#waybar {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
+  0% { opacity: 1; }
   50% { opacity: 0.5; }
+  100% { opacity: 1; }
 }
 
 /* Audio - Dynamic styling */
@@ -230,8 +232,9 @@ window#waybar {
 }
 
 @keyframes battery-blink {
-  0%, 100% { opacity: 1; }
+  0% { opacity: 1; }
   50% { opacity: 0.7; }
+  100% { opacity: 1; }
 }
 
 /* Power button - Stylish hover effect */

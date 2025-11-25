@@ -37,9 +37,12 @@ main() {
     --preview-window=up:10:wrap)
 
   if [[ -n "$selection" ]]; then
-    local service=$(echo "$selection" | awk '{print $1}')
-    local state=$(echo "$selection" | awk '{print $2}')
-    local active_status=$(echo "$selection" | awk '{print $3}')
+    local service
+    service=$(echo "$selection" | awk '{print $1}')
+    local state
+    state=$(echo "$selection" | awk '{print $2}')
+    local active_status
+    active_status=$(echo "$selection" | awk '{print $3}')
 
     echo "Selected service: $service (State: $state, Active: $active_status)"
     echo -e "\nOptions:\n  [1] Start\n  [2] Stop\n  [3] Enable\n  [4] Disable\n  [5] View Status\n  [q] Quit"

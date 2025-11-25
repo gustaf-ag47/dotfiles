@@ -25,7 +25,7 @@ M.plugins = {
           },
         },
       },
-      
+
       -- Completion sources
       'saadparwaiz1/cmp_luasnip',
       'hrsh7th/cmp-nvim-lsp',
@@ -33,12 +33,12 @@ M.plugins = {
       'hrsh7th/cmp-path',
       'hrsh7th/cmp-cmdline',
       'hrsh7th/cmp-nvim-lsp-signature-help',
-      
+
       -- Additional completion sources
       'hrsh7th/cmp-emoji',
       'hrsh7th/cmp-calc',
       'hrsh7th/cmp-nvim-lua',
-      
+
       -- Optional: AI completion
       -- 'hrsh7th/cmp-copilot',
     },
@@ -52,10 +52,9 @@ M.plugins = {
 M.setup_completion = function()
   local cmp = require('cmp')
   local luasnip = require('luasnip')
-  
+
   -- Helper function for super tab behavior
   local has_words_before = function()
-    unpack = unpack or table.unpack
     local line, col = unpack(vim.api.nvim_win_get_cursor(0))
     return col ~= 0 and vim.api.nvim_buf_get_lines(0, line - 1, line, true)[1]:sub(col, col):match('%s') == nil
   end
@@ -66,12 +65,12 @@ M.setup_completion = function()
         luasnip.lsp_expand(args.body)
       end,
     },
-    
+
     completion = {
       completeopt = 'menu,menuone,noinsert',
       keyword_length = 1,
     },
-    
+
     performance = {
       debounce = 60,
       throttle = 30,
@@ -80,21 +79,21 @@ M.setup_completion = function()
       async_budget = 1,
       max_view_entries = 200,
     },
-    
+
     mapping = cmp.mapping.preset.insert({
       -- Scroll documentation
       ['<C-b>'] = cmp.mapping.scroll_docs(-4),
       ['<C-f>'] = cmp.mapping.scroll_docs(4),
-      
+
       -- Trigger completion
       ['<C-Space>'] = cmp.mapping.complete(),
-      
+
       -- Abort completion
       ['<C-e>'] = cmp.mapping.abort(),
-      
+
       -- Confirm completion
       ['<CR>'] = cmp.mapping.confirm({ select = false }),
-      
+
       -- Super Tab behavior
       ['<Tab>'] = cmp.mapping(function(fallback)
         if cmp.visible() then
@@ -107,7 +106,7 @@ M.setup_completion = function()
           fallback()
         end
       end, { 'i', 's' }),
-      
+
       ['<S-Tab>'] = cmp.mapping(function(fallback)
         if cmp.visible() then
           cmp.select_prev_item()
@@ -118,7 +117,7 @@ M.setup_completion = function()
         end
       end, { 'i', 's' }),
     }),
-    
+
     sources = cmp.config.sources({
       { name = 'nvim_lsp', priority = 1000 },
       { name = 'nvim_lsp_signature_help', priority = 900 },
@@ -130,7 +129,7 @@ M.setup_completion = function()
       { name = 'emoji', priority = 200 },
       { name = 'nvim_lua', priority = 100 },
     }),
-    
+
     formatting = {
       fields = { 'abbr', 'kind', 'menu' },
       format = function(entry, vim_item)
@@ -162,10 +161,10 @@ M.setup_completion = function()
           Operator = '󰆕',
           TypeParameter = '',
         }
-        
+
         -- Set kind icon
         vim_item.kind = string.format('%s %s', kind_icons[vim_item.kind] or '', vim_item.kind)
-        
+
         -- Set menu source
         vim_item.menu = ({
           nvim_lsp = '[LSP]',
@@ -178,23 +177,23 @@ M.setup_completion = function()
           emoji = '[Emoji]',
           nvim_lua = '[Lua]',
         })[entry.source.name]
-        
+
         return vim_item
       end,
     },
-    
+
     window = {
       completion = cmp.config.window.bordered(),
       documentation = cmp.config.window.bordered(),
     },
-    
+
     experimental = {
       ghost_text = {
         hl_group = 'CmpGhostText',
       },
     },
   })
-  
+
   -- Command line completion
   cmp.setup.cmdline({ '/', '?' }, {
     mapping = cmp.mapping.preset.cmdline(),
@@ -202,7 +201,7 @@ M.setup_completion = function()
       { name = 'buffer' }
     }
   })
-  
+
   cmp.setup.cmdline(':', {
     mapping = cmp.mapping.preset.cmdline(),
     sources = cmp.config.sources({
@@ -216,7 +215,7 @@ end
 -- Setup snippet configuration
 M.setup_snippets = function()
   local luasnip = require('luasnip')
-  
+
   -- Snippet configuration
   luasnip.config.setup({
     history = true,
@@ -230,29 +229,29 @@ M.setup_snippets = function()
       },
     },
   })
-  
+
   -- Load snippets from friendly-snippets
   require('luasnip.loaders.from_vscode').lazy_load()
-  
+
   -- Load custom snippets if they exist
   local custom_snippets_path = vim.fn.stdpath('config') .. '/snippets'
   if vim.fn.isdirectory(custom_snippets_path) == 1 then
     require('luasnip.loaders.from_vscode').lazy_load({ paths = { custom_snippets_path } })
   end
-  
+
   -- Snippet keymaps
   vim.keymap.set({ 'i', 's' }, '<C-k>', function()
     if luasnip.expand_or_jumpable() then
       luasnip.expand_or_jump()
     end
   end, { desc = 'Expand or jump snippet' })
-  
+
   vim.keymap.set({ 'i', 's' }, '<C-j>', function()
     if luasnip.jumpable(-1) then
       luasnip.jump(-1)
     end
   end, { desc = 'Jump back in snippet' })
-  
+
   vim.keymap.set('i', '<C-l>', function()
     if luasnip.choice_active() then
       luasnip.change_choice(1)
@@ -272,10 +271,10 @@ end
 M.setup = function()
   -- Setup completion engine
   M.setup_completion()
-  
+
   -- Setup snippets
   M.setup_snippets()
-  
+
   -- Setup completion highlighting
   vim.api.nvim_set_hl(0, 'CmpGhostText', { link = 'Comment', default = true })
 end

@@ -1,3 +1,5 @@
+#!/bin/bash
+
 iDIR="$HOME/.config/mako/icons"
 
 get_backlight() {
@@ -22,19 +24,19 @@ notify_user() {
 }
 
 inc_backlight() {
-	brightnessctl -d *::kbd_backlight set 33%+ && get_icon && notify_user
+	brightnessctl -d '*::kbd_backlight' set 33%+ && get_icon && notify_user
 }
 
 dec_backlight() {
-	brightnessctl -d *::kbd_backlight set 33%- && get_icon && notify_user
+	brightnessctl -d '*::kbd_backlight' set 33%- && get_icon && notify_user
 }
 
 zero_backlight() {
-	brightnessctl -d *::kbd_backlight s 0%
+	brightnessctl -d '*::kbd_backlight' s 0%
 }
 
 full_backlight() {
-	brightnessctl -d *::kbd_backlight s 100%
+	brightnessctl -d '*::kbd_backlight' s 100%
 }
 
 if [[ "$1" == "--get" ]]; then

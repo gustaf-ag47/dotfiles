@@ -15,7 +15,7 @@ M.sql_keywords = {
     'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER',
     'TRUNCATE', 'REPLACE', 'MERGE', 'WITH', 'EXPLAIN', 'DESCRIBE', 'SHOW'
   },
-  
+
   -- Clauses and operators
   clauses = {
     'FROM', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET',
@@ -23,7 +23,7 @@ M.sql_keywords = {
     'ON', 'USING', 'UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT',
     'INTO', 'VALUES', 'SET', 'AS', 'DISTINCT', 'ALL', 'EXISTS', 'NOT EXISTS'
   },
-  
+
   -- Functions
   functions = {
     'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'COALESCE', 'ISNULL', 'NULLIF',
@@ -31,14 +31,14 @@ M.sql_keywords = {
     'SUBSTRING', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM',
     'NOW', 'CURRENT_TIMESTAMP', 'CURRENT_DATE', 'DATE', 'YEAR', 'MONTH', 'DAY'
   },
-  
+
   -- Data types
   types = {
     'INT', 'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT', 'DECIMAL', 'NUMERIC',
     'FLOAT', 'DOUBLE', 'REAL', 'VARCHAR', 'CHAR', 'TEXT', 'LONGTEXT',
     'DATE', 'DATETIME', 'TIMESTAMP', 'TIME', 'BOOLEAN', 'BOOL', 'JSON', 'BLOB'
   },
-  
+
   -- Constraints and modifiers
   constraints = {
     'PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'NOT NULL', 'DEFAULT',
@@ -51,42 +51,42 @@ M.schema_queries = {
   mysql = {
     tables = [[
       SELECT table_name, table_type, table_comment
-      FROM information_schema.tables 
+      FROM information_schema.tables
       WHERE table_schema = DATABASE()
       ORDER BY table_name
     ]],
-    
+
     columns = [[
-      SELECT table_name, column_name, data_type, is_nullable, 
+      SELECT table_name, column_name, data_type, is_nullable,
              column_default, column_comment, column_key
-      FROM information_schema.columns 
+      FROM information_schema.columns
       WHERE table_schema = DATABASE()
       ORDER BY table_name, ordinal_position
     ]],
-    
+
     indexes = [[
       SELECT table_name, index_name, column_name, non_unique
-      FROM information_schema.statistics 
+      FROM information_schema.statistics
       WHERE table_schema = DATABASE()
       ORDER BY table_name, index_name, seq_in_index
     ]]
   },
-  
+
   postgresql = {
     tables = [[
       SELECT schemaname||'.'||tablename as table_name, 'TABLE' as table_type, '' as table_comment
-      FROM pg_tables 
+      FROM pg_tables
       WHERE schemaname = current_schema()
       UNION ALL
       SELECT schemaname||'.'||viewname as table_name, 'VIEW' as table_type, '' as table_comment
-      FROM pg_views 
+      FROM pg_views
       WHERE schemaname = current_schema()
       ORDER BY table_name
     ]],
-    
+
     columns = [[
       SELECT t.table_name, c.column_name, c.data_type, c.is_nullable,
-             c.column_default, '' as column_comment, 
+             c.column_default, '' as column_comment,
              CASE WHEN pk.column_name IS NOT NULL THEN 'PRI' ELSE '' END as column_key
       FROM information_schema.tables t
       JOIN information_schema.columns c ON t.table_name = c.table_name
@@ -99,26 +99,26 @@ M.schema_queries = {
       WHERE t.table_schema = current_schema() AND c.table_schema = current_schema()
       ORDER BY t.table_name, c.ordinal_position
     ]],
-    
+
     indexes = [[
-      SELECT t.relname as table_name, i.relname as index_name, 
+      SELECT t.relname as table_name, i.relname as index_name,
              a.attname as column_name, NOT ix.indisunique as non_unique
       FROM pg_class t, pg_class i, pg_index ix, pg_attribute a
-      WHERE t.oid = ix.indrelid AND i.oid = ix.indexrelid 
+      WHERE t.oid = ix.indrelid AND i.oid = ix.indexrelid
       AND a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
       AND t.relkind = 'r' AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
       ORDER BY t.relname, i.relname
     ]]
   },
-  
+
   sqlite = {
     tables = [[
       SELECT name as table_name, type as table_type, '' as table_comment
-      FROM sqlite_master 
+      FROM sqlite_master
       WHERE type IN ('table', 'view')
       ORDER BY name
     ]],
-    
+
     columns = [[
       SELECT m.name as table_name, p.name as column_name, p.type as data_type,
              CASE WHEN p."notnull" = 0 THEN 'YES' ELSE 'NO' END as is_nullable,
@@ -129,7 +129,7 @@ M.schema_queries = {
       WHERE m.type = 'table'
       ORDER BY m.name, p.cid
     ]],
-    
+
     indexes = [[
       SELECT m.tbl_name as table_name, il.name as index_name,
              ii.name as column_name, NOT il."unique" as non_unique
@@ -148,7 +148,7 @@ M.detect_db_type = function()
   if not db then
     return 'mysql' -- default fallback
   end
-  
+
   if db:match('mysql') or db:match('mariadb') then
     return 'mysql'
   elseif db:match('postgres') or db:match('postgresql') then
@@ -163,15 +163,15 @@ end
 -- Execute database query and return results
 M.execute_query = function(query)
   local results = {}
-  
+
   -- Use vim-dadbod to execute query
   local output = vim.fn['db#cmd']({line1 = 1, line2 = 1}, query)
-  
+
   if output and #output > 0 then
     -- Parse the output (this is simplified - you might need more robust parsing)
     local lines = vim.split(output, '\n')
     local headers = {}
-    
+
     for i, line in ipairs(lines) do
       if i == 1 then
         -- Parse headers
@@ -187,18 +187,18 @@ M.execute_query = function(query)
       end
     end
   end
-  
+
   return results
 end
 
 -- Get database schema information
 M.get_schema = function(force_refresh)
   force_refresh = force_refresh or false
-  
+
   local db_type = M.detect_db_type()
   local cache_key = (vim.g.db or vim.b.db or 'default') .. ':' .. db_type
   local current_time = os.time()
-  
+
   -- Check cache
   if not force_refresh and M.schema_cache[cache_key] then
     local cached = M.schema_cache[cache_key]
@@ -206,19 +206,19 @@ M.get_schema = function(force_refresh)
       return cached.schema
     end
   end
-  
+
   local schema = {
     tables = {},
     columns = {},
     indexes = {},
     timestamp = current_time
   }
-  
+
   local queries = M.schema_queries[db_type]
   if not queries then
     return schema
   end
-  
+
   -- Get tables
   local ok, tables = pcall(M.execute_query, queries.tables)
   if ok and tables then
@@ -230,9 +230,9 @@ M.get_schema = function(force_refresh)
       }
     end
   end
-  
+
   -- Get columns
-  local ok, columns = pcall(M.execute_query, queries.columns)
+  local ok2, columns = pcall(M.execute_query, queries.columns)
   if ok and columns then
     for _, column in ipairs(columns) do
       if not schema.columns[column.table_name] then
@@ -248,9 +248,9 @@ M.get_schema = function(force_refresh)
       })
     end
   end
-  
+
   -- Get indexes
-  local ok, indexes = pcall(M.execute_query, queries.indexes)
+  local ok3, indexes = pcall(M.execute_query, queries.indexes)
   if ok and indexes then
     for _, index in ipairs(indexes) do
       if not schema.indexes[index.table_name] then
@@ -263,21 +263,21 @@ M.get_schema = function(force_refresh)
       })
     end
   end
-  
+
   -- Cache the schema
   M.schema_cache[cache_key] = {
     schema = schema,
     timestamp = current_time
   }
-  
+
   return schema
 end
 
 -- Parse SQL context to determine what to complete
 M.parse_sql_context = function(line, col)
   local before_cursor = line:sub(1, col - 1):upper()
-  local after_cursor = line:sub(col):upper()
-  
+  local _after_cursor = line:sub(col):upper()
+
   local context = {
     type = 'unknown',
     table_context = nil,
@@ -289,20 +289,20 @@ M.parse_sql_context = function(line, col)
     expecting_table = false,
     last_table = nil
   }
-  
+
   -- Determine if we're in different SQL clauses
   context.in_select = before_cursor:match('SELECT') and not before_cursor:match('FROM')
   context.in_from = before_cursor:match('FROM') and not before_cursor:match('WHERE') and not before_cursor:match('GROUP BY') and not before_cursor:match('ORDER BY')
   context.in_where = before_cursor:match('WHERE') and not before_cursor:match('GROUP BY') and not before_cursor:match('ORDER BY')
   context.in_join = before_cursor:match('JOIN')
-  
+
   -- Extract table context
   local table_match = before_cursor:match('FROM%s+(%w+)')
   if not table_match then
     table_match = before_cursor:match('JOIN%s+(%w+)')
   end
   context.last_table = table_match
-  
+
   -- Determine what type of completion is expected
   if context.in_select and before_cursor:match(',%s*$') then
     context.expecting_column = true
@@ -316,14 +316,14 @@ M.parse_sql_context = function(line, col)
   elseif before_cursor:match('%s$') or before_cursor:match('^%s*$') then
     context.type = 'keyword'
   end
-  
+
   return context
 end
 
 -- Generate completion items based on context
 M.get_completion_items = function(context, schema)
   local items = {}
-  
+
   if context.type == 'table' then
     -- Complete table names
     for table_name, table_info in pairs(schema.tables) do
@@ -331,27 +331,27 @@ M.get_completion_items = function(context, schema)
         label = table_name,
         kind = 17, -- cmp.lsp.CompletionItemKind.Struct (represents table)
         detail = table_info.type .. (table_info.comment ~= '' and ': ' .. table_info.comment or ''),
-        documentation = string.format('Table: %s\nType: %s\nComment: %s', 
+        documentation = string.format('Table: %s\nType: %s\nComment: %s',
           table_name, table_info.type, table_info.comment),
         insertText = table_name,
         sortText = '1_' .. table_name -- Sort tables first
       })
     end
-    
+
   elseif context.type == 'column' then
     -- Complete column names
     if context.last_table and schema.columns[context.last_table] then
       -- Context-specific columns for the current table
       for _, column in ipairs(schema.columns[context.last_table]) do
-        local detail = column.type .. (column.is_primary and ' (PK)' or '') .. 
+        local detail = column.type .. (column.is_primary and ' (PK)' or '') ..
                       (not column.nullable and ' NOT NULL' or '')
-        
+
         table.insert(items, {
           label = column.name,
           kind = 5, -- cmp.lsp.CompletionItemKind.Field
           detail = detail,
           documentation = string.format('Column: %s.%s\nType: %s\nNullable: %s\nDefault: %s\nComment: %s',
-            context.last_table, column.name, column.type, 
+            context.last_table, column.name, column.type,
             column.nullable and 'YES' or 'NO',
             column.default or 'NULL',
             column.comment or 'None'),
@@ -374,7 +374,7 @@ M.get_completion_items = function(context, schema)
         end
       end
     end
-    
+
   elseif context.type == 'keyword' then
     -- Complete SQL keywords
     for category, keywords in pairs(M.sql_keywords) do
@@ -389,7 +389,7 @@ M.get_completion_items = function(context, schema)
       end
     end
   end
-  
+
   return items
 end
 
@@ -398,10 +398,10 @@ M.complete = function(request, callback)
   local schema = M.get_schema()
   local line = request.context.cursor_line
   local col = request.context.cursor.col
-  
+
   local context = M.parse_sql_context(line, col)
   local items = M.get_completion_items(context, schema)
-  
+
   callback({
     items = items,
     isIncomplete = false
@@ -410,37 +410,38 @@ end
 
 -- Setup function to integrate with nvim-cmp
 M.setup = function(opts)
+  -- luacheck: ignore 311
   opts = opts or {}
-  
+
   -- Register as a completion source
   local ok, cmp = pcall(require, 'cmp')
   if not ok then
     vim.notify('nvim-cmp not found, SQL completion disabled', vim.log.levels.WARN)
     return
   end
-  
+
   -- Create custom source
   local source = {}
-  
+
   source.new = function()
     return setmetatable({}, { __index = source })
   end
-  
+
   source.get_debug_name = function()
     return 'sql_dadbod'
   end
-  
+
   source.is_available = function()
     return vim.bo.filetype == 'sql' or vim.g.db ~= nil or vim.b.db ~= nil
   end
-  
+
   source.complete = function(self, request, callback)
     M.complete(request, callback)
   end
-  
+
   -- Register the source
   cmp.register_source('sql_dadbod', source)
-  
+
   -- Setup completion for SQL files
   vim.api.nvim_create_autocmd('FileType', {
     pattern = 'sql',
@@ -455,28 +456,28 @@ M.setup = function(opts)
       })
     end
   })
-  
+
   -- Create user commands for manual schema refresh
   vim.api.nvim_create_user_command('SQLRefreshSchema', function()
     M.get_schema(true)
     vim.notify('SQL schema cache refreshed', vim.log.levels.INFO)
   end, { desc = 'Refresh SQL schema cache' })
-  
+
   vim.api.nvim_create_user_command('SQLShowSchema', function()
     local schema = M.get_schema()
     local lines = { '# Database Schema', '' }
-    
+
     for table_name, table_info in pairs(schema.tables) do
       table.insert(lines, string.format('## Table: %s (%s)', table_name, table_info.type))
       table.insert(lines, '')
-      
+
       if schema.columns[table_name] then
         table.insert(lines, '| Column | Type | Nullable | Default | Key |')
         table.insert(lines, '|--------|------|----------|---------|-----|')
-        
+
         for _, column in ipairs(schema.columns[table_name]) do
           table.insert(lines, string.format('| %s | %s | %s | %s | %s |',
-            column.name, column.type, 
+            column.name, column.type,
             column.nullable and 'YES' or 'NO',
             column.default or 'NULL',
             column.is_primary and 'PRI' or ''))
@@ -484,7 +485,7 @@ M.setup = function(opts)
         table.insert(lines, '')
       end
     end
-    
+
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.api.nvim_buf_set_option(buf, 'filetype', 'markdown')

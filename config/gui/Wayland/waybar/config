@@ -1,15 +1,16 @@
 {
   "layer": "top",
   "position": "top", 
-  "height": 42,
+  "height": 50,
   "spacing": 8,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["tray", "language", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
+  "modules-right": ["tray", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
   
   "hyprland/workspaces": {
     "disable-scroll": true,
     "all-outputs": true,
+    "swap-icon-label": false,
     "format": "{icon}",
     "format-icons": {
       "1": "󰎤",
@@ -127,7 +128,7 @@
     "smooth-scrolling-threshold": 1
   },
 
-  "language": {
+  "hyprland/language": {
     "format": "󰌌 {}",
     "format-en": "EN",
     "format-sv": "SV",

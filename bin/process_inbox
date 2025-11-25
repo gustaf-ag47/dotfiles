@@ -43,7 +43,7 @@ merge_files() {
 
 tag_file() {
 	local file=$1
-	read -p "Enter tags (comma-separated): " tags
+	read -r -p "Enter tags (comma-separated): " tags
 	tags=${tags:-default-tag}
 	if grep -q "^tags:" "$file"; then
 		sed -i "s/^tags:.*/tags: [$tags]/" "$file"
@@ -55,9 +55,10 @@ tag_file() {
 
 rename_file() {
 	local file=$1
-	local dir=$(dirname "$file")
+	local dir
+	dir=$(dirname "$file")
 	local new_name
-	read -p "Enter new name (with extension): " new_name
+	read -r -p "Enter new name (with extension): " new_name
 	if [[ -n "$new_name" ]]; then
 		mv "$file" "$dir/$new_name" && echo "Renamed $(basename "$file") to $new_name"
 	else
@@ -76,7 +77,7 @@ find_dirs() {
 # Function to delete a file
 delete_file() {
 	local file=$1
-	read -p "Are you sure you want to delete $(basename "$file")? [y/N]: " confirm
+	read -r -p "Are you sure you want to delete $(basename "$file")? [y/N]: " confirm
 	if [[ "$confirm" =~ ^[Yy]$ ]]; then
 		rm -f "$file" && echo "Deleted $(basename "$file")"
 	else

@@ -26,6 +26,7 @@ if [ -z "$merged_branches" ]; then
     echo "✅ No merged branches to clean up"
 else
     echo "📋 Merged branches found:"
+    # shellcheck disable=SC2001
     echo "$merged_branches" | sed 's/^/  - /'
     echo ""
     read -p "Delete these merged branches? (y/N): " -n 1 -r
@@ -48,6 +49,7 @@ orphaned_branches=$(git branch -vv | grep ': gone]' | awk '{print $1}' | grep -v
 
 if [ -n "$orphaned_branches" ]; then
     echo "🗑️  Orphaned branches (remote deleted):"
+    # shellcheck disable=SC2001
     echo "$orphaned_branches" | sed 's/^/  - /'
     echo ""
     read -p "Delete these orphaned branches? (y/N): " -n 1 -r

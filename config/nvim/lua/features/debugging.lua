@@ -16,10 +16,10 @@ M.plugins = {
           'nvim-neotest/nvim-nio',
         },
       },
-      
+
       -- Virtual text for debugging
       'theHamsta/nvim-dap-virtual-text',
-      
+
       -- Mason integration for debug adapters
       'jay-babu/mason-nvim-dap.nvim',
     },
@@ -33,7 +33,7 @@ M.plugins = {
 M.setup_dap_ui = function()
   local dap = require('dap')
   local dapui = require('dapui')
-  
+
   -- Configure DAP UI
   dapui.setup({
     icons = { expanded = '▾', collapsed = '▸', current_frame = '▸' },
@@ -95,7 +95,7 @@ M.setup_dap_ui = function()
       max_value_lines = 100,
     },
   })
-  
+
   -- Auto-open/close DAP UI
   dap.listeners.after.event_initialized['dapui_config'] = function()
     dapui.open()
@@ -138,14 +138,14 @@ end
 M.setup_keymaps = function()
   local dap = require('dap')
   local dapui = require('dapui')
-  
+
   -- Debug session control
   vim.keymap.set('n', '<F5>', dap.continue, { desc = 'Debug: Start/Continue' })
   vim.keymap.set('n', '<F1>', dap.step_into, { desc = 'Debug: Step Into' })
   vim.keymap.set('n', '<F2>', dap.step_over, { desc = 'Debug: Step Over' })
   vim.keymap.set('n', '<F3>', dap.step_out, { desc = 'Debug: Step Out' })
   vim.keymap.set('n', '<F7>', dapui.toggle, { desc = 'Debug: See last session result' })
-  
+
   -- Breakpoints
   vim.keymap.set('n', '<leader>db', dap.toggle_breakpoint, { desc = 'Debug: Toggle Breakpoint' })
   vim.keymap.set('n', '<leader>dB', function()
@@ -154,20 +154,20 @@ M.setup_keymaps = function()
   vim.keymap.set('n', '<leader>dlp', function()
     dap.set_breakpoint(nil, nil, vim.fn.input('Log point message: '))
   end, { desc = 'Debug: Set Log Point' })
-  
+
   -- Debug UI
   vim.keymap.set('n', '<leader>du', dapui.toggle, { desc = 'Debug: Toggle UI' })
   vim.keymap.set('n', '<leader>de', dapui.eval, { desc = 'Debug: Evaluate Expression' })
   vim.keymap.set('v', '<leader>de', dapui.eval, { desc = 'Debug: Evaluate Selection' })
-  
+
   -- REPL
   vim.keymap.set('n', '<leader>dr', dap.repl.open, { desc = 'Debug: Open REPL' })
   vim.keymap.set('n', '<leader>dl', dap.run_last, { desc = 'Debug: Run Last' })
-  
+
   -- Session management
   vim.keymap.set('n', '<leader>dt', dap.terminate, { desc = 'Debug: Terminate' })
   vim.keymap.set('n', '<leader>dc', dap.clear_breakpoints, { desc = 'Debug: Clear Breakpoints' })
-  
+
   -- Frames and variables
   vim.keymap.set('n', '<leader>df', dap.focus_frame, { desc = 'Debug: Focus Frame' })
   vim.keymap.set('n', '<leader>dh', function()
@@ -188,11 +188,11 @@ M.setup_signs = function()
     DapStopped = { text = '▶', texthl = 'DapStopped', linehl = 'DapStoppedLine', numhl = '' },
     DapBreakpointRejected = { text = '○', texthl = 'DapBreakpointRejected', linehl = '', numhl = '' },
   }
-  
+
   for name, sign in pairs(signs) do
     vim.fn.sign_define(name, sign)
   end
-  
+
   -- Highlight groups
   vim.api.nvim_set_hl(0, 'DapBreakpoint', { fg = '#e51400' })
   vim.api.nvim_set_hl(0, 'DapBreakpointCondition', { fg = '#f79000' })
@@ -214,7 +214,7 @@ M.register_configuration = function(language, configurations)
   if not dap.configurations[language] then
     dap.configurations[language] = {}
   end
-  
+
   for _, config in ipairs(configurations) do
     table.insert(dap.configurations[language], config)
   end
@@ -235,16 +235,16 @@ end
 M.setup = function()
   -- Setup debug signs and highlighting
   M.setup_signs()
-  
+
   -- Setup debug UI
   M.setup_dap_ui()
-  
+
   -- Setup virtual text
   M.setup_virtual_text()
-  
+
   -- Setup debug keymaps
   M.setup_keymaps()
-  
+
   -- Setup Mason DAP integration
   M.setup_mason_dap()
 end

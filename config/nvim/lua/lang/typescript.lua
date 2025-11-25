@@ -15,7 +15,7 @@ M.plugins = {
         on_attach = function(client, bufnr)
           -- TypeScript-specific keymaps
           local opts = { buffer = bufnr, silent = true }
-          
+
           -- TypeScript-specific actions
           vim.keymap.set('n', '<leader>to', '<cmd>TSToolsOrganizeImports<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Organize imports' }))
           vim.keymap.set('n', '<leader>ts', '<cmd>TSToolsSortImports<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Sort imports' }))
@@ -25,7 +25,7 @@ M.plugins = {
           vim.keymap.set('n', '<leader>td', '<cmd>TSToolsGoToSourceDefinition<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Go to source definition' }))
           vim.keymap.set('n', '<leader>th', '<cmd>TSToolsFileReferences<cr>', vim.tbl_extend('force', opts, { desc = 'TS: File references' }))
           vim.keymap.set('n', '<leader>ti', '<cmd>TSToolsRenameFile<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Rename file' }))
-          
+
           -- Standard LSP keymaps
           vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, vim.tbl_extend('force', opts, { desc = 'Go to declaration' }))
           vim.keymap.set('n', 'gd', vim.lsp.buf.definition, vim.tbl_extend('force', opts, { desc = 'Go to definition' }))
@@ -69,7 +69,7 @@ M.plugins = {
       }
     end,
   },
-  
+
   -- Enhanced package.json support
   {
     'vuki656/package-info.nvim',
@@ -93,7 +93,7 @@ M.plugins = {
         hide_unstable_versions = false,
         package_manager = 'npm',
       }
-      
+
       -- Package.json keymaps
       local opts = { silent = true }
       vim.keymap.set('n', '<leader>ns', require('package-info').show, vim.tbl_extend('force', opts, { desc = 'Package: Show info' }))
@@ -171,7 +171,7 @@ M.debug_config = {
     },
     ['pwa-chrome'] = {
       type = 'server',
-      host = 'localhost', 
+      host = 'localhost',
       port = '${port}',
       executable = {
         command = 'node',
@@ -307,10 +307,10 @@ M.setup = function()
       ['.eslintrc.json'] = 'jsonc',
     },
   }
-  
+
   -- TypeScript/JavaScript-specific autocommands
   local js_ts_group = vim.api.nvim_create_augroup('JSTSConfig', { clear = true })
-  
+
   -- Auto-format on save (only if Prettier is available)
   vim.api.nvim_create_autocmd('BufWritePre', {
     group = js_ts_group,
@@ -326,7 +326,7 @@ M.setup = function()
       end
     end,
   })
-  
+
   -- Set up TypeScript/JavaScript-specific options
   vim.api.nvim_create_autocmd('FileType', {
     group = js_ts_group,
@@ -337,14 +337,14 @@ M.setup = function()
       vim.opt_local.expandtab = true
       vim.opt_local.textwidth = 120
       vim.opt_local.colorcolumn = '120'
-      
+
       -- Enable inlay hints for TypeScript files
       if vim.lsp.inlay_hint then
         vim.lsp.inlay_hint.enable(true)
       end
     end,
   })
-  
+
   -- JSON files specific to JS/TS projects
   vim.api.nvim_create_autocmd('FileType', {
     group = js_ts_group,
@@ -358,7 +358,7 @@ M.setup = function()
       end
     end,
   })
-  
+
   -- Custom TypeScript snippets
   vim.api.nvim_create_autocmd('FileType', {
     group = js_ts_group,

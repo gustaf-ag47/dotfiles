@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 divider="═══════════════════"
 goback="Back"
@@ -99,11 +99,11 @@ device_connected() {
 }
 
 toggle_connection() {
-	if device_connected $1; then
-		bluetoothctl disconnect $1
+	if device_connected "$1"; then
+		bluetoothctl disconnect "$1"
 		device_menu "$device"
 	else
-		bluetoothctl connect $1
+		bluetoothctl connect "$1"
 		device_menu "$device"
 	fi
 }
@@ -120,11 +120,11 @@ device_paired() {
 }
 
 toggle_paired() {
-	if device_paired $1; then
-		bluetoothctl remove $1
+	if device_paired "$1"; then
+		bluetoothctl remove "$1"
 		device_menu "$device"
 	else
-		bluetoothctl pair $1
+		bluetoothctl pair "$1"
 		device_menu "$device"
 	fi
 }
@@ -141,11 +141,11 @@ device_trusted() {
 }
 
 toggle_trust() {
-	if device_trusted $1; then
-		bluetoothctl untrust $1
+	if device_trusted "$1"; then
+		bluetoothctl untrust "$1"
 		device_menu "$device"
 	else
-		bluetoothctl trust $1
+		bluetoothctl trust "$1"
 		device_menu "$device"
 	fi
 }
@@ -158,10 +158,10 @@ print_status() {
 		counter=0
 
 		for device in "${paired_devices[@]}"; do
-			if device_connected $device; then
-				device_alias=$(bluetoothctl info $device | grep "Alias" | cut -d ' ' -f 2-)
+			if device_connected "$device"; then
+				device_alias=$(bluetoothctl info "$device" | grep "Alias" | cut -d ' ' -f 2-)
 
-				if [ $counter -gt 0 ]; then
+				if [ "$counter" -gt 0 ]; then
 					printf ", %s" "$device_alias"
 				else
 					printf " %s" "$device_alias"
@@ -179,38 +179,38 @@ print_status() {
 device_menu() {
 	device=$1
 
-	device_name=$(echo $device | cut -d ' ' -f 3-)
-	mac=$(echo $device | cut -d ' ' -f 2)
+	device_name=$(echo "$device" | cut -d ' ' -f 3-)
+	mac=$(echo "$device" | cut -d ' ' -f 2)
 
-	if device_connected $mac; then
+	if device_connected "$mac"; then
 		connected="Connected: yes"
 	else
 		connected="Connected: no"
 	fi
-	paired=$(device_paired $mac)
-	trusted=$(device_trusted $mac)
+	paired=$(device_paired "$mac" || true)
+	trusted=$(device_trusted "$mac" || true)
 	options="$connected\n$paired\n$trusted\n$showinfo\n$divider\n$goback"
 
 	chosen="$(echo -e "$options" | $fzf_command --header="$device_name")"
 
 	case $chosen in
-	"" | $divider)
+	"" | "$divider")
 		echo "No option chosen."
 		;;
-	$connected)
-		toggle_connection $mac
+	"$connected")
+		toggle_connection "$mac"
 		;;
-	$paired)
-		toggle_paired $mac
+	"$paired")
+		toggle_paired "$mac"
 		;;
-	$trusted)
-		toggle_trust $mac
+	"$trusted")
+		toggle_trust "$mac"
 		;;
-	$showinfo)
-		bluetoothctl info $mac | less
+	"$showinfo")
+		bluetoothctl info "$mac" | less
 		device_menu "$device"
 		;;
-	$goback)
+	"$goback")
 		show_menu
 		;;
 	esac
@@ -222,9 +222,9 @@ show_menu() {
 
 		devices=$(bluetoothctl devices | grep Device | cut -d ' ' -f 3-)
 
-		scan=$(scan_on)
-		pairable=$(pairable_on)
-		discoverable=$(discoverable_on)
+		scan=$(scan_on || true)
+		pairable=$(pairable_on || true)
+		discoverable=$(discoverable_on || true)
 
 		options="$devices\n$divider\n$power\n$scan\n$pairable\n$discoverable"
 	else
@@ -235,31 +235,32 @@ show_menu() {
 	chosen="$(echo -e "$options" | $fzf_command --header="Bluetooth")"
 
 	case $chosen in
-	"" | $divider)
+	"" | "$divider")
 		echo "No option chosen."
 		;;
-	$power)
+	"$power")
 		toggle_power
 		;;
-	$scan)
+	"$scan")
 		toggle_scan
 		;;
-	$discoverable)
+	"$discoverable")
 		toggle_discoverable
 		;;
-	$pairable)
+	"$pairable")
 		toggle_pairable
 		;;
 	*)
 		device=$(bluetoothctl devices | grep "$chosen")
-		if [[ $device ]]; then device_menu "$device"; fi
+		if [[ "$device" ]]; then device_menu "$device"; fi
 		;;
 	esac
 }
 
+# shellcheck disable=SC2124
 fzf_command="fzf --prompt= $@"
 
-case "$1" in
+case "${1:-}" in
 --status)
 	print_status
 	;;

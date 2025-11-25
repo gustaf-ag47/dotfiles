@@ -1,3 +1,4 @@
+---
 version: '3.8'
 
 services:
@@ -11,7 +12,9 @@ services:
       - .:/workspace:ro
     working_dir: /workspace
     command: >
-      sh -c "echo 'Linter container ready. Use docker compose -f docker-compose.linters.yml run --rm linters <command>'"
+      sh -c "echo 'Linter container ready.
+      Use: docker compose -f docker-compose.linters.yml
+      run --rm linters <command>'"
 
   # Service for running shellcheck
   shellcheck:

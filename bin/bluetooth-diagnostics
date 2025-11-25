@@ -1,0 +1,196 @@
+#!/bin/bash
+set -euo pipefail
+
+# Bluetooth Diagnostics Script
+# Checks adapter info, signal strength (RSSI), connection quality, and range limitations
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}=== Bluetooth Diagnostics ===${NC}\n"
+
+# Check if bluetoothctl is available
+if ! command -v bluetoothctl &>/dev/null; then
+	echo -e "${RED}Error: bluetoothctl not found. Install bluez-utils.${NC}"
+	exit 1
+fi
+
+# 1. Bluetooth Adapter Information
+echo -e "${GREEN}1. Bluetooth Adapter Information${NC}"
+echo "─────────────────────────────────"
+
+# Get USB Bluetooth devices
+echo -e "${YELLOW}USB Devices:${NC}"
+lsusb | grep -i bluetooth || echo "No USB Bluetooth devices found"
+
+# Get controller info
+echo -e "\n${YELLOW}Controller Details:${NC}"
+bluetoothctl show | grep -E "(Controller|Name|Powered|Class|Manufacturer)"
+
+# Identify Bluetooth class
+echo -e "\n${YELLOW}Bluetooth Class Analysis:${NC}"
+class_hex=$(bluetoothctl show | grep "Class:" | awk '{print $2}')
+if [[ -n "$class_hex" ]]; then
+	class_dec=$((class_hex))
+	echo "Class (Hex): $class_hex"
+	echo "Class (Dec): $class_dec"
+
+	# Decode power class (bits 8-9 of Class of Device)
+	# Note: Most laptops don't expose power class in CoD, but we can infer from chipset
+	echo -e "\n${YELLOW}Estimated Power Class:${NC}"
+	if lsusb | grep -i "intel.*ax"; then
+		echo "Intel AX-series detected → Likely Class 2 (10m range, 2.5mW)"
+	elif lsusb | grep -i "realtek"; then
+		echo "Realtek detected → Check specific model for class"
+	else
+		echo "Unknown chipset → Run: modinfo btusb"
+	fi
+fi
+
+# 2. Module Information
+echo -e "\n${GREEN}2. Kernel Module Information${NC}"
+echo "─────────────────────────────────"
+echo -e "${YELLOW}Loaded Modules:${NC}"
+lsmod | grep -E "bluetooth|btusb|btintel" | awk '{print $1, $2}'
+
+echo -e "\n${YELLOW}btusb Parameters:${NC}"
+if [[ -d /sys/module/btusb/parameters ]]; then
+	for param in /sys/module/btusb/parameters/*; do
+		param_name=$(basename "$param")
+		param_value=$(cat "$param" 2>/dev/null || echo "N/A")
+		echo "  $param_name = $param_value"
+	done
+else
+	echo "  btusb module not loaded or parameters not available"
+fi
+
+# 3. Connected Devices & RSSI
+echo -e "\n${GREEN}3. Connected Devices & Signal Strength${NC}"
+echo "─────────────────────────────────"
+
+# Get connected devices
+connected_devices=$(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}')
+
+if [[ -z "$connected_devices" ]]; then
+	echo -e "${YELLOW}No devices currently connected.${NC}"
+	echo "Connect a device first: bluetooth"
+else
+	for mac in $connected_devices; do
+		device_name=$(bluetoothctl info "$mac" | grep "Name:" | cut -d: -f2- | xargs)
+		echo -e "${YELLOW}Device:${NC} $device_name"
+		echo -e "${YELLOW}MAC:${NC} $mac"
+
+		# Try to get RSSI using hcitool
+		if command -v hcitool &>/dev/null; then
+			rssi=$(hcitool rssi "$mac" 2>/dev/null | awk '{print $3}')
+			if [[ -n "$rssi" && "$rssi" != "Not" ]]; then
+				echo -e "${YELLOW}RSSI:${NC} $rssi dBm"
+
+				# Interpret RSSI
+				if [[ "$rssi" -gt -50 ]]; then
+					echo -e "${GREEN}  Signal: Excellent (very close)${NC}"
+				elif [[ "$rssi" -gt -70 ]]; then
+					echo -e "${GREEN}  Signal: Good${NC}"
+				elif [[ "$rssi" -gt -85 ]]; then
+					echo -e "${YELLOW}  Signal: Fair (at range limit)${NC}"
+				else
+					echo -e "${RED}  Signal: Poor (dropouts likely)${NC}"
+				fi
+			else
+				echo -e "${YELLOW}RSSI:${NC} Not available (device may not support RSSI reporting)"
+			fi
+		else
+			echo -e "${YELLOW}RSSI:${NC} hcitool not installed (install bluez-deprecated-tools)"
+		fi
+
+		# Get codec information
+		echo -e "\n${YELLOW}Codec Information:${NC}"
+		if pactl list sinks short | grep -q bluez; then
+			pactl list sinks | grep -A 20 "Name: bluez_sink" | grep -E "(bluez5.codec|State:|Volume:)" | head -5
+		else
+			echo "  No active Bluetooth audio sink"
+		fi
+
+		echo ""
+	done
+fi
+
+# 4. Interference Check
+echo -e "${GREEN}4. Interference Check${NC}"
+echo "─────────────────────────────────"
+
+# Check if WiFi is on 2.4 GHz
+echo -e "${YELLOW}WiFi Status:${NC}"
+if command -v iwconfig &>/dev/null; then
+	wifi_info=$(iwconfig 2>/dev/null | grep -A 5 "Mode:Managed")
+	if [[ -n "$wifi_info" ]]; then
+		freq=$(echo "$wifi_info" | grep "Frequency" | awk '{print $2}' | cut -d: -f2)
+		if [[ -n "$freq" ]]; then
+			echo "Frequency: $freq GHz"
+			if [[ "$freq" == 2.* ]]; then
+				echo -e "${YELLOW}  ⚠️  Warning: Using 2.4 GHz WiFi (interferes with Bluetooth)${NC}"
+				echo "     Recommendation: Switch to 5 GHz band for better Bluetooth performance"
+			else
+				echo -e "${GREEN}  ✓ Using 5 GHz WiFi (good for Bluetooth)${NC}"
+			fi
+		fi
+	else
+		echo "WiFi not connected or unavailable"
+	fi
+else
+	echo "iwconfig not available (install wireless-tools)"
+fi
+
+# Check USB 3.0 devices
+echo -e "\n${YELLOW}USB 3.0 Devices:${NC}"
+usb3_devices=$(lsusb -t | grep -c "5000M" || echo "0")
+if [[ "$usb3_devices" -gt 0 ]]; then
+	echo -e "${YELLOW}  ⚠️  $usb3_devices USB 3.0 device(s) detected${NC}"
+	echo "     USB 3.0 can interfere with 2.4 GHz Bluetooth"
+	echo "     Use shielded cables or USB 2.0 ports when possible"
+else
+	echo -e "${GREEN}  ✓ No USB 3.0 interference detected${NC}"
+fi
+
+# 5. Range Estimation
+echo -e "\n${GREEN}5. Range Estimation & Recommendations${NC}"
+echo "─────────────────────────────────"
+
+if lsusb | grep -iq "intel.*ax2"; then
+	echo -e "${YELLOW}Adapter Type:${NC} Intel AX-series (Class 2)"
+	echo -e "${YELLOW}Maximum Range:${NC} ~10 meters (33 feet)"
+	echo -e "${YELLOW}Through Walls:${NC} ~5-7 meters (16-23 feet)"
+	echo ""
+	echo -e "${RED}⚠️  Hardware Limitation:${NC} Your built-in Bluetooth is Class 2"
+	echo "   Software cannot extend range beyond 10 meters"
+	echo ""
+	echo -e "${GREEN}Recommendation:${NC} Purchase a Class 1 USB Bluetooth adapter"
+	echo "   - TP-Link UB500 (~\$20): 100m range, plug-and-play on Arch Linux"
+	echo "   - ASUS USB-BT500 (~\$25): Similar specs, good Linux support"
+	echo "   - Expected range: 30-50 meters through walls (3-5x improvement)"
+else
+	echo -e "${YELLOW}Adapter Type:${NC} $(lsusb | grep -i bluetooth | cut -d: -f3-)"
+	echo "Run this script with an external adapter to compare range"
+fi
+
+# 6. Quick Fixes
+echo -e "\n${GREEN}6. Quick Optimization Tips${NC}"
+echo "─────────────────────────────────"
+echo "1. Switch to SBC codec for better range (trade quality for distance)"
+echo "   Run: bluetooth-codec-switch sbc"
+echo ""
+echo "2. Disable USB autosuspend (prevents connection drops)"
+echo "   Automatically applied if you ran Tier 1 optimizations"
+echo ""
+echo "3. Minimize obstacles between laptop and headphones"
+echo "   - Keep laptop in open area, not under desk"
+echo "   - Reduce walls/metal objects in signal path"
+echo ""
+echo "4. Switch WiFi to 5 GHz band (if using 2.4 GHz)"
+echo "   Check router settings to prefer 5 GHz"
+
+echo -e "\n${BLUE}=== Diagnostics Complete ===${NC}"

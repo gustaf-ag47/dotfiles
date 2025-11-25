@@ -5,15 +5,18 @@
 
 # Check if we're in Wayland or X11
 if [ -n "$WAYLAND_DISPLAY" ]; then
+    # shellcheck disable=SC2034
     LAUNCHER="wofi"
     COPY_CMD="wl-copy"
 else
+    # shellcheck disable=SC2034
     LAUNCHER="rofi"
     COPY_CMD="xclip -selection clipboard"
 fi
 
 # Calculator with compact interface
 calculate() {
+    # shellcheck disable=SC2034
     local input="$1"
     local history="$2"
     
@@ -82,9 +85,8 @@ calculate() {
             if command -v bc &> /dev/null; then
                 # Prepare the expression for bc
                 expr=$(echo "$result" | sed 's/pi/3.14159265358979323846/g' | sed 's/e/2.71828182845904523536/g')
-                calc_result=$(echo "scale=10; $expr" | bc -l 2>/dev/null)
-                
-                if [ $? -eq 0 ] && [ -n "$calc_result" ]; then
+
+                if calc_result=$(echo "scale=10; $expr" | bc -l 2>/dev/null) && [ -n "$calc_result" ]; then
                     # Format the result nicely
                     formatted_result=$(echo "$calc_result" | sed 's/^\./0./' | sed 's/\.0*$//' | sed 's/\(.*\)\.\([0-9]*[1-9]\)0*$/\1.\2/')
                     

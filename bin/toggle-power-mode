@@ -122,7 +122,8 @@ enable_performance() {
 
 # Display current status
 display_status() {
-  local mode=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
+  local mode
+  mode=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
   log "🔎 Current Mode: $mode"
   if command -v cpupower &>/dev/null; then
     log "CPU Governor: $(cpupower frequency-info | grep 'governor is' | awk '{print $4}')"
@@ -135,8 +136,10 @@ display_status() {
 
 # Auto-switch based on battery and AC status
 auto_switch_mode() {
-  local battery_level=$(cat "$BATTERY_PATH/capacity" 2>/dev/null || echo 100)
-  local ac_status=$(cat "$AC_PATH/online" 2>/dev/null || echo 0)
+  local battery_level
+  battery_level=$(cat "$BATTERY_PATH/capacity" 2>/dev/null || echo 100)
+  local ac_status
+  ac_status=$(cat "$AC_PATH/online" 2>/dev/null || echo 0)
 
   if [[ "$ac_status" -eq 1 ]]; then
     log "AC connected. Enabling Performance Mode."
@@ -162,7 +165,8 @@ main() {
   fi
 
   # Toggle mode manually
-  local current_mode=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
+  local current_mode
+  current_mode=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
   if [[ "$current_mode" == "power-save" ]]; then
     enable_performance
   else

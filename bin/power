@@ -2,7 +2,7 @@
 
 options="Shutdown\nReboot\nLog Out"
 
-chosen=$(echo -e $options | wofi --show dmenu -i)
+chosen=$(echo -e "$options" | wofi --show dmenu -i)
 
 case $chosen in
 Shutdown) systemctl poweroff ;;

@@ -12,6 +12,7 @@ else
 	launcher="rofi -dmenu -p 'Select PDF/EPUB'"
 fi
 
+# shellcheck disable=SC2086
 selected_file=$(fd -e pdf -e epub "" "$search_dir" | eval $launcher)
 
 if [ -n "$selected_file" ]; then

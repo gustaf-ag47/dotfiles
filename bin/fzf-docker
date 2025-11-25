@@ -35,57 +35,58 @@ EOF
 
 # Container operations
 manage_containers() {
-    local action=$(echo -e "list\nstop\nstart\nrestart\nremove\nlogs\ninspect\nstats\nexec\nback" | \
-        fzf --prompt="Container action: " --height=40% --border --header="Select container action")
+    local action
+    action=$(echo -e "list\nstop\nstart\nrestart\nremove\nlogs\ninspect\nstats\nexec\nback" | \        fzf --prompt="Container action: " --height=40% --border --header="Select container action")
     
     case $action in
         list)
             docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
-            read -p "Press enter to continue..."
+            read -r -p "Press enter to continue..."
             ;;
         stop)
-            local container=$(docker ps --format "{{.ID}} {{.Names}} {{.Status}}" | \
-                fzf --prompt="Stop container: " --preview="docker inspect {1}" --preview-window=right:60%)
-            [ -n "$container" ] && docker stop $(echo $container | awk '{print $1}') && echo "✓ Stopped"
+            local container
+            container=$(docker ps --format "{{.ID}} {{.Names}} {{.Status}}" | \                fzf --prompt="Stop container: " --preview="docker inspect {1}" --preview-window=right:60%)
+            [ -n "$container" ] && docker stop "$(echo "$container" | awk '{print $1}')" && echo "✓ Stopped"
             ;;
         start)
-            local container=$(docker ps -a --filter "status=exited" --format "{{.ID}} {{.Names}}" | \
-                fzf --prompt="Start container: ")
-            [ -n "$container" ] && docker start $(echo $container | awk '{print $1}') && echo "✓ Started"
+            local container
+            container=$(docker ps -a --filter "status=exited" --format "{{.ID}} {{.Names}}" | \                fzf --prompt="Start container: ")
+            [ -n "$container" ] && docker start "$(echo "$container" | awk '{print $1}')" && echo "✓ Started"
             ;;
         restart)
-            local container=$(docker ps --format "{{.ID}} {{.Names}}" | \
-                fzf --prompt="Restart container: ")
-            [ -n "$container" ] && docker restart $(echo $container | awk '{print $1}') && echo "✓ Restarted"
+            local container
+            container=$(docker ps --format "{{.ID}} {{.Names}}" | \                fzf --prompt="Restart container: ")
+            [ -n "$container" ] && docker restart "$(echo "$container" | awk '{print $1}')" && echo "✓ Restarted"
             ;;
         remove)
-            local containers=$(docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" | \
-                fzf -m --prompt="Remove containers (tab to select multiple): " --header="TAB to select, ENTER to confirm")
+            local containers
+            containers=$(docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" | \                fzf -m --prompt="Remove containers (tab to select multiple): " --header="TAB to select, ENTER to confirm")
             if [ -n "$containers" ]; then
                 echo "$containers" | awk '{print $1}' | xargs docker rm -f
                 echo "✓ Removed selected containers"
             fi
             ;;
         logs)
-            local container=$(docker ps -a --format "{{.ID}} {{.Names}}" | \
-                fzf --prompt="View logs: ")
-            [ -n "$container" ] && docker logs -f $(echo $container | awk '{print $1}')
+            local container
+            container=$(docker ps -a --format "{{.ID}} {{.Names}}" | \                fzf --prompt="View logs: ")
+            [ -n "$container" ] && docker logs -f "$(echo "$container" | awk '{print $1}')"
             ;;
         inspect)
-            local container=$(docker ps -a --format "{{.ID}} {{.Names}}" | \
-                fzf --prompt="Inspect container: ")
-            [ -n "$container" ] && docker inspect $(echo $container | awk '{print $1}') | less
+            local container
+            container=$(docker ps -a --format "{{.ID}} {{.Names}}" | \                fzf --prompt="Inspect container: ")
+            [ -n "$container" ] && docker inspect "$(echo "$container" | awk '{print $1}')" | less
             ;;
         stats)
             docker stats --no-stream
-            read -p "Press enter to continue..."
+            read -r -p "Press enter to continue..."
             ;;
         exec)
-            local container=$(docker ps --format "{{.ID}} {{.Names}}" | \
-                fzf --prompt="Exec into container: ")
+            local container
+            container=$(docker ps --format "{{.ID}} {{.Names}}" | \                fzf --prompt="Exec into container: ")
             if [ -n "$container" ]; then
-                local shell=$(echo -e "bash\nsh\nzsh" | fzf --prompt="Select shell: " --height=20%)
-                [ -n "$shell" ] && docker exec -it $(echo $container | awk '{print $1}') $shell
+                local shell
+                shell=$(echo -e "bash\nsh\nzsh" | fzf --prompt="Select shell: " --height=20%)
+                [ -n "$shell" ] && docker exec -it "$(echo "$container" | awk '{print $1}')" "$shell"
             fi
             ;;
         back) return ;;
@@ -94,44 +95,44 @@ manage_containers() {
 
 # Image operations
 manage_images() {
-    local action=$(echo -e "list\nremove\npull\ntag\ninspect\nhistory\nback" | \
-        fzf --prompt="Image action: " --height=40% --border --header="Select image action")
+    local action
+    action=$(echo -e "list\nremove\npull\ntag\ninspect\nhistory\nback" | \        fzf --prompt="Image action: " --height=40% --border --header="Select image action")
     
     case $action in
         list)
             docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}"
-            read -p "Press enter to continue..."
+            read -r -p "Press enter to continue..."
             ;;
         remove)
-            local images=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}" | \
-                fzf -m --prompt="Remove images (tab to select multiple): " --header="TAB to select, ENTER to confirm")
+            local images
+            images=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}" | \                fzf -m --prompt="Remove images (tab to select multiple): " --header="TAB to select, ENTER to confirm")
             if [ -n "$images" ]; then
                 echo "$images" | awk '{print $2}' | xargs docker rmi -f
                 echo "✓ Removed selected images"
             fi
             ;;
         pull)
-            read -p "Image name (e.g., nginx:latest): " image
-            [ -n "$image" ] && docker pull $image
+            read -r -p "Image name (e.g., nginx:latest): " image
+            [ -n "$image" ] && docker pull "$image"
             ;;
         tag)
-            local image=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | \
-                fzf --prompt="Tag image: ")
+            local image
+            image=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | \                fzf --prompt="Tag image: ")
             if [ -n "$image" ]; then
-                read -p "New tag: " newtag
-                [ -n "$newtag" ] && docker tag $(echo $image | awk '{print $2}') $newtag && echo "✓ Tagged"
+                read -r -p "New tag: " newtag
+                [ -n "$newtag" ] && docker tag "$(echo "$image" | awk '{print $2}')" "$newtag" && echo "✓ Tagged"
             fi
             ;;
         inspect)
-            local image=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | \
-                fzf --prompt="Inspect image: ")
-            [ -n "$image" ] && docker inspect $(echo $image | awk '{print $2}') | less
+            local image
+            image=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | \                fzf --prompt="Inspect image: ")
+            [ -n "$image" ] && docker inspect "$(echo "$image" | awk '{print $2}')" | less
             ;;
         history)
-            local image=$(docker images --format "{{.Repository}}:{{.Tag}}" | \
-                fzf --prompt="Image history: ")
-            [ -n "$image" ] && docker history $image
-            read -p "Press enter to continue..."
+            local image
+            image=$(docker images --format "{{.Repository}}:{{.Tag}}" | \                fzf --prompt="Image history: ")
+            [ -n "$image" ] && docker history "$image"
+            read -r -p "Press enter to continue..."
             ;;
         back) return ;;
     esac
@@ -139,30 +140,30 @@ manage_images() {
 
 # Volume operations
 manage_volumes() {
-    local action=$(echo -e "list\nremove\ninspect\ncreate\nback" | \
-        fzf --prompt="Volume action: " --height=40% --border --header="Select volume action")
+    local action
+    action=$(echo -e "list\nremove\ninspect\ncreate\nback" | \        fzf --prompt="Volume action: " --height=40% --border --header="Select volume action")
     
     case $action in
         list)
             docker volume ls
-            read -p "Press enter to continue..."
+            read -r -p "Press enter to continue..."
             ;;
         remove)
-            local volumes=$(docker volume ls --format "{{.Name}}" | \
-                fzf -m --prompt="Remove volumes (tab to select multiple): " --header="TAB to select, ENTER to confirm")
+            local volumes
+            volumes=$(docker volume ls --format "{{.Name}}" | \                fzf -m --prompt="Remove volumes (tab to select multiple): " --header="TAB to select, ENTER to confirm")
             if [ -n "$volumes" ]; then
                 echo "$volumes" | xargs docker volume rm
                 echo "✓ Removed selected volumes"
             fi
             ;;
         inspect)
-            local volume=$(docker volume ls --format "{{.Name}}" | \
-                fzf --prompt="Inspect volume: ")
-            [ -n "$volume" ] && docker volume inspect $volume | less
+            local volume
+            volume=$(docker volume ls --format "{{.Name}}" | \                fzf --prompt="Inspect volume: ")
+            [ -n "$volume" ] && docker volume inspect "$volume" | less
             ;;
         create)
-            read -p "Volume name: " volname
-            [ -n "$volname" ] && docker volume create $volname && echo "✓ Created volume: $volname"
+            read -r -p "Volume name: " volname
+            [ -n "$volname" ] && docker volume create "$volname" && echo "✓ Created volume: $volname"
             ;;
         back) return ;;
     esac
@@ -170,30 +171,30 @@ manage_volumes() {
 
 # Network operations
 manage_networks() {
-    local action=$(echo -e "list\nremove\ninspect\ncreate\nback" | \
-        fzf --prompt="Network action: " --height=40% --border --header="Select network action")
+    local action
+    action=$(echo -e "list\nremove\ninspect\ncreate\nback" | \        fzf --prompt="Network action: " --height=40% --border --header="Select network action")
     
     case $action in
         list)
             docker network ls
-            read -p "Press enter to continue..."
+            read -r -p "Press enter to continue..."
             ;;
         remove)
-            local networks=$(docker network ls --format "{{.ID}} {{.Name}}" | grep -v "bridge\|host\|none" | \
-                fzf -m --prompt="Remove networks (tab to select multiple): " --header="TAB to select, ENTER to confirm")
+            local networks
+            networks=$(docker network ls --format "{{.ID}} {{.Name}}" | grep -v "bridge\|host\|none" | \                fzf -m --prompt="Remove networks (tab to select multiple): " --header="TAB to select, ENTER to confirm")
             if [ -n "$networks" ]; then
                 echo "$networks" | awk '{print $1}' | xargs docker network rm
                 echo "✓ Removed selected networks"
             fi
             ;;
         inspect)
-            local network=$(docker network ls --format "{{.Name}}" | \
-                fzf --prompt="Inspect network: ")
-            [ -n "$network" ] && docker network inspect $network | less
+            local network
+            network=$(docker network ls --format "{{.Name}}" | \                fzf --prompt="Inspect network: ")
+            [ -n "$network" ] && docker network inspect "$network" | less
             ;;
         create)
-            read -p "Network name: " netname
-            [ -n "$netname" ] && docker network create $netname && echo "✓ Created network: $netname"
+            read -r -p "Network name: " netname
+            [ -n "$netname" ] && docker network create "$netname" && echo "✓ Created network: $netname"
             ;;
         back) return ;;
     esac
@@ -201,17 +202,17 @@ manage_networks() {
 
 # Builder operations
 manage_builder() {
-    local action=$(echo -e "list\nprune\nback" | \
-        fzf --prompt="Builder action: " --height=40% --border --header="Select builder action")
+    local action
+    action=$(echo -e "list\nprune\nback" | \        fzf --prompt="Builder action: " --height=40% --border --header="Select builder action")
     
     case $action in
         list)
             docker builder du
-            read -p "Press enter to continue..."
+            read -r -p "Press enter to continue..."
             ;;
         prune)
             echo -e "${YELLOW}This will remove all build cache${NC}"
-            read -p "Continue? (y/N): " confirm
+            read -r -p "Continue? (y/N): " confirm
             if [[ $confirm == [yY] ]]; then
                 docker builder prune -af
                 echo "✓ Build cache cleared"
@@ -229,13 +230,13 @@ show_stats() {
     docker system df
     echo ""
     docker system df -v
-    read -p "Press enter to continue..."
+    read -r -p "Press enter to continue..."
 }
 
 # Cleanup operations
 cleanup_menu() {
-    local action=$(cat <<EOF | fzf --prompt="Cleanup action: " --height=50% --border --header="⚠️  Destructive operations"
-prune-containers    - Remove all stopped containers
+    local action
+    action=$(cat <<EOF | fzf --prompt="Cleanup action: " --height=50% --border --header="⚠️  Destructive operations"prune-containers    - Remove all stopped containers
 prune-images        - Remove unused images
 prune-volumes       - Remove unused volumes
 prune-networks      - Remove unused networks
@@ -267,27 +268,27 @@ EOF
             ;;
         nuclear-stop-all)
             echo -e "${RED}Stopping ALL containers...${NC}"
-            docker stop $(docker ps -aq) 2>/dev/null && echo "✓ All containers stopped" || echo "No containers running"
+            docker stop "$(docker ps -aq)" 2>/dev/null && echo "✓ All containers stopped" || echo "No containers running"
             ;;
         nuclear-remove-all)
             echo -e "${RED}⚠️  This will REMOVE ALL containers (including running ones)${NC}"
-            read -p "Type 'yes' to confirm: " confirm
+            read -r -p "Type 'yes' to confirm: " confirm
             if [[ $confirm == "yes" ]]; then
-                docker rm -f $(docker ps -aq) 2>/dev/null && echo "✓ All containers removed" || echo "No containers to remove"
+                docker rm -f "$(docker ps -aq)" 2>/dev/null && echo "✓ All containers removed" || echo "No containers to remove"
             fi
             ;;
         nuclear-images)
             echo -e "${RED}⚠️  This will REMOVE ALL images${NC}"
-            read -p "Type 'yes' to confirm: " confirm
+            read -r -p "Type 'yes' to confirm: " confirm
             if [[ $confirm == "yes" ]]; then
-                docker rmi -f $(docker images -q) 2>/dev/null && echo "✓ All images removed" || echo "No images to remove"
+                docker rmi -f "$(docker images -q)" 2>/dev/null && echo "✓ All images removed" || echo "No images to remove"
             fi
             ;;
         nuclear-volumes)
             echo -e "${RED}⚠️  This will REMOVE ALL volumes (data loss!)${NC}"
-            read -p "Type 'yes' to confirm: " confirm
+            read -r -p "Type 'yes' to confirm: " confirm
             if [[ $confirm == "yes" ]]; then
-                docker volume rm $(docker volume ls -q) 2>/dev/null && echo "✓ All volumes removed" || echo "No volumes to remove"
+                docker volume rm "$(docker volume ls -q)" 2>/dev/null && echo "✓ All volumes removed" || echo "No volumes to remove"
             fi
             ;;
         nuclear-full)
@@ -299,18 +300,18 @@ EOF
             echo "  - All networks"
             echo "  - All build cache"
             echo ""
-            read -p "Type 'NUKE' to confirm: " confirm
+            read -r -p "Type 'NUKE' to confirm: " confirm
             if [[ $confirm == "NUKE" ]]; then
                 echo "Stopping containers..."
-                docker stop $(docker ps -aq) 2>/dev/null || true
+                docker stop "$(docker ps -aq)" 2>/dev/null || true
                 echo "Removing containers..."
-                docker rm $(docker ps -aq) 2>/dev/null || true
+                docker rm "$(docker ps -aq)" 2>/dev/null || true
                 echo "Removing images..."
-                docker rmi -f $(docker images -q) 2>/dev/null || true
+                docker rmi -f "$(docker images -q)" 2>/dev/null || true
                 echo "Removing volumes..."
-                docker volume rm $(docker volume ls -q) 2>/dev/null || true
+                docker volume rm "$(docker volume ls -q)" 2>/dev/null || true
                 echo "Removing networks..."
-                docker network rm $(docker network ls -q) 2>/dev/null || true
+                docker network rm "$(docker network ls -q)" 2>/dev/null || true
                 echo "Pruning builder cache..."
                 docker builder prune -af 2>/dev/null || true
                 echo "Final system prune..."
@@ -323,7 +324,7 @@ EOF
         back) return ;;
     esac
     
-    [ "$action" != "back" ] && read -p "Press enter to continue..."
+    [ "$action" != "back" ] && read -r -p "Press enter to continue..."
 }
 
 # Main loop

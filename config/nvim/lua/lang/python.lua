@@ -15,7 +15,7 @@ M.plugins = {
       'neovim/nvim-lspconfig',
     },
   },
-  
+
   -- Python debugging
   {
     'mfussenegger/nvim-dap-python',
@@ -25,7 +25,7 @@ M.plugins = {
       -- Configuration will be handled in setup()
     end,
   },
-  
+
   -- Python virtual environment support
   {
     'linux-cultist/venv-selector.nvim',
@@ -40,13 +40,13 @@ M.plugins = {
       -- Configuration will be handled in setup()
     end,
   },
-  
+
   -- Enhanced Python syntax and indentation
   {
     'Vimjas/vim-python-pep8-indent',
     ft = 'python',
   },
-  
+
   -- Python text objects
   {
     'jeetsukumaran/vim-pythonsense',
@@ -83,7 +83,7 @@ M.lsp_config = {
     },
     single_file_support = true,
   },
-  
+
   pyright = {
     cmd = { 'pyright-langserver', '--stdio' },
     filetypes = { 'python' },
@@ -103,19 +103,19 @@ M.lsp_config = {
         analysis = {
           -- Type checking mode
           typeCheckingMode = 'basic', -- 'off', 'basic', 'strict'
-          
+
           -- Auto-import completions
           autoImportCompletions = true,
-          
+
           -- Diagnostic settings
           diagnosticMode = 'workspace', -- 'openFilesOnly', 'workspace'
-          
+
           -- Auto search paths
           autoSearchPaths = true,
-          
+
           -- Use library code for types
           useLibraryCodeForTypes = true,
-          
+
           -- Diagnostic severity overrides
           diagnosticSeverityOverrides = {
             reportUnusedImport = 'information',
@@ -129,14 +129,14 @@ M.lsp_config = {
             reportMissingImports = 'error',
             reportUndefinedVariable = 'error',
           },
-          
+
           -- Stub path
           stubPath = vim.fn.stdpath('data') .. '/lazy/python-type-stubs',
-          
+
           -- Extra paths for analysis
           extraPaths = {},
         },
-        
+
         -- Linting configuration
         linting = {
           enabled = true,
@@ -144,12 +144,12 @@ M.lsp_config = {
           flake8Enabled = false, -- We'll use external tools
           mypyEnabled = false,   -- We'll use external tools
         },
-        
-        -- Formatting configuration  
+
+        -- Formatting configuration
         formatting = {
           provider = 'ruff',
         },
-        
+
         -- Virtual environment detection
         defaultInterpreterPath = './venv/bin/python',
         venvPath = '.',
@@ -157,7 +157,7 @@ M.lsp_config = {
     },
     single_file_support = true,
   },
-  
+
   -- Alternative: pylsp (Python LSP Server)
   pylsp = {
     cmd = { 'pylsp' },
@@ -183,14 +183,14 @@ M.lsp_config = {
             include_class_objects = true,
             fuzzy = true,
           },
-          
+
           -- Jedi definition
           jedi_definition = { enabled = true },
           jedi_hover = { enabled = true },
           jedi_references = { enabled = true },
           jedi_signature_help = { enabled = true },
           jedi_symbols = { enabled = true, all_scopes = true },
-          
+
           -- Linting
           pycodestyle = {
             enabled = false, -- We'll use external linters
@@ -199,16 +199,16 @@ M.lsp_config = {
           pyflakes = { enabled = false },
           pylint = { enabled = false },
           mccabe = { enabled = false },
-          
+
           -- Formatting
           black = { enabled = false },
           autopep8 = { enabled = false },
           yapf = { enabled = false },
           ruff = { enabled = true },
-          
+
           -- Import sorting (handled by ruff)
           pyls_isort = { enabled = false },
-          
+
           -- Rope for refactoring
           rope_completion = { enabled = true },
           rope_autoimport = { enabled = true },
@@ -329,18 +329,18 @@ M.debug_config = {
 M.setup_keymaps = function(bufnr)
   local opts = { buffer = bufnr, silent = true }
   local map = vim.keymap.set
-  
+
   -- Python execution
   map('n', '<leader>pr', '<cmd>!python %<cr>', vim.tbl_extend('force', opts, { desc = 'Run Python file' }))
   map('n', '<leader>pR', function()
     local file = vim.fn.expand('%:p')
     vim.cmd('split | terminal python ' .. file)
   end, vim.tbl_extend('force', opts, { desc = 'Run Python file in terminal' }))
-  
+
   -- Virtual environment
   map('n', '<leader>pv', '<cmd>VenvSelect<cr>', vim.tbl_extend('force', opts, { desc = 'Select Python venv' }))
   map('n', '<leader>pV', '<cmd>VenvSelectCached<cr>', vim.tbl_extend('force', opts, { desc = 'Select cached venv' }))
-  
+
   -- Testing
   map('n', '<leader>pt', function()
     vim.cmd('!python -m pytest ' .. vim.fn.expand('%:p'))
@@ -349,7 +349,7 @@ M.setup_keymaps = function(bufnr)
   map('n', '<leader>pc', function()
     vim.cmd('!python -m pytest --cov=' .. vim.fn.expand('%:p:h'))
   end, vim.tbl_extend('force', opts, { desc = 'Run pytest with coverage' }))
-  
+
   -- Formatting and linting with Ruff
   map('n', '<leader>pf', function()
     vim.cmd('!ruff format ' .. vim.fn.expand('%:p'))
@@ -367,7 +367,7 @@ M.setup_keymaps = function(bufnr)
     vim.cmd('!ruff check --fix ' .. vim.fn.expand('%:p'))
     vim.cmd('edit!')
   end, vim.tbl_extend('force', opts, { desc = 'Format and fix with ruff' }))
-  
+
   -- REPL and interactive
   map('n', '<leader>pp', function()
     vim.cmd('split | terminal python')
@@ -375,16 +375,16 @@ M.setup_keymaps = function(bufnr)
   map('n', '<leader>pI', function()
     vim.cmd('split | terminal ipython')
   end, vim.tbl_extend('force', opts, { desc = 'Open IPython' }))
-  
+
   -- Package management
   map('n', '<leader>pP', '<cmd>!pip install -r requirements.txt<cr>', vim.tbl_extend('force', opts, { desc = 'Install requirements' }))
   map('n', '<leader>pF', '<cmd>!pip freeze > requirements.txt<cr>', vim.tbl_extend('force', opts, { desc = 'Freeze requirements' }))
-  
+
   -- Django specific
   map('n', '<leader>pd', '<cmd>!python manage.py runserver<cr>', vim.tbl_extend('force', opts, { desc = 'Django runserver' }))
   map('n', '<leader>pM', '<cmd>!python manage.py migrate<cr>', vim.tbl_extend('force', opts, { desc = 'Django migrate' }))
   map('n', '<leader>ps', '<cmd>!python manage.py shell<cr>', vim.tbl_extend('force', opts, { desc = 'Django shell' }))
-  
+
   -- Debugging
   map('n', '<leader>pdb', function()
     require('dap-python').test_method()
@@ -400,7 +400,7 @@ end
 -- Python-specific autocommands
 M.setup_autocmds = function()
   local augroup = vim.api.nvim_create_augroup('PythonConfig', { clear = true })
-  
+
   -- Python filetype settings and keymaps
   vim.api.nvim_create_autocmd('FileType', {
     group = augroup,
@@ -413,10 +413,10 @@ M.setup_autocmds = function()
       vim.opt_local.softtabstop = 4
       vim.opt_local.textwidth = 88
       vim.opt_local.colorcolumn = '88'
-      
+
       -- Setup Python-specific keymaps for this buffer
       M.setup_keymaps(event.buf)
-      
+
       -- Auto-format on save (optional)
       -- vim.api.nvim_create_autocmd('BufWritePre', {
       --   group = augroup,
@@ -427,7 +427,7 @@ M.setup_autocmds = function()
       -- })
     end,
   })
-  
+
   -- Detect Python virtual environments
   vim.api.nvim_create_autocmd({ 'VimEnter', 'DirChanged' }, {
     group = augroup,
@@ -440,7 +440,7 @@ M.setup_autocmds = function()
         './venv/Scripts/python.exe', -- Windows
         './env/Scripts/python.exe',   -- Windows
       }
-      
+
       for _, path in ipairs(venv_paths) do
         if vim.fn.executable(path) == 1 then
           vim.g.python3_host_prog = path
@@ -449,7 +449,7 @@ M.setup_autocmds = function()
       end
     end,
   })
-  
+
   -- Python docstring highlighting
   vim.api.nvim_create_autocmd('FileType', {
     group = augroup,
@@ -466,20 +466,20 @@ M.required_tools = {
   -- LSP server (choose one)
   'pyright',
   -- 'python-lsp-server',
-  
+
   -- Modern formatter and linter (replaces black, isort, flake8)
   'ruff',
-  
+
   -- Type checker
   'mypy',
-  
+
   -- Debugger
   'debugpy',
-  
+
   -- Testing
   'pytest',
   'pytest-cov',
-  
+
   -- Virtual environment tools
   'virtualenv',
   'pipenv',
@@ -489,17 +489,17 @@ M.required_tools = {
 -- Setup Python debugging
 M.setup_debugging = function()
   local dap_python = require('dap-python')
-  
+
   -- Auto-detect Python interpreter
   local python_path = vim.fn.exepath('python')
   local venv_python = vim.fn.getcwd() .. '/venv/bin/python'
-  
+
   if vim.fn.executable(venv_python) == 1 then
     python_path = venv_python
   end
-  
+
   dap_python.setup(python_path)
-  
+
   -- Custom test runner
   dap_python.test_runner = 'pytest'
 end
@@ -509,7 +509,7 @@ M.setup_venv_selector = function()
   require('venv-selector').setup({
     -- Auto-activate when entering Python projects
     auto_refresh = true,
-    
+
     -- Search paths for virtual environments
     path = {
       './venv',
@@ -518,13 +518,13 @@ M.setup_venv_selector = function()
       '~/.virtualenvs',
       '~/.pyenv/versions',
     },
-    
+
     -- Virtual environment names to look for
     name = { 'venv', 'env', '.venv' },
-    
+
     -- Show virtual environment in statusline
     stay_on_this_version = false,
-    
+
     -- DAP integration
     dap_enabled = true,
   })
@@ -534,31 +534,31 @@ end
 M.setup = function()
   -- Setup autocommands for Python files
   M.setup_autocmds()
-  
+
   -- Setup debugging
   if pcall(require, 'dap-python') then
     M.setup_debugging()
   end
-  
+
   -- Setup virtual environment selector
   if pcall(require, 'venv-selector') then
     M.setup_venv_selector()
   end
-  
+
   -- Register Python LSP configuration
   local lspconfig = require('lspconfig')
-  
+
   -- Get default capabilities from main LSP config
   local capabilities = vim.lsp.protocol.make_client_capabilities()
   local cmp_nvim_lsp = require('cmp_nvim_lsp')
   capabilities = vim.tbl_deep_extend('force', capabilities, cmp_nvim_lsp.default_capabilities())
-  
+
   -- Setup Ruff LSP for linting and formatting
   if lspconfig.ruff and M.lsp_config.ruff then
     local ruff_config = vim.tbl_deep_extend('force', M.lsp_config.ruff, { capabilities = capabilities })
     lspconfig.ruff.setup(ruff_config)
   end
-  
+
   -- Setup Pyright for type checking
   if lspconfig.pyright and M.lsp_config.pyright then
     local pyright_config = vim.tbl_deep_extend('force', M.lsp_config.pyright, { capabilities = capabilities })

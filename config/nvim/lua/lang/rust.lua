@@ -32,40 +32,40 @@ M.plugins = {
           on_attach = function(client, bufnr)
             -- Set up rust-specific keymaps
             local opts = { buffer = bufnr, silent = true }
-            
+
             -- Rust-specific actions
             vim.keymap.set('n', '<leader>rr', function()
               vim.cmd.RustLsp('runnables')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Run targets' }))
-            
+
             vim.keymap.set('n', '<leader>rd', function()
               vim.cmd.RustLsp('debuggables')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Debug targets' }))
-            
+
             vim.keymap.set('n', '<leader>re', function()
               vim.cmd.RustLsp('expandMacro')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Expand macro' }))
-            
+
             vim.keymap.set('n', '<leader>rc', function()
               vim.cmd.RustLsp('openCargo')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Open Cargo.toml' }))
-            
+
             vim.keymap.set('n', '<leader>rp', function()
               vim.cmd.RustLsp('parentModule')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Go to parent module' }))
-            
+
             vim.keymap.set('n', '<leader>rj', function()
               vim.cmd.RustLsp('joinLines')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Join lines' }))
-            
+
             vim.keymap.set('n', '<leader>rh', function()
               vim.cmd.RustLsp { 'hover', 'actions' }
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Hover actions' }))
-            
+
             vim.keymap.set('n', '<leader>ra', function()
               vim.cmd.RustLsp('codeAction')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Code actions' }))
-            
+
             -- Standard LSP keymaps
             vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, vim.tbl_extend('force', opts, { desc = 'Go to declaration' }))
             vim.keymap.set('n', 'gd', vim.lsp.buf.definition, vim.tbl_extend('force', opts, { desc = 'Go to definition' }))
@@ -204,7 +204,7 @@ M.plugins = {
       }
     end,
   },
-  
+
   -- Crates.nvim for Cargo.toml management
   {
     'saecki/crates.nvim',
@@ -228,24 +228,24 @@ M.plugins = {
           hover = true,
         },
       }
-      
+
       -- Crates.nvim keymaps
       local opts = { silent = true }
       vim.keymap.set('n', '<leader>ct', require('crates').toggle, vim.tbl_extend('force', opts, { desc = 'Crates: Toggle' }))
       vim.keymap.set('n', '<leader>cr', require('crates').reload, vim.tbl_extend('force', opts, { desc = 'Crates: Reload' }))
-      
+
       vim.keymap.set('n', '<leader>cv', require('crates').show_versions_popup, vim.tbl_extend('force', opts, { desc = 'Crates: Show versions' }))
       vim.keymap.set('n', '<leader>cf', require('crates').show_features_popup, vim.tbl_extend('force', opts, { desc = 'Crates: Show features' }))
       vim.keymap.set('n', '<leader>cd', require('crates').show_dependencies_popup, vim.tbl_extend('force', opts, { desc = 'Crates: Show dependencies' }))
-      
+
       vim.keymap.set('n', '<leader>cu', require('crates').update_crate, vim.tbl_extend('force', opts, { desc = 'Crates: Update crate' }))
       vim.keymap.set('v', '<leader>cu', require('crates').update_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update crates' }))
       vim.keymap.set('n', '<leader>ca', require('crates').update_all_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update all' }))
-      
+
       vim.keymap.set('n', '<leader>cU', require('crates').upgrade_crate, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade crate' }))
       vim.keymap.set('v', '<leader>cU', require('crates').upgrade_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade crates' }))
       vim.keymap.set('n', '<leader>cA', require('crates').upgrade_all_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade all' }))
-      
+
       vim.keymap.set('n', '<leader>cH', require('crates').open_homepage, vim.tbl_extend('force', opts, { desc = 'Crates: Open homepage' }))
       vim.keymap.set('n', '<leader>cR', require('crates').open_repository, vim.tbl_extend('force', opts, { desc = 'Crates: Open repository' }))
       vim.keymap.set('n', '<leader>cD', require('crates').open_documentation, vim.tbl_extend('force', opts, { desc = 'Crates: Open documentation' }))
@@ -294,10 +294,10 @@ M.setup = function()
       rs = 'rust',
     },
   }
-  
+
   -- Rust-specific autocommands
   local rust_group = vim.api.nvim_create_augroup('RustConfig', { clear = true })
-  
+
   -- Auto-format on save
   vim.api.nvim_create_autocmd('BufWritePre', {
     group = rust_group,
@@ -306,7 +306,7 @@ M.setup = function()
       vim.lsp.buf.format { async = false }
     end,
   })
-  
+
   -- Set up Rust-specific options
   vim.api.nvim_create_autocmd('FileType', {
     group = rust_group,
@@ -319,7 +319,7 @@ M.setup = function()
       vim.opt_local.colorcolumn = '100'
     end,
   })
-  
+
   -- Enhanced Rust snippets
   vim.api.nvim_create_autocmd('FileType', {
     group = rust_group,

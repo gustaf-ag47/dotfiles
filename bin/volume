@@ -1,3 +1,5 @@
+#!/bin/bash
+
 iDIR="$HOME/.config/mako/icons"
 
 get_volume() {
@@ -39,15 +41,15 @@ toggle_mute() {
 }
 
 toggle_mic() {
-	if [ "$(pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --get-mute)" == "0" ]; then
-		pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/microphone-mute.png" "Microphone Switched OFF"
-	elif [ "$(pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --get-mute)" == "1" ]; then
-		pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/microphone.png" "Microphone Switched ON"
+	if [ "$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-mute)" == "0" ]; then
+		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/microphone-mute.png" "Microphone Switched OFF"
+	elif [ "$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-mute)" == "1" ]; then
+		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/microphone.png" "Microphone Switched ON"
 	fi
 }
 
 get_mic_icon() {
-	current=$(pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --get-volume | awk '{print $1}')
+	current=$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-volume | awk '{print $1}')
 	if [[ "$current" -eq "0" ]]; then
 		echo "$iDIR/microphone.png"
 	elif [[ ("$current" -ge "0") && ("$current" -le "30") ]]; then
@@ -60,15 +62,15 @@ get_mic_icon() {
 }
 
 notify_mic_user() {
-	notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$(get_mic_icon)" "Mic-Level : $(pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --get-volume | awk '{print $1}') %"
+	notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$(get_mic_icon)" "Mic-Level : $(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-volume | awk '{print $1}') %"
 }
 
 inc_mic_volume() {
-	pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --change-volume +5 && notify_mic_user
+	pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --change-volume +5 && notify_mic_user
 }
 
 dec_mic_volume() {
-	pulsemixer --id source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1) --change-volume -5 && notify_mic_user
+	pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --change-volume -5 && notify_mic_user
 }
 
 if [[ "$1" == "--get" ]]; then

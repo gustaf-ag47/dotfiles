@@ -64,7 +64,8 @@ kill_process() {
   case "$state" in
   Z) # Zombie process
     echo "⚠️ Process $pid is a zombie. Killing its parent..."
-    local ppid=$(ps -o ppid= -p "$pid")
+    local ppid
+    ppid=$(ps -o ppid= -p "$pid")
     if [[ -n "$ppid" ]]; then
       kill -"$SIGNAL" "$ppid" && echo "✅ Parent process $ppid terminated."
     else
@@ -95,8 +96,10 @@ main() {
     --preview-window=up:3:wrap)
 
   if [[ -n "$selection" ]]; then
-    local pid=$(echo "$selection" | awk '{print $1}')
-    local state=$(echo "$selection" | awk '{print $4}')
+    local pid
+pid=$(echo "$selection" | awk '{print $1}')
+    local state
+state=$(echo "$selection" | awk '{print $4}')
     kill_process "$pid" "$state"
   else
     echo "⚠️ No process selected."

@@ -61,4 +61,4 @@ elif [[ $capacity -le 30 ]]; then
 fi
 
 # Output JSON for waybar
-echo "{\"text\": \"$icon BAT ${capacity}%${time_text}\", \"class\": \"$class\", \"tooltip\": \"Battery: ${capacity}%\nStatus: ${status}${time_text}\"}"
+printf '{"text": "%s BAT %s%%%s", "class": "%s", "tooltip": "Battery: %s%%\\nStatus: %s%s"}\n' "$icon" "$capacity" "$time_text" "$class" "$capacity" "$status" "$time_text"

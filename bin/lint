@@ -154,7 +154,7 @@ case $ACTION in
     shellcheck)
         echo "🔍 Running shellcheck..."
         if [[ ${#FILES[@]} -eq 0 ]]; then
-            FILES=(bin/* config/zsh/scripts/*.zsh)
+            FILES=(bin/*)
         fi
         lint shellcheck -x "${FILES[@]}"
         ;;

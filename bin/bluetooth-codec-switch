@@ -1,0 +1,206 @@
+#!/bin/bash
+set -euo pipefail
+
+# Bluetooth Codec Switcher
+# Quickly switch between LDAC (quality) and SBC (range) codecs
+# Usage: bluetooth-codec-switch [ldac|sbc|auto|status]
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+LDAC_CONFIG="$HOME/.config/wireplumber/wireplumber.conf.d/52-bluetooth-ldac.conf"
+
+show_usage() {
+	cat <<EOF
+${BLUE}Bluetooth Codec Switcher${NC}
+
+Usage: $(basename "$0") [OPTION]
+
+Options:
+  ldac     Switch to LDAC codec (high quality, shorter range)
+  sbc      Switch to SBC codec (lower quality, better range)
+  auto     Enable codec auto-selection
+  status   Show current codec configuration
+  help     Show this help message
+
+Examples:
+  $(basename "$0") ldac    # Maximum quality (990kbps), ~10m range
+  $(basename "$0") sbc     # Better range (~15m), acceptable quality
+  $(basename "$0") status  # Check current codec
+
+Note: Changes take effect after reconnecting Bluetooth device.
+EOF
+}
+
+show_status() {
+	echo -e "${BLUE}=== Current Bluetooth Codec Configuration ===${NC}\n"
+
+	if [[ -f "$LDAC_CONFIG" ]]; then
+		echo -e "${YELLOW}Configuration file:${NC} $LDAC_CONFIG"
+		echo ""
+
+		# Check LDAC quality setting
+		if grep -q 'bluez5.a2dp.ldac.quality.*"hq"' "$LDAC_CONFIG"; then
+			echo -e "${GREEN}✓ LDAC High Quality enabled (990kbps)${NC}"
+			echo "  Best audio quality, shorter range (~10m)"
+		elif grep -q 'bluez5.a2dp.ldac.quality.*"sq"' "$LDAC_CONFIG"; then
+			echo -e "${YELLOW}✓ LDAC Standard Quality enabled (660kbps)${NC}"
+			echo "  Good balance of quality and range"
+		elif grep -q 'bluez5.a2dp.ldac.quality.*"mq"' "$LDAC_CONFIG"; then
+			echo -e "${YELLOW}✓ LDAC Mobile Quality enabled (330kbps)${NC}"
+			echo "  Better range, reduced quality"
+		else
+			echo -e "${YELLOW}✓ LDAC Auto-adaptive quality${NC}"
+			echo "  Automatically adjusts based on signal strength"
+		fi
+
+		# Check codec priority
+		echo ""
+		if grep -q 'bluez5.codecs.*ldac' "$LDAC_CONFIG"; then
+			codecs=$(grep 'bluez5.codecs' "$LDAC_CONFIG" | sed 's/.*"\[//' | sed 's/\]".*//')
+			echo -e "${YELLOW}Codec Priority:${NC} $codecs"
+		fi
+	else
+		echo -e "${RED}Configuration file not found!${NC}"
+		echo "Expected location: $LDAC_CONFIG"
+		exit 1
+	fi
+
+	# Show currently connected devices and their codecs
+	echo -e "\n${YELLOW}Connected Devices:${NC}"
+	connected=$(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}')
+
+	if [[ -z "$connected" ]]; then
+		echo "  No devices currently connected"
+	else
+		for mac in $connected; do
+			name=$(bluetoothctl info "$mac" | grep "Name:" | cut -d: -f2- | xargs)
+			echo "  • $name ($mac)"
+
+			# Try to get codec from pactl
+			if pactl list sinks | grep -q "bluez_sink"; then
+				codec=$(pactl list sinks | grep -A 20 "bluez_sink" | grep "bluetooth.codec" | head -1 | awk '{print $3}' | tr -d '"')
+				if [[ -n "$codec" ]]; then
+					echo "    Codec: $codec"
+				fi
+			fi
+		done
+	fi
+
+	echo ""
+	echo -e "${BLUE}Tip:${NC} Reconnect your Bluetooth device to apply codec changes"
+}
+
+switch_to_ldac() {
+	echo -e "${BLUE}Switching to LDAC codec (High Quality)...${NC}\n"
+
+	if [[ ! -f "$LDAC_CONFIG" ]]; then
+		echo -e "${RED}Error: Configuration file not found!${NC}"
+		exit 1
+	fi
+
+	# Backup current config
+	cp "$LDAC_CONFIG" "${LDAC_CONFIG}.backup"
+
+	# Set LDAC HQ and prioritize LDAC
+	sed -i 's/\["bluez5.codecs"\] = ".*"/["bluez5.codecs"] = "[ ldac aac sbc sbc_xq ]"/' "$LDAC_CONFIG"
+	sed -i 's/\["bluez5.a2dp.ldac.quality"\] = ".*"/["bluez5.a2dp.ldac.quality"] = "hq"/' "$LDAC_CONFIG"
+
+	# Add lines if they don't exist
+	if ! grep -q "bluez5.a2dp.ldac.quality" "$LDAC_CONFIG"; then
+		sed -i '/bluez5.codecs/a\      ["bluez5.a2dp.ldac.quality"] = "hq",         -- 990kbps (high quality)' "$LDAC_CONFIG"
+	fi
+
+	echo -e "${GREEN}✓ LDAC High Quality enabled (990kbps)${NC}"
+	echo "  • Best audio quality"
+	echo "  • Maximum Bluetooth bitrate"
+	echo "  • Range: ~10 meters (Class 2 hardware limit)"
+	echo ""
+	echo -e "${YELLOW}Restart WirePlumber:${NC} systemctl --user restart wireplumber"
+	echo -e "${YELLOW}Then reconnect your device:${NC} bluetooth"
+}
+
+switch_to_sbc() {
+	echo -e "${BLUE}Switching to SBC codec (Better Range)...${NC}\n"
+
+	if [[ ! -f "$LDAC_CONFIG" ]]; then
+		echo -e "${RED}Error: Configuration file not found!${NC}"
+		exit 1
+	fi
+
+	# Backup current config
+	cp "$LDAC_CONFIG" "${LDAC_CONFIG}.backup"
+
+	# Prioritize SBC over LDAC
+	sed -i 's/\["bluez5.codecs"\] = ".*"/["bluez5.codecs"] = "[ sbc sbc_xq aac ldac ]"/' "$LDAC_CONFIG"
+
+	# Remove or comment out LDAC quality setting (forces SBC)
+	sed -i 's/^\([[:space:]]*\)\["bluez5.a2dp.ldac.quality"\]/\1-- ["bluez5.a2dp.ldac.quality"]/' "$LDAC_CONFIG"
+
+	echo -e "${GREEN}✓ SBC codec prioritized${NC}"
+	echo "  • Better range than LDAC"
+	echo "  • More stable connection"
+	echo "  • Range: ~15 meters (slightly better than LDAC)"
+	echo "  • Quality: Good (328kbps, not lossless)"
+	echo ""
+	echo -e "${YELLOW}Note:${NC} Still limited by Class 2 hardware (~10-15m max)"
+	echo ""
+	echo -e "${YELLOW}Restart WirePlumber:${NC} systemctl --user restart wireplumber"
+	echo -e "${YELLOW}Then reconnect your device:${NC} bluetooth"
+}
+
+switch_to_auto() {
+	echo -e "${BLUE}Enabling Auto-Adaptive Codec Selection...${NC}\n"
+
+	if [[ ! -f "$LDAC_CONFIG" ]]; then
+		echo -e "${RED}Error: Configuration file not found!${NC}"
+		exit 1
+	fi
+
+	# Backup current config
+	cp "$LDAC_CONFIG" "${LDAC_CONFIG}.backup"
+
+	# Set codec priority but remove fixed quality (allows auto)
+	sed -i 's/\["bluez5.codecs"\] = ".*"/["bluez5.codecs"] = "[ ldac aac sbc sbc_xq ]"/' "$LDAC_CONFIG"
+	sed -i 's/\["bluez5.a2dp.ldac.quality"\] = ".*"/-- ["bluez5.a2dp.ldac.quality"] = "auto"/' "$LDAC_CONFIG"
+
+	echo -e "${GREEN}✓ Auto-adaptive codec selection enabled${NC}"
+	echo "  • LDAC will automatically adjust between 990/660/330 kbps"
+	echo "  • Reduces bitrate when signal weakens"
+	echo "  • Best balance of quality and stability"
+	echo ""
+	echo -e "${YELLOW}Restart WirePlumber:${NC} systemctl --user restart wireplumber"
+	echo -e "${YELLOW}Then reconnect your device:${NC} bluetooth"
+}
+
+# Main
+case "${1:-}" in
+	ldac)
+		switch_to_ldac
+		;;
+	sbc)
+		switch_to_sbc
+		;;
+	auto)
+		switch_to_auto
+		;;
+	status)
+		show_status
+		;;
+	help|--help|-h)
+		show_usage
+		;;
+	"")
+		show_usage
+		exit 1
+		;;
+	*)
+		echo -e "${RED}Error: Unknown option '${1}'${NC}\n"
+		show_usage
+		exit 1
+		;;
+esac

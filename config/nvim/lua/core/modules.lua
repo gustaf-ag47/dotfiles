@@ -45,20 +45,20 @@ end
 M.load_features = function()
   local features = {
     'lsp',
-    'completion', 
+    'completion',
     'debugging',
     'sql_completion',
   }
-  
+
   local loaded_features = {}
-  
+
   for _, feature in ipairs(features) do
     local module_name = 'features.' .. feature
     local module = M.safe_require(module_name)
-    
+
     if module then
       loaded_features[feature] = module
-      
+
       -- Collect plugins from feature modules
       if module.plugins then
         for _, plugin in ipairs(module.plugins) do
@@ -67,7 +67,7 @@ M.load_features = function()
       end
     end
   end
-  
+
   return loaded_features
 end
 
@@ -82,16 +82,16 @@ M.load_languages = function()
     'dotenv',
     -- Add more languages as needed
   }
-  
+
   local loaded_languages = {}
-  
+
   for _, lang in ipairs(languages) do
     local module_name = 'lang.' .. lang
     local module = M.safe_require(module_name)
-    
+
     if module then
       loaded_languages[lang] = module
-      
+
       -- Collect plugins from language modules
       if module.plugins then
         for _, plugin in ipairs(module.plugins) do
@@ -100,7 +100,7 @@ M.load_languages = function()
       end
     end
   end
-  
+
   return loaded_languages
 end
 
@@ -111,18 +111,18 @@ M.load_utils = function()
     -- 'helpers',
     -- 'formatters',
   }
-  
+
   local loaded_utils = {}
-  
+
   for _, util in ipairs(utils) do
     local module_name = 'utils.' .. util
     local module = M.safe_require(module_name)
-    
+
     if module then
       loaded_utils[util] = module
     end
   end
-  
+
   return loaded_utils
 end
 
@@ -132,16 +132,16 @@ M.plugin_specs = {}
 -- Collect all plugin specifications from modules
 M.collect_plugins = function()
   M.plugin_specs = {}
-  
+
   -- Load features first (they provide base functionality)
   M.load_features()
-  
+
   -- Load languages second (they depend on features)
   M.load_languages()
-  
+
   -- Load utilities (independent)
   M.load_utils()
-  
+
   return M.plugin_specs
 end
 
@@ -157,12 +157,12 @@ end
 -- Health check for module system
 M.health_check = function()
   local status = M.get_status()
-  
+
   print('Module System Status:')
   print('  Loaded modules: ' .. #status.loaded)
   print('  Failed modules: ' .. #status.failed)
   print('  Plugin specs: ' .. status.plugin_count)
-  
+
   if #status.failed > 0 then
     print('  Failed modules:')
     for _, module in ipairs(status.failed) do
@@ -186,8 +186,8 @@ M.setup_modules = function()
       end
     end
   end
-  
-  -- Setup languages second (they depend on features) 
+
+  -- Setup languages second (they depend on features)
   for name, module in pairs(M.registry.loaded) do
     if name:match('^lang%.') and type(module.setup) == 'function' then
       local ok, err = pcall(module.setup)
@@ -200,7 +200,7 @@ M.setup_modules = function()
       end
     end
   end
-  
+
   -- Register cross-module dependencies
   M.register_cross_dependencies()
 end
@@ -218,7 +218,7 @@ M.register_cross_dependencies = function()
           end
         end
       end
-      
+
       -- Register debug configurations if available
       if module.debug_config then
         local debug_module = M.registry.loaded['features.debugging']
@@ -243,7 +243,7 @@ end
 M.setup = function()
   -- Collect all plugin specifications from modules
   local plugins = M.collect_plugins()
-  
+
   -- Setup modules after plugins are loaded via autocmd
   vim.api.nvim_create_autocmd('User', {
     pattern = 'LazyDone',
@@ -255,7 +255,7 @@ M.setup = function()
     end,
     once = true,
   })
-  
+
   return plugins
 end
 

@@ -8,13 +8,13 @@ local M = {}
 M.dependency_rules = {
   -- Core layer (Level 1) - can depend on nothing
   core = {},
-  
-  -- Utils layer (Level 1) - can depend on nothing  
+
+  -- Utils layer (Level 1) - can depend on nothing
   utils = {},
-  
+
   -- Features layer (Level 2) - can depend on core and utils only
   features = { 'core', 'utils' },
-  
+
   -- Languages layer (Level 3) - can depend on core, utils, and features, but NOT other languages
   languages = { 'core', 'utils', 'features' },
 }
@@ -25,15 +25,15 @@ M.validate_module_dependencies = function(module_name, dependencies)
   if not module_layer then
     return false, "Unknown module layer for: " .. module_name
   end
-  
+
   local allowed_layers = M.dependency_rules[module_layer]
-  
+
   for _, dep in ipairs(dependencies) do
     local dep_layer = M.get_module_layer(dep)
     if not dep_layer then
       return false, "Unknown dependency layer for: " .. dep
     end
-    
+
     -- Check if dependency layer is allowed
     if not vim.tbl_contains(allowed_layers, dep_layer) then
       return false, string.format(
@@ -41,12 +41,12 @@ M.validate_module_dependencies = function(module_name, dependencies)
         module_name, module_layer, dep, dep_layer
       )
     end
-    
+
     -- Special check: language modules cannot depend on other language modules
     if module_layer == 'languages' and dep_layer == 'languages' then
       local module_lang = M.get_language_from_module(module_name)
       local dep_lang = M.get_language_from_module(dep)
-      
+
       if module_lang ~= dep_lang then
         return false, string.format(
           "LANGUAGE ISOLATION VIOLATION: %s cannot depend on %s (cross-language dependency forbidden)",
@@ -55,7 +55,7 @@ M.validate_module_dependencies = function(module_name, dependencies)
       end
     end
   end
-  
+
   return true, "Dependencies valid"
 end
 
@@ -83,7 +83,7 @@ end
 -- Validate the entire modular system
 M.validate_system = function()
   local violations = {}
-  
+
   -- Define known modules and their dependencies
   local modules = {
     ['core.init'] = {},
@@ -92,23 +92,23 @@ M.validate_system = function()
     ['core.autocmds'] = {},
     ['core.lazy'] = { 'core.modules' },
     ['core.modules'] = {},
-    
+
     ['features.lsp'] = { 'core' },
     ['features.completion'] = { 'core' },
     ['features.debugging'] = { 'core' },
-    
+
     ['lang.go'] = { 'core', 'features.lsp', 'features.debugging' },
     ['lang.python'] = { 'core', 'features.lsp', 'features.debugging' },
     ['lang.sql'] = { 'core', 'features.lsp', 'features.completion' },
   }
-  
+
   for module_name, deps in pairs(modules) do
     local valid, message = M.validate_module_dependencies(module_name, deps)
     if not valid then
       table.insert(violations, message)
     end
   end
-  
+
   return violations
 end
 
@@ -123,20 +123,20 @@ M.check_runtime_dependencies = function(module_name, required_modules)
       ))
     end
   end
-  
+
   -- Validate dependency rules
   local valid, message = M.validate_module_dependencies(module_name, required_modules)
   if not valid then
     error("ARCHITECTURE VIOLATION: " .. message)
   end
-  
+
   return true
 end
 
 -- Health check for the modular system
 M.health_check = function()
   local violations = M.validate_system()
-  
+
   if #violations == 0 then
     print("✅ Dependency validation: PASSED")
     print("   - No dependency rule violations found")
@@ -154,13 +154,13 @@ end
 
 -- Language isolation check - ensures all language modules are completely isolated
 M.check_language_isolation = function()
-  local go_module = package.loaded['lang.go']
-  local python_module = package.loaded['lang.python']
-  local sql_module = package.loaded['lang.sql']
-  
+  local _go_module = package.loaded['lang.go']
+  local _python_module = package.loaded['lang.python']
+  local _sql_module = package.loaded['lang.sql']
+
   local issues = {}
   local languages = { 'go', 'python', 'sql' }
-  
+
   -- Check cross-language dependencies for each language module
   for _, lang in ipairs(languages) do
     local module = package.loaded['lang.' .. lang]
@@ -171,7 +171,7 @@ M.check_language_isolation = function()
           local dependency_key = other_lang .. '_dependency'
           if rawget(module, dependency_key) then
             table.insert(issues, string.format(
-              "%s module has illegal %s dependency", 
+              "%s module has illegal %s dependency",
               lang:upper(), other_lang:upper()
             ))
           end
@@ -179,7 +179,7 @@ M.check_language_isolation = function()
       end
     end
   end
-  
+
   if #issues == 0 then
     print("✅ Language isolation: PASSED")
     print("   - Go, Python, and SQL modules are completely isolated")

@@ -23,7 +23,7 @@ M.register = function(opts)
     buffer = opts.buffer,
     created_at = os.time(),
   }
-  
+
   -- Store in appropriate registry
   if opts.filetype then
     M.registry.by_filetype[opts.filetype] = M.registry.by_filetype[opts.filetype] or {}
@@ -42,10 +42,10 @@ end
 -- Enhanced keymap setter that automatically registers
 M.set = function(mode, lhs, rhs, opts)
   opts = opts or {}
-  
+
   -- Set the actual keymap
   vim.keymap.set(mode, lhs, rhs, opts)
-  
+
   -- Register for tracking
   M.register({
     lhs = lhs,
@@ -64,7 +64,7 @@ M.show_all = function()
   for _, map in ipairs(M.registry.global) do
     print(string.format('  %s: %s -> %s (%s)', map.mode, map.lhs, map.desc, map.module))
   end
-  
+
   print('\n=== By Filetype ===')
   for ft, maps in pairs(M.registry.by_filetype) do
     print(string.format('  %s:', ft))
@@ -72,7 +72,7 @@ M.show_all = function()
       print(string.format('    %s: %s -> %s', map.mode, map.lhs, map.desc))
     end
   end
-  
+
   print('\n=== By Module ===')
   for module, maps in pairs(M.registry.by_module) do
     print(string.format('  %s:', module))
@@ -95,7 +95,7 @@ end
 M.check_conflicts = function()
   local conflicts = {}
   local seen = {}
-  
+
   -- Check global conflicts
   for _, map in ipairs(M.registry.global) do
     local key = map.mode .. ':' .. map.lhs
@@ -109,38 +109,38 @@ M.check_conflicts = function()
       seen[key] = map
     end
   end
-  
+
   if #conflicts > 0 then
     print('❌ Keymap conflicts detected:')
     for _, conflict in ipairs(conflicts) do
-      print(string.format('  %s: %s vs %s', 
+      print(string.format('  %s: %s vs %s',
         conflict.key, conflict.first.module, conflict.second.module))
     end
   else
     print('✅ No keymap conflicts detected')
   end
-  
+
   return conflicts
 end
 
 -- Export keymap documentation
 M.export_docs = function(format)
   format = format or 'markdown'
-  
+
   if format == 'markdown' then
     local lines = { '# Keybinding Reference', '' }
-    
+
     -- Global keymaps
     table.insert(lines, '## Global Keybindings')
     table.insert(lines, '')
     table.insert(lines, '| Mode | Key | Description | Module |')
     table.insert(lines, '|------|-----|-------------|--------|')
-    
+
     for _, map in ipairs(M.registry.global) do
       table.insert(lines, string.format('| %s | `%s` | %s | %s |',
         map.mode, map.lhs, map.desc, map.module))
     end
-    
+
     -- Language-specific keymaps
     for ft, maps in pairs(M.registry.by_filetype) do
       table.insert(lines, '')
@@ -148,13 +148,13 @@ M.export_docs = function(format)
       table.insert(lines, '')
       table.insert(lines, '| Mode | Key | Description |')
       table.insert(lines, '|------|-----|-------------|')
-      
+
       for _, map in ipairs(maps) do
         table.insert(lines, string.format('| %s | `%s` | %s |',
           map.mode, map.lhs, map.desc))
       end
     end
-    
+
     return table.concat(lines, '\n')
   end
 end
@@ -167,26 +167,26 @@ M.create_commands = function()
     else
       M.show_for_filetype(opts.args)
     end
-  end, { 
-    nargs = '?', 
+  end, {
+    nargs = '?',
     complete = function()
       return vim.tbl_keys(M.registry.by_filetype)
     end,
     desc = 'Show keymaps (optionally for specific filetype)'
   })
-  
+
   vim.api.nvim_create_user_command('KeymapConflicts', function()
     M.check_conflicts()
   end, { desc = 'Check for keymap conflicts' })
-  
+
   vim.api.nvim_create_user_command('KeymapDocs', function(opts)
     local docs = M.export_docs(opts.args)
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(docs, '\n'))
     vim.api.nvim_buf_set_option(buf, 'filetype', 'markdown')
     vim.api.nvim_set_current_buf(buf)
-  end, { 
-    nargs = '?', 
+  end, {
+    nargs = '?',
     complete = function() return { 'markdown' } end,
     desc = 'Generate keymap documentation'
   })
