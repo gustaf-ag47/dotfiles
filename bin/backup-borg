@@ -1,12 +1,18 @@
 #!/bin/bash
 
+# Configuration - set these in your environment or local config
+# BORG_BACKUP_DRIVE: Mount point for backup drive (e.g., /run/media/$USER/DRIVE-UUID)
+# BORG_BACKUP_DEVICE: Device to mount if not mounted (e.g., /dev/sda1)
+
 SRC_DIR="$SYNC"
-REPO_DIR="/run/media/$USER/7E36-49D3/borg-repo"
+BACKUP_DRIVE="${BORG_BACKUP_DRIVE:-/run/media/$USER/backup-drive}"
+REPO_DIR="${BACKUP_DRIVE}/borg-repo"
+BACKUP_DEVICE="${BORG_BACKUP_DEVICE:-/dev/sda1}"
 DATE=$(date +"%Y-%m-%d")
 
-if ! mountpoint -q /run/media/$USER/7E36-49D3; then
+if ! mountpoint -q "$BACKUP_DRIVE"; then
 	echo "External drive is not mounted. Mounting now..."
-	if ! sudo mount /dev/sda1 /mnt/backup; then
+	if ! sudo mount "$BACKUP_DEVICE" /mnt/backup; then
 		echo "Failed to mount the external drive. Exiting."
 		exit 1
 	fi

@@ -18,7 +18,9 @@ RUN useradd -m -G wheel tester && echo 'tester ALL=(ALL) NOPASSWD: ALL' >/etc/su
 USER tester
 WORKDIR /home/tester
 
-RUN git clone https://github.com/example-user/dotfiles.git
+# Clone dotfiles - replace with your own repo URL
+ARG DOTFILES_REPO=https://github.com/example/dotfiles.git
+RUN git clone ${DOTFILES_REPO}
 
 RUN cd dotfiles && make install
 
