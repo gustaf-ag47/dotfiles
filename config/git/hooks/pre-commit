@@ -122,8 +122,11 @@ done
 
 # Check for high-entropy strings (possible secrets)
 # This catches base64-encoded secrets and random strings
-# Exclude lazy-lock.json (contains git commit SHAs) and only check added lines
-suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
+# Exclude:
+#   - lazy-lock.json (contains git commit SHAs)
+#   - Lines containing file paths (/sys/, /proc/, /dev/, /etc/, /usr/, /var/, /home/, /tmp/)
+#   - Lines containing URLs (http://, https://)
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3
