@@ -21,3 +21,4 @@ config/tmux/plugins/**
 // Syncthing's own conflict files (belt and suspenders)
 *.sync-conflict-*
 .sync-conflict-*
+config/gui/Wayland/hypr/host.conf
