@@ -74,7 +74,8 @@ source $ZDOTDIR/scripts/functions.zsh
 source $ZDOTDIR/aliases
 
 # Host-specific configuration (based on hostname)
-HOST_ZSH_CONF="$DOTFILES/config/zsh/hosts/$(hostname).zsh"
+# $HOST is a built-in zsh variable containing the hostname
+HOST_ZSH_CONF="$DOTFILES/config/zsh/hosts/$HOST.zsh"
 [[ -f "$HOST_ZSH_CONF" ]] && source "$HOST_ZSH_CONF"
 
 # zsh line editor
