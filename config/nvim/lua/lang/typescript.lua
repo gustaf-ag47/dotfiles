@@ -26,18 +26,7 @@ M.plugins = {
           vim.keymap.set('n', '<leader>th', '<cmd>TSToolsFileReferences<cr>', vim.tbl_extend('force', opts, { desc = 'TS: File references' }))
           vim.keymap.set('n', '<leader>ti', '<cmd>TSToolsRenameFile<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Rename file' }))
 
-          -- Standard LSP keymaps
-          vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, vim.tbl_extend('force', opts, { desc = 'Go to declaration' }))
-          vim.keymap.set('n', 'gd', vim.lsp.buf.definition, vim.tbl_extend('force', opts, { desc = 'Go to definition' }))
-          vim.keymap.set('n', 'K', vim.lsp.buf.hover, vim.tbl_extend('force', opts, { desc = 'Hover documentation' }))
-          vim.keymap.set('n', 'gi', vim.lsp.buf.implementation, vim.tbl_extend('force', opts, { desc = 'Go to implementation' }))
-          vim.keymap.set('n', '<C-k>', vim.lsp.buf.signature_help, vim.tbl_extend('force', opts, { desc = 'Signature help' }))
-          vim.keymap.set('n', 'gr', vim.lsp.buf.references, vim.tbl_extend('force', opts, { desc = 'Find references' }))
-          vim.keymap.set('n', '<leader>rn', vim.lsp.buf.rename, vim.tbl_extend('force', opts, { desc = 'Rename symbol' }))
-          vim.keymap.set('n', '<leader>ca', vim.lsp.buf.code_action, vim.tbl_extend('force', opts, { desc = 'Code actions' }))
-          vim.keymap.set('n', '<leader>f', function()
-            vim.lsp.buf.format { async = true }
-          end, vim.tbl_extend('force', opts, { desc = 'Format document' }))
+          -- NOTE: Standard LSP keymaps (gd, gr, K, etc.) are set globally in features/lsp.lua
         end,
         settings = {
           -- TypeScript server settings

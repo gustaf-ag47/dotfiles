@@ -177,6 +177,36 @@ window#waybar {
   100% { opacity: 1; }
 }
 
+/* CPU - System monitoring */
+#cpu {
+  color: #9ece6a;
+  padding: 8px 12px;
+  margin: 0 2px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: rgba(158, 206, 106, 0.1);
+}
+
+/* Memory - System monitoring */
+#memory {
+  color: #e0af68;
+  padding: 8px 12px;
+  margin: 0 2px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: rgba(224, 175, 104, 0.1);
+}
+
+/* Disk - System monitoring */
+#disk {
+  color: #7dcfff;
+  padding: 8px 12px;
+  margin: 0 2px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: rgba(125, 207, 255, 0.1);
+}
+
 /* Audio - Dynamic styling */
 #pulseaudio {
   color: #bb9af7;

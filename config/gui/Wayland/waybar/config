@@ -5,7 +5,7 @@
   "spacing": 8,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["tray", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
+  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
   
   "hyprland/workspaces": {
     "disable-scroll": true,
@@ -46,7 +46,28 @@
     "spacing": 8,
     "show-passive-items": true
   },
-  
+
+  "cpu": {
+    "format": " {usage}%",
+    "tooltip": true,
+    "interval": 5,
+    "on-click": "kitty -e btop"
+  },
+
+  "memory": {
+    "format": " {}%",
+    "tooltip-format": "{used:0.1f}GiB / {total:0.1f}GiB",
+    "interval": 5,
+    "on-click": "kitty -e btop"
+  },
+
+  "disk": {
+    "format": " {percentage_used}%",
+    "tooltip-format": "{used} / {total} ({path})",
+    "path": "/",
+    "interval": 30
+  },
+
   "clock": {
     "format": "󰃭 {:%a %b %d  󰥔 %H:%M}",
     "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",

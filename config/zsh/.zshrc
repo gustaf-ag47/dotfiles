@@ -44,6 +44,13 @@ if command -v starship > /dev/null; then
   eval "$(starship init zsh)"
 fi
 
+# Initialize Atuin (shell history sync)
+if command -v atuin > /dev/null; then
+  eval "$(atuin init zsh --disable-up-arrow)"
+  # Use Ctrl+R for Atuin search (replaces fzf history)
+  # Up arrow remains for standard history navigation
+fi
+
 _comp_options+=(globdots)
 source $ZDOTDIR/external/completion.zsh
 source $ZDOTDIR/external/bd.zsh

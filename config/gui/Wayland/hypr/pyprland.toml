@@ -1,0 +1,33 @@
+# Pyprland configuration
+# Scratchpads and other Hyprland extensions
+
+[pyprland]
+plugins = ["scratchpads"]
+
+[scratchpads.term]
+command = "kitty --class=scratchpad"
+class = "scratchpad"
+size = "75% 60%"
+position = "center"
+animation = "fromTop"
+
+[scratchpads.btop]
+command = "kitty --class=btop-scratch btop"
+class = "btop-scratch"
+size = "80% 80%"
+position = "center"
+animation = "fromTop"
+
+[scratchpads.lazygit]
+command = "kitty --class=lazygit-scratch lazygit"
+class = "lazygit-scratch"
+size = "90% 85%"
+position = "center"
+animation = "fromTop"
+
+[scratchpads.yazi]
+command = "kitty --class=yazi-scratch yazi"
+class = "yazi-scratch"
+size = "80% 80%"
+position = "center"
+animation = "fromTop"

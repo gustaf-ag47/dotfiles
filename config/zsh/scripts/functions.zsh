@@ -123,3 +123,14 @@ r() {
 	git rebase "$target_branch"
 	echo "Rebase complete."
 }
+
+# Yazi file manager wrapper - cd to directory on exit
+y() {
+	local tmp
+	tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+	yazi "$@" --cwd-file="$tmp"
+	if cwd="$(cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+		cd -- "$cwd" || return
+	fi
+	rm -f -- "$tmp"
+}

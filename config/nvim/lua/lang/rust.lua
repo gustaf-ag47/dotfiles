@@ -66,18 +66,7 @@ M.plugins = {
               vim.cmd.RustLsp('codeAction')
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Code actions' }))
 
-            -- Standard LSP keymaps
-            vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, vim.tbl_extend('force', opts, { desc = 'Go to declaration' }))
-            vim.keymap.set('n', 'gd', vim.lsp.buf.definition, vim.tbl_extend('force', opts, { desc = 'Go to definition' }))
-            vim.keymap.set('n', 'K', vim.lsp.buf.hover, vim.tbl_extend('force', opts, { desc = 'Hover documentation' }))
-            vim.keymap.set('n', 'gi', vim.lsp.buf.implementation, vim.tbl_extend('force', opts, { desc = 'Go to implementation' }))
-            vim.keymap.set('n', '<C-k>', vim.lsp.buf.signature_help, vim.tbl_extend('force', opts, { desc = 'Signature help' }))
-            vim.keymap.set('n', 'gr', vim.lsp.buf.references, vim.tbl_extend('force', opts, { desc = 'Find references' }))
-            vim.keymap.set('n', '<leader>rn', vim.lsp.buf.rename, vim.tbl_extend('force', opts, { desc = 'Rename symbol' }))
-            vim.keymap.set('n', '<leader>ca', vim.lsp.buf.code_action, vim.tbl_extend('force', opts, { desc = 'Code actions' }))
-            vim.keymap.set('n', '<leader>f', function()
-              vim.lsp.buf.format { async = true }
-            end, vim.tbl_extend('force', opts, { desc = 'Format document' }))
+            -- NOTE: Standard LSP keymaps (gd, gr, K, etc.) are set globally in features/lsp.lua
           end,
           default_settings = {
             -- rust-analyzer language server configuration
@@ -240,7 +229,7 @@ M.plugins = {
 
       vim.keymap.set('n', '<leader>cu', require('crates').update_crate, vim.tbl_extend('force', opts, { desc = 'Crates: Update crate' }))
       vim.keymap.set('v', '<leader>cu', require('crates').update_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update crates' }))
-      vim.keymap.set('n', '<leader>ca', require('crates').update_all_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update all' }))
+      vim.keymap.set('n', '<leader>cua', require('crates').update_all_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update all' }))
 
       vim.keymap.set('n', '<leader>cU', require('crates').upgrade_crate, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade crate' }))
       vim.keymap.set('v', '<leader>cU', require('crates').upgrade_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade crates' }))

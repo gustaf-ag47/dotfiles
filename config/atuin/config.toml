@@ -1,0 +1,71 @@
+# Atuin Configuration
+# https://docs.atuin.sh/configuration/config/
+
+## Database Settings
+db_path = "~/.local/share/atuin/history.db"
+
+## Search Settings
+# How to search: prefix (default), fulltext, fuzzy, skim
+search_mode = "fuzzy"
+
+# Which direction to show results: top_down, bottom_up
+style = "compact"
+
+# Show help text in TUI
+show_help = true
+
+# Show preview of the selected command
+show_preview = true
+
+# Maximum preview height
+max_preview_height = 4
+
+# What to show: global (all hosts), host (current host), session (current session), directory
+filter_mode = "global"
+
+# Fuzzy filter mode for searching
+filter_mode_shell_up_key_binding = "session"
+
+## Sync Settings
+# Self-hosted Atuin server URL
+# Set this to your self-hosted server address
+# sync_address = "https://atuin.yourdomain.com"
+
+# Sync frequency in seconds (default: 1 hour)
+sync_frequency = "1h"
+
+# Auto-sync on shell start
+auto_sync = true
+
+## Key Bindings
+# Use Ctrl+R for history search
+ctrl_r = "fullscreen"
+
+# Use up arrow for history navigation
+up_arrow = "filter"
+
+## Privacy Settings
+# Commands to exclude from history (regex patterns)
+history_filter = [
+    "^echo .*['\"].*password.*['\"]",
+    "^export .*KEY.*=",
+    "^export .*SECRET.*=",
+    "^export .*TOKEN.*=",
+    "^export .*PASSWORD.*=",
+]
+
+# Don't record commands with secrets
+secrets_filter = true
+
+## UI Settings
+# Inline height for inline style
+inline_height = 0
+
+# Enter behavior: vim_normal, vim_insert
+enter_accept = true
+
+## Stats
+# Default period for stats: day, week, month, year, all
+[stats]
+common_subcommands = ["cargo", "go", "git", "npm", "yarn", "pnpm", "docker", "kubectl"]
+common_prefix = ["sudo"]

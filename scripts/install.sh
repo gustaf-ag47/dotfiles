@@ -128,6 +128,12 @@ link_config "$DOTFILES/config/environment.d/wayland.conf" "$XDG_CONFIG_HOME/envi
 # Link starship configuration
 link_config "$DOTFILES/config/starship.toml" "$XDG_CONFIG_HOME/starship.toml"
 
+# Link atuin configuration (shell history sync)
+link_config "$DOTFILES/config/atuin" "$XDG_CONFIG_HOME/atuin"
+
+# Link yazi configuration (file manager)
+[ -d "$DOTFILES/config/yazi" ] && link_config "$DOTFILES/config/yazi" "$XDG_CONFIG_HOME/yazi"
+
 # Link bin directory (utility scripts)
 mkdir -p "$HOME/.local/bin"
 for script in "$DOTFILES/bin/"*; do

@@ -1,0 +1,276 @@
+# Tokyo Night Theme for Yazi
+# Based on https://github.com/folke/tokyonight.nvim
+
+[manager]
+cwd = { fg = "#7aa2f7" }
+
+# File highlighting
+hovered = { fg = "#1a1b26", bg = "#7aa2f7", bold = true }
+preview_hovered = { underline = true }
+
+# Selection
+find_keyword = { fg = "#1a1b26", bg = "#e0af68", bold = true }
+find_position = { fg = "#e0af68", bg = "reset", bold = true }
+
+# Markers
+marker_copied = { fg = "#9ece6a", bg = "#9ece6a" }
+marker_cut = { fg = "#f7768e", bg = "#f7768e" }
+marker_marked = { fg = "#7dcfff", bg = "#7dcfff" }
+marker_selected = { fg = "#bb9af7", bg = "#bb9af7" }
+
+# Tabs
+tab_active = { fg = "#1a1b26", bg = "#7aa2f7", bold = true }
+tab_inactive = { fg = "#565f89", bg = "#24283b" }
+tab_width = 1
+
+# Counts
+count_copied = { fg = "#1a1b26", bg = "#9ece6a" }
+count_cut = { fg = "#1a1b26", bg = "#f7768e" }
+count_selected = { fg = "#1a1b26", bg = "#bb9af7" }
+
+# Borders
+border_symbol = "│"
+border_style = { fg = "#3b4261" }
+
+# Folder offset (padding)
+folder_offset = [1, 0, 1, 0]
+
+[status]
+separator_open = ""
+separator_close = ""
+separator_style = { fg = "#24283b", bg = "#24283b" }
+
+# Left side
+mode_normal = { fg = "#1a1b26", bg = "#7aa2f7", bold = true }
+mode_select = { fg = "#1a1b26", bg = "#bb9af7", bold = true }
+mode_unset = { fg = "#1a1b26", bg = "#f7768e", bold = true }
+
+progress_label = { fg = "#c0caf5", bold = true }
+progress_normal = { fg = "#7aa2f7", bg = "#24283b" }
+progress_error = { fg = "#f7768e", bg = "#24283b" }
+
+# Right side
+permissions_t = { fg = "#7aa2f7" }
+permissions_r = { fg = "#e0af68" }
+permissions_w = { fg = "#f7768e" }
+permissions_x = { fg = "#9ece6a" }
+permissions_s = { fg = "#565f89" }
+
+[input]
+border = { fg = "#7aa2f7" }
+title = { fg = "#7aa2f7" }
+value = { fg = "#c0caf5" }
+selected = { reversed = true }
+
+[select]
+border = { fg = "#7aa2f7" }
+active = { fg = "#bb9af7", bold = true }
+inactive = { fg = "#565f89" }
+
+[tasks]
+border = { fg = "#7aa2f7" }
+title = { fg = "#7aa2f7" }
+hovered = { fg = "#bb9af7", underline = true }
+
+[which]
+cols = 3
+mask = { bg = "#1a1b26" }
+cand = { fg = "#7dcfff" }
+rest = { fg = "#565f89" }
+desc = { fg = "#bb9af7" }
+separator = "  "
+separator_style = { fg = "#3b4261" }
+
+[help]
+on = { fg = "#7aa2f7" }
+run = { fg = "#bb9af7" }
+desc = { fg = "#c0caf5" }
+hovered = { bg = "#24283b", bold = true }
+footer = { fg = "#565f89", bg = "#1a1b26" }
+
+[notify]
+title_info = { fg = "#7aa2f7" }
+title_warn = { fg = "#e0af68" }
+title_error = { fg = "#f7768e" }
+
+[completion]
+border = { fg = "#7aa2f7" }
+active = { bg = "#24283b" }
+inactive = {}
+
+icon_file = ""
+icon_folder = ""
+icon_command = ""
+
+# File types
+[filetype]
+rules = [
+    # Images
+    { mime = "image/*", fg = "#bb9af7" },
+
+    # Videos
+    { mime = "video/*", fg = "#e0af68" },
+    { mime = "audio/*", fg = "#e0af68" },
+
+    # Archives
+    { mime = "application/zip", fg = "#f7768e" },
+    { mime = "application/gzip", fg = "#f7768e" },
+    { mime = "application/x-tar", fg = "#f7768e" },
+    { mime = "application/x-bzip", fg = "#f7768e" },
+    { mime = "application/x-bzip2", fg = "#f7768e" },
+    { mime = "application/x-7z-compressed", fg = "#f7768e" },
+    { mime = "application/x-rar", fg = "#f7768e" },
+
+    # Documents
+    { mime = "application/pdf", fg = "#f7768e" },
+    { mime = "application/doc", fg = "#7aa2f7" },
+    { mime = "application/msword", fg = "#7aa2f7" },
+
+    # Text files
+    { mime = "text/*", fg = "#9ece6a" },
+    { mime = "application/json", fg = "#7dcfff" },
+    { mime = "application/xml", fg = "#7dcfff" },
+    { mime = "application/toml", fg = "#7dcfff" },
+    { mime = "application/yaml", fg = "#7dcfff" },
+
+    # Executables
+    { mime = "application/x-executable", fg = "#9ece6a", bold = true },
+    { mime = "application/x-sharedlib", fg = "#9ece6a" },
+
+    # Special
+    { name = "*.git*", fg = "#ff9e64" },
+    { name = ".env*", fg = "#e0af68" },
+    { name = "Makefile", fg = "#9ece6a" },
+    { name = "Dockerfile*", fg = "#7dcfff" },
+    { name = "*.md", fg = "#c0caf5" },
+    { name = "*.lua", fg = "#7aa2f7" },
+    { name = "*.rs", fg = "#ff9e64" },
+    { name = "*.go", fg = "#7dcfff" },
+    { name = "*.py", fg = "#e0af68" },
+    { name = "*.js", fg = "#e0af68" },
+    { name = "*.ts", fg = "#7aa2f7" },
+    { name = "*.sh", fg = "#9ece6a" },
+    { name = "*.zsh", fg = "#9ece6a" },
+    { name = "*.bash", fg = "#9ece6a" },
+    { name = "*.vim", fg = "#9ece6a" },
+]
+
+# Icons (requires Nerd Font)
+[icon]
+# Directories
+dirs = [
+    { name = ".config", text = "" },
+    { name = ".git", text = "" },
+    { name = "node_modules", text = "" },
+    { name = "Desktop", text = "" },
+    { name = "Documents", text = "" },
+    { name = "Downloads", text = "" },
+    { name = "Music", text = "" },
+    { name = "Pictures", text = "" },
+    { name = "Videos", text = "" },
+    { name = "Projects", text = "" },
+]
+
+# Files
+files = [
+    { name = ".gitignore", text = "" },
+    { name = ".gitmodules", text = "" },
+    { name = "Makefile", text = "" },
+    { name = "Dockerfile", text = "" },
+    { name = "docker-compose.yml", text = "" },
+    { name = "docker-compose.yaml", text = "" },
+]
+
+# Extensions
+exts = [
+    # Programming
+    { name = "lua", text = "" },
+    { name = "rs", text = "" },
+    { name = "go", text = "" },
+    { name = "py", text = "" },
+    { name = "js", text = "" },
+    { name = "ts", text = "" },
+    { name = "jsx", text = "" },
+    { name = "tsx", text = "" },
+    { name = "vue", text = "" },
+    { name = "svelte", text = "" },
+    { name = "html", text = "" },
+    { name = "css", text = "" },
+    { name = "scss", text = "" },
+    { name = "json", text = "" },
+    { name = "yaml", text = "" },
+    { name = "yml", text = "" },
+    { name = "toml", text = "" },
+    { name = "xml", text = "" },
+    { name = "md", text = "" },
+    { name = "txt", text = "" },
+
+    # Shell
+    { name = "sh", text = "" },
+    { name = "bash", text = "" },
+    { name = "zsh", text = "" },
+    { name = "fish", text = "" },
+
+    # Config
+    { name = "conf", text = "" },
+    { name = "ini", text = "" },
+    { name = "env", text = "" },
+
+    # Documents
+    { name = "pdf", text = "" },
+    { name = "doc", text = "" },
+    { name = "docx", text = "" },
+    { name = "xls", text = "" },
+    { name = "xlsx", text = "" },
+    { name = "ppt", text = "" },
+    { name = "pptx", text = "" },
+
+    # Images
+    { name = "png", text = "" },
+    { name = "jpg", text = "" },
+    { name = "jpeg", text = "" },
+    { name = "gif", text = "" },
+    { name = "svg", text = "" },
+    { name = "webp", text = "" },
+    { name = "ico", text = "" },
+
+    # Audio/Video
+    { name = "mp3", text = "" },
+    { name = "flac", text = "" },
+    { name = "ogg", text = "" },
+    { name = "wav", text = "" },
+    { name = "mp4", text = "" },
+    { name = "mkv", text = "" },
+    { name = "avi", text = "" },
+    { name = "mov", text = "" },
+    { name = "webm", text = "" },
+
+    # Archives
+    { name = "zip", text = "" },
+    { name = "tar", text = "" },
+    { name = "gz", text = "" },
+    { name = "7z", text = "" },
+    { name = "rar", text = "" },
+    { name = "bz2", text = "" },
+    { name = "xz", text = "" },
+
+    # Lock files
+    { name = "lock", text = "" },
+]
+
+# MIME types
+conds = [
+    { if = "dir", text = "" },
+    { if = "hidden", text = "" },
+    { if = "link", text = "" },
+    { if = "orphan", text = "" },
+    { if = "block", text = "" },
+    { if = "char", text = "" },
+    { if = "fifo", text = "" },
+    { if = "sock", text = "" },
+    { if = "exec", text = "" },
+    { if = "sticky", text = "" },
+]
+
+# Globs for remaining files
+globs = []

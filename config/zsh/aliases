@@ -58,3 +58,7 @@ fi
 if command -v rg &> /dev/null; then
     alias grep='rg'
 fi
+
+# TUI tools
+alias lg='lazygit'
+alias lzd='lazydocker'
