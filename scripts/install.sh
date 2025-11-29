@@ -103,6 +103,19 @@ link_config "$DOTFILES/config/gui/Wayland/hypr" "$XDG_CONFIG_HOME/hypr"
 link_config "$DOTFILES/config/gui/Wayland/waybar" "$XDG_CONFIG_HOME/waybar"
 link_config "$DOTFILES/config/gui/Wayland/wofi" "$XDG_CONFIG_HOME/wofi"
 
+# Create host-specific Hyprland config symlink
+HOSTNAME="${HOST:-$(cat /etc/hostname 2>/dev/null || echo 'unknown')}"
+HOST_HYPR_CONF="$DOTFILES/config/gui/Wayland/hypr/hosts/$HOSTNAME.conf"
+if [ -f "$HOST_HYPR_CONF" ]; then
+    ln -sf "$HOST_HYPR_CONF" "$XDG_CONFIG_HOME/hypr/host.conf"
+    echo "Linked host-specific Hyprland config: $HOSTNAME.conf"
+else
+    echo "Warning: No host-specific Hyprland config found for $HOSTNAME"
+    echo "  Create one at: config/gui/Wayland/hypr/hosts/$HOSTNAME.conf"
+    # Create empty fallback to prevent Hyprland errors
+    touch "$XDG_CONFIG_HOME/hypr/host.conf"
+fi
+
 link_config "$DOTFILES/config/gui/Xorg/i3" "$XDG_CONFIG_HOME/i3"
 link_config "$DOTFILES/config/gui/Xorg/rofi" "$XDG_CONFIG_HOME/rofi"
 link_config "$DOTFILES/config/gui/Xorg/polybar" "$XDG_CONFIG_HOME/polybar"

@@ -16,3 +16,4 @@ local
 # Syncthing conflict files
 *.sync-conflict-*
 .sync-conflict-*
+config/gui/Wayland/hypr/host.conf

@@ -73,6 +73,10 @@ source $ZDOTDIR/scripts/fzf.sh
 source $ZDOTDIR/scripts/functions.zsh
 source $ZDOTDIR/aliases
 
+# Host-specific configuration (based on hostname)
+HOST_ZSH_CONF="$DOTFILES/config/zsh/hosts/$(hostname).zsh"
+[[ -f "$HOST_ZSH_CONF" ]] && source "$HOST_ZSH_CONF"
+
 # zsh line editor
 zle -N edit-command-line
 zle -N paste-from-clipboard
