@@ -5,7 +5,7 @@
 alias brightness='brightnessctl'
 
 # Power management aliases
-alias bat='cat /sys/class/power_supply/BAT0/capacity'
+alias battery='cat /sys/class/power_supply/BAT0/capacity'
 alias charging='cat /sys/class/power_supply/BAT0/status'
 
 # Laptop-specific environment variables (if any)

@@ -120,6 +120,25 @@ for pattern in "${secret_patterns[@]}"; do
     fi
 done
 
+# Company/confidential term denylist — keeps internal identifiers (org name,
+# AWS SSO tenant, prod profiles) out of this PUBLIC repo. The real values live
+# in local/ (gitignored) or $NOTES and are injected via env/private modules.
+# Terms are assembled from fragments so this hook file never contains the
+# literal strings and can't trip its own check; *.example templates and this
+# hook are excluded from the scan.
+company_terms="$(printf '%s' 'sweet''spot|awsapps\.com|prod-''dev')"
+company_hits=$(git diff --cached --diff-filter=d -- . \
+        ':(exclude)*.example' ':(exclude)config/git/hooks/pre-commit' \
+    | grep -E '^\+' | grep -iE "$company_terms" || true)
+if [ -n "$company_hits" ]; then
+    echo "❌ Company/confidential term detected — must not enter this public repo:"
+    echo "$company_hits" | head -5
+    echo ""
+    echo "Move these into local/ (gitignored) or \$NOTES and reference them via an"
+    echo "env var or a gitignored private module (see config/nvim/lua/dbui_private.lua.example)."
+    exit 1
+fi
+
 # Check for high-entropy strings (possible secrets)
 # This catches base64-encoded secrets and random strings
 # Exclude:

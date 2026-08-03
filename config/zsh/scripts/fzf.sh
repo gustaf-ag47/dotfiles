@@ -16,10 +16,10 @@ ftmuxp() {
 		sessions=$(tmux list-sessions -F "[session] #{session_name} (#{session_windows} windows, #{?session_attached,attached,detached})" 2>/dev/null)
 	fi
 
-	# Get tmuxp configurations
+	# Get tmuxp configurations (strip both .yml and .yaml extensions for display)
 	local configs=""
 	if [[ -d "$XDG_CONFIG_HOME/tmuxp" ]]; then
-		configs=$(ls "$XDG_CONFIG_HOME/tmuxp" 2>/dev/null | sed -e 's/\.yml$//' | sed 's/^/[config] /')
+		configs=$(ls "$XDG_CONFIG_HOME/tmuxp" 2>/dev/null | sed -e 's/\.ya\?ml$//' | sed 's/^/[config] /')
 	fi
 
 	# Build options list
@@ -29,7 +29,7 @@ ftmuxp() {
 	if [[ -n $configs ]]; then
 		[[ -n $options ]] && options="$options\n$configs" || options="$configs"
 	fi
-	options="$new_session\n$options"
+	[[ -n $options ]] && options="$new_session\n$options" || options="$new_session"
 
 	# Show fzf selector
 	choice=$(echo -e "$options" | fzf --height=40% --reverse --header="Select tmux session or config:")
@@ -37,7 +37,12 @@ ftmuxp() {
 	# Handle selection
 	case "$choice" in
 		"$new_session")
-			tmux new-session
+			local n=1
+			while tmux has-session -t "$n" 2>/dev/null; do ((n++)); done
+			# Suppress continuum auto-restore for intentional new sessions
+			touch "$HOME/tmux_no_auto_restore"
+			tmux new-session -s "$n"
+			(sleep 15 && rm -f "$HOME/tmux_no_auto_restore") &
 			;;
 		\[session\]*)
 			# Extract session name and attach
@@ -45,15 +50,27 @@ ftmuxp() {
 			tmux attach-session -t "$session_name"
 			;;
 		\[config\]*)
-			# Extract config name and load with tmuxp
+			# Extract config name and load with tmuxp (pass bare name, tmuxp resolves extension)
 			local config_name=$(echo "$choice" | sed 's/\[config\] //')
-			tmuxp load "$XDG_CONFIG_HOME/tmuxp/$config_name"
+			# Suppress continuum auto-restore when loading a predefined layout
+			touch "$HOME/tmux_no_auto_restore"
+			tmuxp load "$config_name"
+			(sleep 15 && rm -f "$HOME/tmux_no_auto_restore") &
 			;;
 		"")
 			# User pressed Escape or Ctrl-C, don't start tmux
 			return
 			;;
 	esac
+}
+
+ftsess() {
+	tmux list-sessions -F '#{session_name}: #{session_windows} windows (#{?session_attached,attached,detached})' 2>/dev/null \
+	| fzf --multi --reverse --height=60% \
+		--header='Tab to multi-select, Enter to kill, Esc to exit' \
+		--preview='tmux list-windows -t {1} -F "  #{window_index}: #{window_name}  #{pane_current_command}  (#{pane_current_path})"' \
+		--preview-window=right:50% \
+		--bind='enter:execute(printf "%s\n" {+} | cut -d: -f1 | xargs -I% tmux kill-session -t % 2>/dev/null; tmux-safe-save)+reload(tmux list-sessions -F "#{session_name}: #{session_windows} windows (#{?session_attached,attached,detached})" 2>/dev/null)+clear-selection'
 }
 
 fsb() {

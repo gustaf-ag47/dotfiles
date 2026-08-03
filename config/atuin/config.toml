@@ -35,7 +35,7 @@ filter_mode_shell_up_key_binding = "session"
 sync_frequency = "1h"
 
 # Auto-sync on shell start
-auto_sync = true
+auto_sync = false
 
 ## Key Bindings
 # Use Ctrl+R for history search

@@ -129,8 +129,55 @@ y() {
 	local tmp
 	tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
 	yazi "$@" --cwd-file="$tmp"
-	if cwd="$(cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+	if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
 		cd -- "$cwd" || return
 	fi
 	rm -f -- "$tmp"
+}
+
+# Manage isolated Neovim profiles via NVIM_APPNAME.
+# Each profile gets its own data/state/cache dirs but shares config with nvim.
+# Usage:
+#   nvim-profile list              — show all profiles
+#   nvim-profile setup [name]      — create profile 'name' (default: nvim-test)
+#   nvim-profile launch [name]     — launch Neovim with that profile
+#   nvim-profile clean [name]      — delete profile's data dirs
+nvim-profile() {
+  local cmd="${1:-list}"
+  local name="${2:-nvim-test}"
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+  case "$cmd" in
+    list)
+      echo "Available Neovim profiles:"
+      for d in "$config_dir"/nvim-*/; do
+        [[ -d "$d" ]] && echo "  $(basename "$d")"
+      done
+      ;;
+    setup)
+      local profile_dir="$config_dir/$name"
+      if [[ -e "$profile_dir" ]]; then
+        echo "Profile '$name' already exists at $profile_dir"
+      else
+        # Symlink to the same config as the main nvim profile
+        ln -s "$config_dir/nvim" "$profile_dir"
+        echo "Created profile '$name' → $profile_dir"
+        echo "Launch with: nvim-profile launch $name  (or: NVIM_APPNAME=$name nvim)"
+      fi
+      ;;
+    launch)
+      NVIM_APPNAME="$name" nvim "${@:3}"
+      ;;
+    clean)
+      local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+      local state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+      local cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
+      echo "Removing data dirs for profile '$name'..."
+      rm -rf "$data_home/$name" "$state_home/$name" "$cache_home/$name"
+      echo "Done. Config symlink preserved at $config_dir/$name"
+      ;;
+    *)
+      echo "Usage: nvim-profile [list|setup|launch|clean] [profile-name]"
+      ;;
+  esac
 }

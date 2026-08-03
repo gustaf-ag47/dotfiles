@@ -55,6 +55,11 @@ service-account*.json
 .vscode/
 .cursor/
 
+# Neovim project-local config (personal, never project-specific)
+.nvim.lua
+.nvimrc
+.exrc
+
 # IDE
 .idea/
 *.swp
@@ -114,12 +119,16 @@ build/
 *~
 
 # ===================================
+# Syncthing
+# ===================================
+*.sync-conflict-*
+
+# ===================================
 # Database
 # ===================================
 *.db
 *.sqlite
 *.sqlite3
-*.sql
 
 # ===================================
 # Archives

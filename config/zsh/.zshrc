@@ -45,10 +45,25 @@ if command -v starship > /dev/null; then
 fi
 
 # Initialize Atuin (shell history sync)
-if command -v atuin > /dev/null; then
-  eval "$(atuin init zsh --disable-up-arrow)"
-  # Use Ctrl+R for Atuin search (replaces fzf history)
-  # Up arrow remains for standard history navigation
+# DISABLED: Causing "Address already in use" error on login
+# if command -v atuin > /dev/null; then
+#   eval "$(atuin init zsh --disable-up-arrow)"
+#   # Use Ctrl+R for Atuin search (replaces fzf history)
+#   # Up arrow remains for standard history navigation
+# fi
+
+# Fix WAYLAND_DISPLAY for clipboard in tmux/neovim
+# Detect Wayland session and set display if not already set
+if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+  # Auto-detect the Wayland socket
+  setopt local_options nullglob
+  for socket in /run/user/$(id -u)/wayland-*; do
+    [[ "$socket" == *.lock ]] && continue
+    if [ -S "$socket" ]; then
+      export WAYLAND_DISPLAY="$(basename "$socket")"
+      break
+    fi
+  done
 fi
 
 _comp_options+=(globdots)
@@ -136,11 +151,22 @@ fi
 if [ "$(tty)" = "/dev/tty1" ]; then
     choice=$(echo -e "Wayland\nXorg" | fzf)
     case $choice in
-        Wayland) exec Hyprland ;;
+        Wayland) exec hyprland-session ;;
         Xorg) startx ;;
     esac
 fi
 
-if [ "$(tty)" != "/dev/tty1" ]; then
+# Show interactive tmux session picker on terminal open (not on tty1, not if already in tmux)
+if [ "$(tty)" != "/dev/tty1" ] && [ -z "$TMUX" ]; then
   ftmuxp
 fi
+
+#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+export SDKMAN_DIR="$HOME/.sdkman"
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+# bun completions
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
+
+# opencode
+export PATH="$HOME/.opencode/bin:$PATH"

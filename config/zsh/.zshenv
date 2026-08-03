@@ -14,7 +14,10 @@ export BACKUP_DIR="$SYNC/backup"
 export LOCAL_CONFIG="$SYNC/dotfiles-local"
 
 # Find latest Obsidian AppImage dynamically
-OBSIDIAN_PATH="$(ls -t "$HOME/.local/bin"/Obsidian-*.AppImage 2>/dev/null | head -1)"
+# `|| true`: with no AppImage present the glob/ls pipeline exits non-zero, which
+# would abort any `set -euo pipefail` context that sources this file (e.g. a
+# fresh `make install`). Keep it resilient so a clean machine installs cleanly.
+OBSIDIAN_PATH="$(ls -t "$HOME/.local/bin"/Obsidian-*.AppImage 2>/dev/null | head -1 || true)"
 export OBSIDIAN_PATH="${OBSIDIAN_PATH:-}"
 
 # XDG Base Directory Specification
@@ -22,6 +25,7 @@ export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_STATE_HOME="$HOME/.local/state"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 
 # ZSH configuration
 export ZDOTDIR="$XDG_CONFIG_HOME/zsh"
@@ -66,17 +70,31 @@ fi
 
 export PATH="$DOTFILES/bin/:$PATH"
 
+# npm global prefix is XDG-relative (see NPM_CONFIG_USERCONFIG below); its bin
+# dir holds globally-installed CLIs (pi, gemini). Add it to PATH so they're
+# runnable and so tools that fall back to `command -v pi` can find it.
+if [ -d "$XDG_DATA_HOME/npm/bin" ]; then
+    export PATH="$XDG_DATA_HOME/npm/bin:$PATH"
+fi
+export PI_CLAUDE_SUB_PI_BIN="$HOME/.local/share/npm/bin/pi"
+
+CLAUDE_CODE_ENV="$XDG_CONFIG_HOME/claude-code/env.sh"
+[ -r "$CLAUDE_CODE_ENV" ] && source "$CLAUDE_CODE_ENV"
+unset CLAUDE_CODE_ENV
+
 # Cleanup
 export GOPATH="${XDG_DATA_HOME:-$HOME/.local/share}"/go
 export PATH="$GOPATH/bin:$PATH"
 export GOMODCACHE="$XDG_CACHE_HOME"/go/mod
 export NPM_CONFIG_USERCONFIG=$XDG_CONFIG_HOME/npm/npmrc
 export RUSTUP_HOME="$XDG_DATA_HOME"/rustup
+export CARGO_HOME="$XDG_DATA_HOME"/cargo
+export PATH="$CARGO_HOME/bin:$PATH"
 export GNUPGHOME="$XDG_DATA_HOME"/gnupg
 
 # fzf configuration
 export FZF_DEFAULT_COMMAND="rg --files --hidden --glob '!.git'"
 export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
 
-export JAVA_HOME=/usr/lib/jvm/java-23-openjdk
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 export PATH=$JAVA_HOME/bin:$PATH

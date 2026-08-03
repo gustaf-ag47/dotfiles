@@ -18,6 +18,14 @@ x-scheme-handler/https=firefox.desktop
 x-scheme-handler/jetbrains=jetbrains-toolbox.desktop
 x-scheme-handler/lbry=lbry.desktop
 x-scheme-handler/magnet=torrent.desktop;
-x-scheme-handler/mailto=mail.desktop;
+x-scheme-handler/mailto=userapp-Thunderbird-Q0ZGQ3.desktop
 x-scheme-handler/obsidian=obsidian.desktop
 x-scheme-handler/postman=Postman.desktop
+x-scheme-handler/discord=vesktop.desktop
+x-scheme-handler/claude-cli=claude-code-url-handler.desktop
+message/rfc822=userapp-Thunderbird-Q0ZGQ3.desktop
+x-scheme-handler/mid=userapp-Thunderbird-Q0ZGQ3.desktop
+
+[Added Associations]
+x-scheme-handler/mailto=userapp-Thunderbird-Q0ZGQ3.desktop;
+x-scheme-handler/mid=userapp-Thunderbird-Q0ZGQ3.desktop;

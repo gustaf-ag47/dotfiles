@@ -1,5 +1,18 @@
 #!/bin/bash
 
+alias claude='claude --dangerously-skip-permissions'
+
+codex() {
+    case "${1:-}" in
+        login|logout|mcp|plugin|mcp-server|app-server|remote-control|completion|update|doctor|sandbox|debug|apply|archive|delete|unarchive|features|help)
+            command codex "$@"
+            ;;
+        *)
+            command codex --dangerously-bypass-approvals-and-sandbox "$@"
+            ;;
+    esac
+}
+
 alias ga='git add'
 alias gc='git commit'
 alias gp='git push'
@@ -39,9 +52,8 @@ if command -v eza &> /dev/null; then
     alias tree='eza --tree --icons'
 fi
 
-if command -v fd &> /dev/null; then
-    alias find='fd'
-fi
+# Note: fd is available but NOT aliased to find because they have
+# incompatible syntax (fd uses --type, find uses -type). Use fd directly.
 
 if command -v dust &> /dev/null; then
     alias du='dust'
@@ -62,3 +74,14 @@ fi
 # TUI tools
 alias lg='lazygit'
 alias lzd='lazydocker'
+
+# Neovim profiles (NVIM_APPNAME isolation — separate data/state/cache, same config)
+alias nvtest='NVIM_APPNAME=nvim-test nvim'
+
+# Tmux session management
+alias tl='tmux list-sessions'
+alias ta='tmux attach-session'
+alias tn='ftmuxp'
+alias ts='tmux-safe-save'
+alias trs="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tmux-resurrect/scripts/restore.sh"
+alias tc='find "${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect" -name "*.txt" -mtime +7 -delete && echo "Cleaned old resurrect files"'
