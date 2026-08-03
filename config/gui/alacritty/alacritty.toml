@@ -52,6 +52,9 @@ style = "Regular"
 [selection]
 save_to_clipboard = true
 
+[terminal]
+osc52 = "CopyPaste"
+
 [[keyboard.bindings]]
 action = "IncreaseFontSize"
 key = "Plus"

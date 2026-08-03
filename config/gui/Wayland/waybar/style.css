@@ -267,6 +267,36 @@ window#waybar {
   100% { opacity: 1; }
 }
 
+/* Claude Code usage widget */
+#custom-claude-usage {
+  padding: 8px 12px;
+  margin: 0 2px;
+  border-radius: 10px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+#custom-claude-usage.normal {
+  color: #bb9af7;
+  background: rgba(187, 154, 247, 0.1);
+}
+
+#custom-claude-usage.warning {
+  color: #e0af68;
+  background: rgba(224, 175, 104, 0.15);
+}
+
+#custom-claude-usage.critical {
+  color: #f7768e;
+  background: rgba(247, 118, 142, 0.15);
+  animation: pulse 2s infinite;
+}
+
+#custom-claude-usage.error {
+  color: #565f89;
+  background: rgba(86, 95, 137, 0.1);
+}
+
 /* Power button - Stylish hover effect */
 #custom-power {
   color: #f7768e;

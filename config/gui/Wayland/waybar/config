@@ -5,7 +5,7 @@
   "spacing": 8,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/power"],
+  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/claude-usage", "custom/power"],
   
   "hyprland/workspaces": {
     "disable-scroll": true,
@@ -156,6 +156,14 @@
     "on-click": "hyprctl switchxkblayout at-translated-set-2-keyboard next"
   },
   
+  "custom/claude-usage": {
+    "exec": "waybar-claude-usage",
+    "return-type": "json",
+    "interval": 300,
+    "tooltip": true,
+    "on-click": "kitty -e sh -c 'npx ccusage weekly; echo; read -p \"Press enter to close\"'"
+  },
+
   "custom/power": {
     "format": "⏻",
     "tooltip": "Power Menu",
