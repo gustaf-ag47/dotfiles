@@ -17,14 +17,14 @@ M.plugins = {
           local opts = { buffer = bufnr, silent = true }
 
           -- TypeScript-specific actions
-          vim.keymap.set('n', '<leader>to', '<cmd>TSToolsOrganizeImports<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Organize imports' }))
-          vim.keymap.set('n', '<leader>ts', '<cmd>TSToolsSortImports<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Sort imports' }))
-          vim.keymap.set('n', '<leader>tr', '<cmd>TSToolsRemoveUnused<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Remove unused' }))
-          vim.keymap.set('n', '<leader>tf', '<cmd>TSToolsFixAll<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Fix all' }))
-          vim.keymap.set('n', '<leader>ta', '<cmd>TSToolsAddMissingImports<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Add missing imports' }))
-          vim.keymap.set('n', '<leader>td', '<cmd>TSToolsGoToSourceDefinition<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Go to source definition' }))
-          vim.keymap.set('n', '<leader>th', '<cmd>TSToolsFileReferences<cr>', vim.tbl_extend('force', opts, { desc = 'TS: File references' }))
-          vim.keymap.set('n', '<leader>ti', '<cmd>TSToolsRenameFile<cr>', vim.tbl_extend('force', opts, { desc = 'TS: Rename file' }))
+          vim.keymap.set('n', '<leader>to', '<cmd>TSToolsOrganizeImports<cr>', vim.tbl_extend('force', opts, { desc = 'Organize imports' }))
+          vim.keymap.set('n', '<leader>ts', '<cmd>TSToolsSortImports<cr>', vim.tbl_extend('force', opts, { desc = 'Sort imports' }))
+          vim.keymap.set('n', '<leader>tr', '<cmd>TSToolsRemoveUnused<cr>', vim.tbl_extend('force', opts, { desc = 'Remove unused' }))
+          vim.keymap.set('n', '<leader>tf', '<cmd>TSToolsFixAll<cr>', vim.tbl_extend('force', opts, { desc = 'Fix all' }))
+          vim.keymap.set('n', '<leader>ta', '<cmd>TSToolsAddMissingImports<cr>', vim.tbl_extend('force', opts, { desc = 'Add missing imports' }))
+          vim.keymap.set('n', '<leader>td', '<cmd>TSToolsGoToSourceDefinition<cr>', vim.tbl_extend('force', opts, { desc = 'Source definition' }))
+          vim.keymap.set('n', '<leader>th', '<cmd>TSToolsFileReferences<cr>', vim.tbl_extend('force', opts, { desc = 'File references' }))
+          vim.keymap.set('n', '<leader>tR', '<cmd>TSToolsRenameFile<cr>', vim.tbl_extend('force', opts, { desc = 'Rename file + imports' }))
 
           -- NOTE: Standard LSP keymaps (gd, gr, K, etc.) are set globally in features/lsp.lua
         end,
@@ -65,7 +65,8 @@ M.plugins = {
     dependencies = 'MunifTanjim/nui.nvim',
     ft = 'json',
     config = function()
-      require('package-info').setup {
+      local pkg = require('package-info')
+      pkg.setup {
         colors = {
           up_to_date = '#3C4048',
           outdated = '#fc7b7b',
@@ -83,15 +84,21 @@ M.plugins = {
         package_manager = 'npm',
       }
 
-      -- Package.json keymaps
-      local opts = { silent = true }
-      vim.keymap.set('n', '<leader>ns', require('package-info').show, vim.tbl_extend('force', opts, { desc = 'Package: Show info' }))
-      vim.keymap.set('n', '<leader>nc', require('package-info').hide, vim.tbl_extend('force', opts, { desc = 'Package: Hide info' }))
-      vim.keymap.set('n', '<leader>nt', require('package-info').toggle, vim.tbl_extend('force', opts, { desc = 'Package: Toggle info' }))
-      vim.keymap.set('n', '<leader>nu', require('package-info').update, vim.tbl_extend('force', opts, { desc = 'Package: Update' }))
-      vim.keymap.set('n', '<leader>nd', require('package-info').delete, vim.tbl_extend('force', opts, { desc = 'Package: Delete' }))
-      vim.keymap.set('n', '<leader>ni', require('package-info').install, vim.tbl_extend('force', opts, { desc = 'Package: Install' }))
-      vim.keymap.set('n', '<leader>np', require('package-info').change_version, vim.tbl_extend('force', opts, { desc = 'Package: Change version' }))
+      -- Package.json keymaps (buffer-local for package.json only)
+      vim.api.nvim_create_autocmd('BufRead', {
+        group = vim.api.nvim_create_augroup('PackageInfoKeymaps', { clear = true }),
+        pattern = 'package.json',
+        callback = function(event)
+          local opts = { buffer = event.buf, silent = true }
+          vim.keymap.set('n', '<leader>ns', pkg.show, vim.tbl_extend('force', opts, { desc = 'Package: Show info' }))
+          vim.keymap.set('n', '<leader>nc', pkg.hide, vim.tbl_extend('force', opts, { desc = 'Package: Hide info' }))
+          vim.keymap.set('n', '<leader>nt', pkg.toggle, vim.tbl_extend('force', opts, { desc = 'Package: Toggle info' }))
+          vim.keymap.set('n', '<leader>nu', pkg.update, vim.tbl_extend('force', opts, { desc = 'Package: Update' }))
+          vim.keymap.set('n', '<leader>nd', pkg.delete, vim.tbl_extend('force', opts, { desc = 'Package: Delete' }))
+          vim.keymap.set('n', '<leader>ni', pkg.install, vim.tbl_extend('force', opts, { desc = 'Package: Install' }))
+          vim.keymap.set('n', '<leader>np', pkg.change_version, vim.tbl_extend('force', opts, { desc = 'Package: Change version' }))
+        end,
+      })
     end,
   },
 }
@@ -272,8 +279,17 @@ M.debug_config = {
   },
 }
 
--- Setup function called by the module system
-M.setup = function()
+-- TypeScript-specific keymaps (only active in TS/JS buffers)
+-- NOTE: Most keymaps are set in typescript-tools.nvim's on_attach
+M.setup_keymaps = function(bufnr)
+  -- Additional keymaps if needed can be added here
+  -- typescript-tools.nvim handles most keymaps in its on_attach
+end
+
+-- TypeScript/JavaScript-specific autocommands
+M.setup_autocmds = function()
+  local js_ts_group = vim.api.nvim_create_augroup('JSTSConfig', { clear = true })
+
   -- File type detection for modern JS/TS files
   vim.filetype.add {
     extension = {
@@ -297,18 +313,15 @@ M.setup = function()
     },
   }
 
-  -- TypeScript/JavaScript-specific autocommands
-  local js_ts_group = vim.api.nvim_create_augroup('JSTSConfig', { clear = true })
-
-  -- Auto-format on save (only if Prettier is available)
+  -- Auto-format on save (only if formatter is available)
   vim.api.nvim_create_autocmd('BufWritePre', {
     group = js_ts_group,
     pattern = { '*.ts', '*.tsx', '*.js', '*.jsx', '*.vue' },
     callback = function()
       -- Only format if a formatter is available
-      local clients = vim.lsp.get_active_clients()
+      local clients = vim.lsp.get_clients()
       for _, client in ipairs(clients) do
-        if client.supports_method('textDocument/formatting') then
+        if client:supports_method('textDocument/formatting') then
           vim.lsp.buf.format { async = false }
           break
         end
@@ -320,7 +333,7 @@ M.setup = function()
   vim.api.nvim_create_autocmd('FileType', {
     group = js_ts_group,
     pattern = { 'typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'vue' },
-    callback = function()
+    callback = function(event)
       vim.opt_local.shiftwidth = 2
       vim.opt_local.tabstop = 2
       vim.opt_local.expandtab = true
@@ -331,6 +344,18 @@ M.setup = function()
       if vim.lsp.inlay_hint then
         vim.lsp.inlay_hint.enable(true)
       end
+
+      -- Register TypeScript which-key groups (buffer-local)
+      local wk_ok, wk = pcall(require, 'which-key')
+      if wk_ok then
+        wk.add({
+          { '<leader>t', group = 'TypeScript', icon = '', buffer = event.buf },
+          { '<leader>n', group = 'NPM Package', icon = '', buffer = event.buf },
+        })
+      end
+
+      -- Setup TS/JS-specific keymaps for this buffer
+      M.setup_keymaps(event.buf)
     end,
   })
 
@@ -347,16 +372,12 @@ M.setup = function()
       end
     end,
   })
+end
 
-  -- Custom TypeScript snippets
-  vim.api.nvim_create_autocmd('FileType', {
-    group = js_ts_group,
-    pattern = { 'typescript', 'typescriptreact' },
-    callback = function()
-      -- Custom TypeScript snippets can be added here
-      -- They will be loaded by LuaSnip if available
-    end,
-  })
+-- Setup function called by the module system
+M.setup = function()
+  -- Setup autocommands for TS/JS files
+  M.setup_autocmds()
 end
 
 return M

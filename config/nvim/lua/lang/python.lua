@@ -2,11 +2,56 @@
 -- Follows SRP: responsible only for Python-specific configuration
 -- NO dependencies on other language modules (strict dependency rule compliance)
 -- Can only depend on: core modules, feature modules, utils modules
+-- Updated for Neovim 0.11+ native LSP configuration (vim.lsp.config)
 
 local M = {}
 
+-- Helper function to find root by pattern
+local function root_pattern(...)
+  local patterns = { ... }
+  return function(bufnr, on_dir)
+    local fname = vim.api.nvim_buf_get_name(bufnr)
+    local path = vim.fn.fnamemodify(fname, ':h')
+    while path and path ~= '/' do
+      for _, pattern in ipairs(patterns) do
+        local target = path .. '/' .. pattern
+        if vim.fn.isdirectory(target) == 1 or vim.fn.filereadable(target) == 1 then
+          on_dir(path)
+          return
+        end
+      end
+      path = vim.fn.fnamemodify(path, ':h')
+    end
+    -- Fallback to file directory
+    on_dir(vim.fn.fnamemodify(fname, ':h'))
+  end
+end
+
 -- Python-specific plugin specifications
 M.plugins = {
+  -- Refactor imports on file move/rename (like PhpStorm/PyCharm)
+  -- Automatically updates imports when you move/rename files in oil.nvim
+  -- NOTE: Requires 'gg' (grip-grab) binary. Install via: cargo install grip-grab
+  -- Or run :PympleBuild in Neovim
+  {
+    'alexpasmantier/pymple.nvim',
+    ft = 'python',
+    build = ':PympleBuild',
+    enabled = vim.fn.executable('gg') == 1, -- Only enable if gg is installed
+    dependencies = {
+      'nvim-lua/plenary.nvim',
+      'MunifTanjim/nui.nvim',
+      'stevearc/dressing.nvim',
+      'nvim-tree/nvim-web-devicons',
+    },
+    config = function()
+      require('pymple').setup({
+        -- Automatically update imports when moving files in oil.nvim
+        -- Shows confirmation prompt with preview of changes
+      })
+    end,
+  },
+
   -- Enhanced Python support
   {
     'python-lsp/python-lsp-server',
@@ -30,7 +75,6 @@ M.plugins = {
   {
     'linux-cultist/venv-selector.nvim',
     ft = 'python',
-    branch = 'regexp',
     dependencies = {
       'neovim/nvim-lspconfig',
       'nvim-telescope/telescope.nvim',
@@ -60,19 +104,16 @@ M.lsp_config = {
   ruff = {
     cmd = { 'ruff', 'server', '--preview' },
     filetypes = { 'python' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      return util.root_pattern(
-        'pyproject.toml',
-        'ruff.toml',
-        '.ruff.toml',
-        'setup.py',
-        'setup.cfg',
-        'requirements.txt',
-        'Pipfile',
-        '.git'
-      )(fname)
-    end,
+    root_dir = root_pattern(
+      'pyproject.toml',
+      'ruff.toml',
+      '.ruff.toml',
+      'setup.py',
+      'setup.cfg',
+      'requirements.txt',
+      'Pipfile',
+      '.git'
+    ),
     init_options = {
       settings = {
         -- Ruff configuration
@@ -87,17 +128,14 @@ M.lsp_config = {
   pyright = {
     cmd = { 'pyright-langserver', '--stdio' },
     filetypes = { 'python' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      return util.root_pattern(
-        'pyproject.toml',
-        'setup.py',
-        'setup.cfg',
-        'requirements.txt',
-        'Pipfile',
-        '.git'
-      )(fname)
-    end,
+    root_dir = root_pattern(
+      'pyproject.toml',
+      'setup.py',
+      'setup.cfg',
+      'requirements.txt',
+      'Pipfile',
+      '.git'
+    ),
     settings = {
       python = {
         analysis = {
@@ -162,17 +200,14 @@ M.lsp_config = {
   pylsp = {
     cmd = { 'pylsp' },
     filetypes = { 'python' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      return util.root_pattern(
-        'pyproject.toml',
-        'setup.py',
-        'setup.cfg',
-        'requirements.txt',
-        'Pipfile',
-        '.git'
-      )(fname)
-    end,
+    root_dir = root_pattern(
+      'pyproject.toml',
+      'setup.py',
+      'setup.cfg',
+      'requirements.txt',
+      'Pipfile',
+      '.git'
+    ),
     settings = {
       pylsp = {
         plugins = {
@@ -545,24 +580,25 @@ M.setup = function()
     M.setup_venv_selector()
   end
 
-  -- Register Python LSP configuration
-  local lspconfig = require('lspconfig')
-
   -- Get default capabilities from main LSP config
   local capabilities = vim.lsp.protocol.make_client_capabilities()
-  local cmp_nvim_lsp = require('cmp_nvim_lsp')
-  capabilities = vim.tbl_deep_extend('force', capabilities, cmp_nvim_lsp.default_capabilities())
-
-  -- Setup Ruff LSP for linting and formatting
-  if lspconfig.ruff and M.lsp_config.ruff then
-    local ruff_config = vim.tbl_deep_extend('force', M.lsp_config.ruff, { capabilities = capabilities })
-    lspconfig.ruff.setup(ruff_config)
+  local ok, cmp_nvim_lsp = pcall(require, 'cmp_nvim_lsp')
+  if ok then
+    capabilities = vim.tbl_deep_extend('force', capabilities, cmp_nvim_lsp.default_capabilities())
   end
 
-  -- Setup Pyright for type checking
-  if lspconfig.pyright and M.lsp_config.pyright then
+  -- Configure and enable Ruff LSP using native Neovim 0.11+ API
+  if M.lsp_config.ruff then
+    local ruff_config = vim.tbl_deep_extend('force', M.lsp_config.ruff, { capabilities = capabilities })
+    vim.lsp.config('ruff', ruff_config)
+    vim.lsp.enable('ruff')
+  end
+
+  -- Configure and enable Pyright using native Neovim 0.11+ API
+  if M.lsp_config.pyright then
     local pyright_config = vim.tbl_deep_extend('force', M.lsp_config.pyright, { capabilities = capabilities })
-    lspconfig.pyright.setup(pyright_config)
+    vim.lsp.config('pyright', pyright_config)
+    vim.lsp.enable('pyright')
   end
 end
 

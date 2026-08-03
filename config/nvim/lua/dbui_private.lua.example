@@ -1,0 +1,32 @@
+-- Private DBUI workspace definitions (TEMPLATE).
+--
+-- Copy this file to `dbui_private.lua` (same directory) and fill in your own
+-- workspaces. `dbui_private.lua` is gitignored so your paths/remotes never get
+-- committed to this public repo; it still syncs across your machines via
+-- Syncthing. plugins/dadbod.lua loads it with pcall(require, 'dbui_private');
+-- when absent, DBUI simply runs with no workspaces (drawer shows the global
+-- $NOTES/db_ui scope).
+--
+-- Each workspace maps a set of local paths / git remotes to a named DB-UI
+-- scope, so the drawer auto-switches based on your current working directory.
+return {
+  workspaces = {
+    {
+      name = 'work',
+      path_patterns = {
+        '/sync/src/YourOrg/',        -- matched as a substring of cwd
+      },
+      git_remote_patterns = {
+        'github%.com[:/]YourOrg',    -- lua patterns matched against git remote
+        'gitlab%.[^/]+/yourorg',
+      },
+    },
+    {
+      name = 'private',
+      path_patterns = {
+        '/sync/src/personal/',
+        '/sync/src/dotfiles',
+      },
+    },
+  },
+}

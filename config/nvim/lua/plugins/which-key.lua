@@ -44,13 +44,40 @@ return { -- Useful plugin to show you pending keybinds.
 
     -- Document existing key chains
     spec = {
-      { '<leader>c', group = '[C]ode', mode = { 'n', 'x' } },
-      { '<leader>d', group = '[D]ocument' },
-      { '<leader>r', group = '[R]ename' },
-      { '<leader>s', group = '[S]earch' },
-      { '<leader>w', group = '[W]orkspace' },
-      { '<leader>t', group = '[T]oggle' },
-      { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } },
+      -- Core groups (always visible)
+      { '<leader>b', group = 'Buffer' },
+      { '<leader>d', group = 'Debug' },
+      { '<leader>q', group = 'Quit/Session' },
+      { '<leader>s', group = 'Search' },
+      { '<leader>u', group = 'UI Toggle' },
+      { '<leader>w', group = 'Window/Save' },
+      { '<leader>x', group = 'Diagnostics' },
+      { '<leader><Tab>', group = 'Tabs' },
+
+      -- LSP groups (buffer-local when LSP attached)
+      { '<leader>c', group = 'Code', mode = { 'n', 'x' } },
+      { '<leader>l', group = 'LSP' },
+
+      -- Global tool groups (always relevant)
+      { '<leader>T', group = 'Test' },
+      { '<leader>G', group = 'Git' },
+      { '<leader>R', group = 'REST' },
+      { '<leader>S', desc = 'Search & Replace' },
+      { '<leader>K', group = 'Knowledge/Anki' },
+
+      -- NOTE: Language-specific groups (Go, Rust, TypeScript, PHP, etc.)
+      -- are registered buffer-locally in each lang module's FileType autocmd
+      -- via require('which-key').add() so they only appear for relevant filetypes.
+
+      -- Quick actions (single key after leader)
+      { '<leader>a', desc = 'Add to Harpoon' },
+      { '<leader>H', desc = 'Harpoon menu' },
+      { '<leader>/', desc = 'Search in buffer' },
+      { '<leader>1', desc = 'Harpoon 1', hidden = true },
+      { '<leader>2', desc = 'Harpoon 2', hidden = true },
+      { '<leader>3', desc = 'Harpoon 3', hidden = true },
+      { '<leader>4', desc = 'Harpoon 4', hidden = true },
+      { '<leader>5', desc = 'Harpoon 5', hidden = true },
     },
   },
 }

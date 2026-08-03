@@ -1,8 +1,10 @@
 -- Go language module - isolated and self-contained
 -- Follows SRP: responsible only for Go-specific configuration
 -- No dependencies on other language modules (dependency rule compliance)
+-- Updated for Neovim 0.11+ native LSP configuration (vim.lsp.config)
 
 local M = {}
+
 
 -- Go-specific plugin specifications
 M.plugins = {
@@ -62,6 +64,9 @@ M.plugins = {
     'leoluz/nvim-dap-go',
     ft = 'go',
     dependencies = { 'mfussenegger/nvim-dap' },
+    build = function()
+      vim.fn.system({ 'python3', vim.fn.expand('$DOTFILES') .. '/bin/nvim-patch-plugins', 'nvim-dap-go' })
+    end,
     config = function()
       require('dap-go').setup({
         dap_configurations = {
@@ -77,7 +82,7 @@ M.plugins = {
           initialize_timeout_sec = 20,
           port = '${port}',
           args = {},
-          build_flags = '',
+          build_flags = { '-tags', 'integration' },
         },
       })
     end,
@@ -89,10 +94,7 @@ M.lsp_config = {
   gopls = {
     cmd = { 'gopls' },
     filetypes = { 'go', 'gomod', 'gowork', 'gotmpl' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      return util.root_pattern('go.work', 'go.mod', '.git')(fname)
-    end,
+    root_markers = { 'go.work', 'go.mod', '.git' },
     settings = {
       gopls = {
         -- Code completion
@@ -103,10 +105,13 @@ M.lsp_config = {
         analyses = {
           unusedparams = true,
           unreachable = true,
-          fillstruct = true,
-          nonewvars = true,
-          undeclaredname = true,
           unusedwrite = true,
+          nilness = true,    -- nil pointer dereference detection
+          shadow = true,     -- variable shadowing detection
+          stdversion = true, -- warns on stdlib APIs newer than go.mod go directive
+          -- Suppress low-signal style checks for application code
+          ST1000 = false,    -- package comment requirement (noisy on non-library code)
+          QF1008 = false,    -- embedded field selector can be omitted (minor style)
         },
 
         -- Code actions and codelenses
@@ -139,6 +144,17 @@ M.lsp_config = {
 
         -- Experimental features
         experimentalPostfixCompletions = true,
+
+        -- Inlay hints
+        hints = {
+          assignVariableTypes = true,
+          compositeLiteralFields = true,
+          compositeLiteralTypes = true,
+          constantValues = true,
+          functionTypeParameters = true,
+          parameterNames = true,
+          rangeVariableTypes = true,
+        },
       },
     },
     init_options = {
@@ -165,7 +181,21 @@ M.setup_keymaps = function(bufnr)
   map('n', '<leader>gat', '<cmd>GoAddAllTest<cr>', vim.tbl_extend('force', opts, { desc = 'Go add all tests' }))
   map('n', '<leader>gie', '<cmd>GoIfErr<cr>', vim.tbl_extend('force', opts, { desc = 'Go if err' }))
   map('n', '<leader>gfs', '<cmd>GoFillStruct<cr>', vim.tbl_extend('force', opts, { desc = 'Go fill struct' }))
-  map('n', '<leader>gfs', '<cmd>GoFillSwitch<cr>', vim.tbl_extend('force', opts, { desc = 'Go fill switch' }))
+  map('n', '<leader>gfw', '<cmd>GoFillSwitch<cr>', vim.tbl_extend('force', opts, { desc = 'Go fill switch' }))
+  map('n', '<leader>gim', '<cmd>GoImpl<cr>', vim.tbl_extend('force', opts, { desc = 'Go implement interface' }))
+  map('n', '<leader>gta', '<cmd>GoAddTags<cr>', vim.tbl_extend('force', opts, { desc = 'Go add struct tags' }))
+  map('n', '<leader>gtr', '<cmd>GoRmTags<cr>', vim.tbl_extend('force', opts, { desc = 'Go remove struct tags' }))
+  map('n', '<leader>gvu', '<cmd>GoVulnCheck<cr>', vim.tbl_extend('force', opts, { desc = 'Go vuln check' }))
+
+  -- Alternate between foo.go and foo_test.go
+  map('n', '<leader>go', '<cmd>GoAlt<cr>',  vim.tbl_extend('force', opts, { desc = 'Go alternate file' }))
+  map('n', '<leader>gO', '<cmd>GoAltV<cr>', vim.tbl_extend('force', opts, { desc = 'Go alternate file (vsplit)' }))
+
+  -- Run go generate and refresh buffers
+  map('n', '<leader>gg', function()
+    vim.cmd('GoGenerate')
+    vim.defer_fn(function() vim.cmd('checktime') end, 500)
+  end, vim.tbl_extend('force', opts, { desc = 'Go generate' }))
 
   -- Import management
   map('n', '<leader>gia', '<cmd>GoImport<cr>', vim.tbl_extend('force', opts, { desc = 'Go import add' }))
@@ -201,6 +231,15 @@ M.setup_autocmds = function()
       vim.opt_local.shiftwidth = 4
       vim.opt_local.softtabstop = 4
 
+      -- Register Go which-key group (buffer-local)
+      local wk_ok, wk = pcall(require, 'which-key')
+      if wk_ok then
+        wk.add({ { '<leader>g', group = 'Go', icon = '󰟓', buffer = event.buf } })
+      end
+
+      -- Auto-enable inlay hints for Go buffers
+      vim.lsp.inlay_hint.enable(true, { bufnr = event.buf })
+
       -- Setup Go-specific keymaps for this buffer
       M.setup_keymaps(event.buf)
 
@@ -209,10 +248,11 @@ M.setup_autocmds = function()
         group = augroup,
         buffer = event.buf,
         callback = function()
-          local params = vim.lsp.util.make_range_params()
+          -- organizeImports via gopls code action (Neovim 0.11+ API)
+          local params = vim.lsp.util.make_range_params(0, 'utf-8')
           params.context = { only = { 'source.organizeImports' } }
           local result = vim.lsp.buf_request_sync(0, 'textDocument/codeAction', params, 3000)
-          for cid, res in pairs(result or {}) do
+          for _, res in pairs(result or {}) do
             for _, r in pairs(res.result or {}) do
               if r.edit then
                 vim.lsp.util.apply_workspace_edit(r.edit, 'utf-8')
@@ -256,6 +296,12 @@ M.required_tools = {
   -- Test tools
   'gotestsum',
 
+  -- Code generation (required by go.nvim commands)
+  'impl',
+  'gomodifytags',
+  'gotests',
+  'govulncheck',
+
   -- Documentation
   'godoc',
 }
@@ -265,17 +311,18 @@ M.setup = function()
   -- Setup autocommands for Go files
   M.setup_autocmds()
 
-  -- Register Go LSP configuration
-  local lspconfig = require('lspconfig')
-  if lspconfig.gopls and M.lsp_config.gopls then
-    -- Get default capabilities from main LSP config
-    local capabilities = vim.lsp.protocol.make_client_capabilities()
-    local cmp_nvim_lsp = require('cmp_nvim_lsp')
+  -- Get default capabilities from main LSP config
+  local capabilities = vim.lsp.protocol.make_client_capabilities()
+  local ok, cmp_nvim_lsp = pcall(require, 'cmp_nvim_lsp')
+  if ok then
     capabilities = vim.tbl_deep_extend('force', capabilities, cmp_nvim_lsp.default_capabilities())
+  end
 
-    -- Setup gopls with our configuration
+  -- Configure and enable gopls using native Neovim 0.11+ API
+  if M.lsp_config.gopls then
     local config = vim.tbl_deep_extend('force', M.lsp_config.gopls, { capabilities = capabilities })
-    lspconfig.gopls.setup(config)
+    vim.lsp.config('gopls', config)
+    vim.lsp.enable('gopls')
   end
 end
 

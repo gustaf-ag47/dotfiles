@@ -2,8 +2,30 @@
 -- Follows SRP: responsible only for SQL-specific configuration
 -- NO dependencies on other language modules (strict dependency rule compliance)
 -- Can only depend on: core modules, feature modules, utils modules
+-- Updated for Neovim 0.11+ native LSP configuration (vim.lsp.config)
 
 local M = {}
+
+-- Helper function to find root by pattern
+local function root_pattern(...)
+  local patterns = { ... }
+  return function(bufnr, on_dir)
+    local fname = vim.api.nvim_buf_get_name(bufnr)
+    local path = vim.fn.fnamemodify(fname, ':h')
+    while path and path ~= '/' do
+      for _, pattern in ipairs(patterns) do
+        local target = path .. '/' .. pattern
+        if vim.fn.isdirectory(target) == 1 or vim.fn.filereadable(target) == 1 then
+          on_dir(path)
+          return
+        end
+      end
+      path = vim.fn.fnamemodify(path, ':h')
+    end
+    -- Fallback to file directory
+    on_dir(vim.fn.fnamemodify(fname, ':h'))
+  end
+end
 
 -- SQL-specific plugin specifications
 M.plugins = {
@@ -19,36 +41,14 @@ M.plugins = {
     end,
   },
 
-  -- Database interface and REPL
-  {
-    'tpope/vim-dadbod',
-    ft = { 'sql', 'mysql', 'plsql' },
-    cmd = { 'DB', 'DBUI' },
-  },
+  -- vim-dadbod, vim-dadbod-ui, vim-dadbod-completion specs are defined
+  -- canonically in lua/plugins/dadbod.lua (with the full init function that
+  -- registers :DBUIReload, :DBUIHealth, :DBUILogin, etc.). Earlier versions
+  -- of this file had partial duplicate specs here, which lazy.nvim merged
+  -- and which silently dropped the init function. Don't re-add them here.
 
-  -- Database UI
-  {
-    'kristijanhusak/vim-dadbod-ui',
-    ft = { 'sql', 'mysql', 'plsql' },
-    cmd = { 'DBUI', 'DBUIToggle', 'DBUIAddConnection' },
-    dependencies = { 'tpope/vim-dadbod' },
-    config = function()
-      -- Configuration will be handled in setup()
-    end,
-  },
-
-  -- Database completion
-  {
-    'kristijanhusak/vim-dadbod-completion',
-    ft = { 'sql', 'mysql', 'plsql' },
-    dependencies = {
-      'tpope/vim-dadbod',
-      'hrsh7th/nvim-cmp',
-    },
-    config = function()
-      -- Configuration will be handled in setup()
-    end,
-  },
+  -- (vim-dadbod-completion spec also lives in plugins/dadbod.lua. Removed
+  -- the duplicate here for the same reason as vim-dadbod-ui above.)
 
   -- SQL formatting
   {
@@ -69,30 +69,25 @@ M.lsp_config = {
   sqls = {
     cmd = { 'sqls' },
     filetypes = { 'sql', 'mysql' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      return util.root_pattern('.sqls.yml', '.git')(fname) or util.path.dirname(fname)
-    end,
+    root_dir = root_pattern('.sqls.yml', '.git'),
     settings = {
       sqls = {
         connections = {
-          -- Example connection configurations
-          -- Users should override these in their local config
-          {
-            driver = 'mysql',
-            dataSourceName = 'root:password@tcp(127.0.0.1:3306)/database_name',
-            alias = 'local_mysql',
-          },
-          {
-            driver = 'postgresql',
-            dataSourceName = 'host=127.0.0.1 port=5432 user=postgres password=password dbname=database_name sslmode=disable',
-            alias = 'local_postgres',
-          },
-          {
-            driver = 'sqlite3',
-            dataSourceName = './database.db',
-            alias = 'local_sqlite',
-          },
+          -- Database connections should be configured in one of:
+          -- 1. Project-specific: .sqls.yml in project root (recommended, auto-detected)
+          -- 2. Global config: ~/.config/sqls/config.yml
+          -- 3. Local override: $SYNC/dotfiles-local/config/nvim/sqls-connections.lua
+          --
+          -- Example .sqls.yml format:
+          -- ```yaml
+          -- connections:
+          --   - alias: mydb
+          --     driver: mysql
+          --     dataSourceName: user:pass@tcp(host:3306)/dbname
+          -- ```
+          --
+          -- For local override, create: $SYNC/dotfiles-local/config/nvim/sqls-connections.lua
+          -- returning a table of connections (see vim-dadbod documentation)
         },
       },
     },
@@ -107,10 +102,7 @@ M.lsp_config = {
   sqlls = {
     cmd = { 'sql-language-server', 'up', '--method', 'stdio' },
     filetypes = { 'sql', 'mysql' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      return util.root_pattern('.git')(fname) or util.path.dirname(fname)
-    end,
+    root_dir = root_pattern('.git'),
     settings = {},
   },
 }
@@ -120,17 +112,13 @@ M.setup_keymaps = function(bufnr)
   local opts = { buffer = bufnr, silent = true }
   local map = vim.keymap.set
 
-  -- Database operations
-  map('n', '<leader>e', '<cmd>DBUIToggle<cr>', vim.tbl_extend('force', opts, { desc = 'Toggle database UI' }))
-  map('n', '<leader>dB', '<cmd>DBUIAddConnection<cr>', vim.tbl_extend('force', opts, { desc = 'Add database connection' }))
-  map('n', '<leader>df', '<cmd>DBUIFindBuffer<cr>', vim.tbl_extend('force', opts, { desc = 'Find database buffer' }))
-  map('n', '<leader>dr', '<cmd>DBUIRenameBuffer<cr>', vim.tbl_extend('force', opts, { desc = 'Rename database buffer' }))
-  map('n', '<leader>dl', '<cmd>DBUILastQueryInfo<cr>', vim.tbl_extend('force', opts, { desc = 'Last query info' }))
-
-  -- Query execution
-  map('n', '<leader>se', '<cmd>DB<cr>', vim.tbl_extend('force', opts, { desc = 'Execute SQL query' }))
-  map('v', '<leader>se', ':DB<cr>', vim.tbl_extend('force', opts, { desc = 'Execute selected SQL' }))
-  map('n', '<leader>sE', '<cmd>%DB<cr>', vim.tbl_extend('force', opts, { desc = 'Execute entire file' }))
+  -- Database operations (toggle is global <leader>du; execute is <leader>e in dadbod.lua autocmd)
+  map('n', '<leader>du', '<cmd>DBUIToggle<cr>',        vim.tbl_extend('force', opts, { desc = 'DB: Toggle UI' }))
+  map('n', '<leader>da', '<cmd>DBUIAddConnection<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Add connection' }))
+  map('n', '<leader>df', '<cmd>DBUIFindBuffer<cr>',    vim.tbl_extend('force', opts, { desc = 'DB: Find buffer' }))
+  map('n', '<leader>dr', '<cmd>DBUIRenameBuffer<cr>',  vim.tbl_extend('force', opts, { desc = 'DB: Rename buffer' }))
+  map('n', '<leader>dl', '<cmd>DBUILastQueryInfo<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Last query info' }))
+  map('n', '<leader>dc', '<cmd>DBCompletionClearCache<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Clear completion cache' }))
   map('n', '<leader>sr', function()
     vim.cmd('DB ' .. vim.fn.getline('.'))
   end, vim.tbl_extend('force', opts, { desc = 'Execute current line' }))
@@ -339,18 +327,11 @@ M.setup_dadbod_ui = function()
   vim.g.db_ui_winwidth = 30
   vim.g.db_ui_notification_width = 50
 
-  -- Default database connections (users should override)
-  vim.g.dbs = {
-    dev = 'postgresql://localhost:5432/myapp_dev',
-    test = 'postgresql://localhost:5432/myapp_test',
-    staging = 'postgresql://localhost:5432/myapp_staging',
-  }
-
   -- Auto-execute SQL files
   vim.g.db_ui_auto_execute_table_helpers = 1
 
-  -- Save query history
-  vim.g.db_ui_save_location = vim.fn.stdpath('data') .. '/db_ui_queries'
+  -- Note: g:db_ui_save_location is set in plugins/dadbod.lua (must be set before plugin loads)
+  -- Connections are loaded from $NOTES/db_ui/connections.json
 
   -- Show database schemas in tree
   vim.g.db_ui_show_database_icon = 1
@@ -372,18 +353,98 @@ end
 
 -- Setup intelligent completion
 M.setup_completion = function()
-  -- Setup intelligent SQL completion that analyzes actual database schema
-  local sql_completion = require('features.sql_completion')
-  sql_completion.setup()
+  -- (The custom `sql_dadbod` cmp source previously lived in
+  -- features/sql_completion.lua. It called the non-existent vim.fn['db#cmd']
+  -- and silently returned 0 items for every connection. vim-dadbod-completion
+  -- already covers the same ground and actually works. Deleted 2026-06-18.)
 
   -- Enhanced completion for SQL files
+  --
+  -- Context-aware entry_filter on vim-dadbod-completion:
+  --   That plugin bulk-fetches every column in every table (when DB has
+  --   ≤10k columns) and then returns the full column list on EVERY completion
+  --   request, regardless of context. So typing `SELECT * FROM CH` would show
+  --   `CHECKSUM` / `CHECK_TIME` (Field-kind) above `CHARACTER_SETS` (Class-kind)
+  --   in the popup. Our custom `sql_dadbod` source is already context-aware, but
+  --   vim-dadbod-completion still floods the popup with columns. Hide Field +
+  --   Function kinds when the cursor is right after a table-reference keyword.
+  --
+  --   LSP-kind constants from vim_dadbod_completion/init.lua:
+  --     5 = Field (column)    ← HIDE after FROM-like
+  --     3 = Function          ← HIDE after FROM-like
+  --     7 = Class (table)     ← keep
+  --     6 = Variable (alias)  ← keep
+  --    14 = Keyword           ← keep
+  --    19 = Folder (schema)   ← keep
+  -- Which SQL clauses imply "I'm typing a TABLE reference next, hide columns"?
+  local FROM_LIKE_SET = {
+    FROM=true, JOIN=true, INTO=true, UPDATE=true, TABLE=true, USING=true,
+  }
+  -- Which clauses unambiguously END the table-list region (we're now expecting
+  -- columns or expressions)? Used to short-circuit the lookback.
+  local AFTER_TABLES_SET = {
+    WHERE=true, ON=true, GROUP=true, ORDER=true, HAVING=true, LIMIT=true,
+    OFFSET=true, SELECT=true, SET=true, VALUES=true,
+  }
+  -- Find the last SQL clause keyword in the line (or nil if none). Used by
+  -- both the table-context and column-context filters.
+  local function _last_clause(line)
+    -- Bail if cursor is in a position where a different completion mode
+    -- should take over (dot-trigger for column-of-table, quoted identifier,
+    -- subquery start, etc.).
+    if line:find('[%.\"`%(%)]%s*[%w_]*$') then return nil end
+    local last
+    for word in line:gmatch('[%w_]+') do
+      if FROM_LIKE_SET[word] or AFTER_TABLES_SET[word] then
+        last = word
+      end
+    end
+    return last
+  end
+  local function _expecting_table_ref(ctx)
+    local line = (ctx.cursor_before_line or ''):upper()
+    local last = _last_clause(line)
+    return last ~= nil and FROM_LIKE_SET[last] == true
+  end
+  local function _expecting_column_ref(ctx)
+    local line = (ctx.cursor_before_line or ''):upper()
+    local last = _last_clause(line)
+    return last ~= nil and AFTER_TABLES_SET[last] == true
+  end
+  -- LSP kinds to hide based on context
+  local _HIDE_AFTER_FROM   = { [5] = true, [3] = true }   -- Field (column), Function
+  local _HIDE_AFTER_TABLES = { [7] = true }                -- Class (table)
+
   vim.api.nvim_create_autocmd('FileType', {
     pattern = { 'sql', 'mysql', 'plsql' },
     callback = function()
       require('cmp').setup.buffer({
         sources = {
-          { name = 'sql_dadbod', priority = 1000 },        -- Intelligent schema-aware completion
-          { name = 'vim-dadbod-completion', priority = 800 }, -- Fallback dadbod completion
+          -- NB: features/sql_completion.lua used to register a `sql_dadbod`
+          -- source here at priority 1000. It was always a no-op: its schema
+          -- cache stayed at 0 tables / 0 columns because it called the
+          -- non-existent `db#cmd()` function. vim-dadbod-completion already
+          -- does everything it was meant to do (context-aware completion,
+          -- alias resolution, schema/column caching, dot triggers), so we just
+          -- promote it to priority 1000.
+          {
+            name = 'vim-dadbod-completion',
+            priority = 1000,
+            entry_filter = function(entry, ctx)
+              local kind = entry:get_kind()
+              if _expecting_table_ref(ctx) then
+                -- After FROM/JOIN/UPDATE/INTO/TABLE/USING: only show table-y
+                -- things (Class, Folder=schema, Variable=alias, Keyword).
+                return not _HIDE_AFTER_FROM[kind]
+              elseif _expecting_column_ref(ctx) then
+                -- After WHERE/ON/GROUP BY/ORDER BY/HAVING/SET/etc.: only show
+                -- columns and aliases and SQL keywords. Hide raw tables so the
+                -- popup isn't noisy when you're typing column expressions.
+                return not _HIDE_AFTER_TABLES[kind]
+              end
+              return true
+            end,
+          },
           { name = 'buffer', priority = 500 },
           { name = 'path', priority = 300 },
         },
@@ -416,17 +477,18 @@ M.setup = function()
     M.setup_completion()
   end
 
-  -- Register SQL LSP configuration (default to sqls)
-  local lspconfig = require('lspconfig')
-  if lspconfig.sqls and M.lsp_config.sqls then
-    -- Get default capabilities from main LSP config
-    local capabilities = vim.lsp.protocol.make_client_capabilities()
-    local cmp_nvim_lsp = require('cmp_nvim_lsp')
+  -- Get default capabilities from main LSP config
+  local capabilities = vim.lsp.protocol.make_client_capabilities()
+  local ok, cmp_nvim_lsp = pcall(require, 'cmp_nvim_lsp')
+  if ok then
     capabilities = vim.tbl_deep_extend('force', capabilities, cmp_nvim_lsp.default_capabilities())
+  end
 
-    -- Setup sqls with our configuration
+  -- Configure and enable sqls using native Neovim 0.11+ API
+  if M.lsp_config.sqls then
     local config = vim.tbl_deep_extend('force', M.lsp_config.sqls, { capabilities = capabilities })
-    lspconfig.sqls.setup(config)
+    vim.lsp.config('sqls', config)
+    vim.lsp.enable('sqls')
   end
 
   -- Create user commands for SQL operations

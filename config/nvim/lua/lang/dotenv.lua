@@ -79,8 +79,8 @@ M.setup = function()
     callback = function()
       local opts = { buffer = true, silent = true }
 
-      -- Toggle commented lines
-      vim.keymap.set('n', '<leader>/', function()
+      -- Toggle commented lines (gcc is standard via vim-commentary or similar)
+      vim.keymap.set('n', '<leader>ec', function()
         local line = vim.api.nvim_get_current_line()
         local row = vim.api.nvim_win_get_cursor(0)[1]
 

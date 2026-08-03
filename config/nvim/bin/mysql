@@ -1,0 +1,17 @@
+#!/bin/bash
+# vim-dadbod hardcodes the `mysql` client name in its MySQL adapter
+# (autoload/db/adapter/mysql.vim → let command = ['mysql']). On Arch,
+# /usr/bin/mysql is a MariaDB compatibility symlink that prints
+#   "/usr/bin/mysql: Deprecated program name. … use '/usr/bin/mariadb' instead"
+# to stderr on every invocation, which leaks into DBUI query output.
+#
+# This shim is prepended to $PATH *inside nvim only* (see plugins/dadbod.lua),
+# so dadbod resolves `mysql` to here and we re-exec the real client under its
+# canonical `mariadb` name — silencing the warning without patching the plugin.
+# Falls back to a genuine mysql binary if mariadb isn't installed.
+if command -v mariadb >/dev/null 2>&1; then
+  exec mariadb "$@"
+fi
+# Resolve the real mysql, skipping this shim's own directory.
+real_mysql="$(PATH="${PATH#*:}" command -v mysql 2>/dev/null)"
+exec "${real_mysql:-/usr/bin/mysql}" "$@"

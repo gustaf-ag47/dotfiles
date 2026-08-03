@@ -43,7 +43,8 @@ M.plugins = {
       -- 'hrsh7th/cmp-copilot',
     },
     config = function()
-      -- This will be handled by the feature setup
+      -- Setup completion when plugin loads
+      require('features.completion').setup()
     end,
   },
 }
@@ -202,14 +203,6 @@ M.setup_completion = function()
     }
   })
 
-  cmp.setup.cmdline(':', {
-    mapping = cmp.mapping.preset.cmdline(),
-    sources = cmp.config.sources({
-      { name = 'path' }
-    }, {
-      { name = 'cmdline' }
-    })
-  })
 end
 
 -- Setup snippet configuration
@@ -233,11 +226,14 @@ M.setup_snippets = function()
   -- Load snippets from friendly-snippets
   require('luasnip.loaders.from_vscode').lazy_load()
 
-  -- Load custom snippets if they exist
+  -- Load custom VSCode-format snippets if they exist
   local custom_snippets_path = vim.fn.stdpath('config') .. '/snippets'
   if vim.fn.isdirectory(custom_snippets_path) == 1 then
     require('luasnip.loaders.from_vscode').lazy_load({ paths = { custom_snippets_path } })
   end
+
+  -- Load custom Lua-format snippets (lua/snippets/*.lua)
+  require('luasnip.loaders.from_lua').lazy_load({ paths = { vim.fn.stdpath('config') .. '/lua/snippets' } })
 
   -- Snippet keymaps
   vim.keymap.set({ 'i', 's' }, '<C-k>', function()

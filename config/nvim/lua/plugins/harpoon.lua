@@ -11,6 +11,11 @@ return {
       settings = {
         save_on_toggle = true,
         sync_on_ui_close = true,
+        -- Scope list to git root so worktrees share the same file list
+        key = function()
+          return vim.fn.system('git rev-parse --show-toplevel 2>/dev/null'):gsub('\n', '')
+            or vim.loop.cwd()
+        end,
       },
     }
 
@@ -19,7 +24,7 @@ return {
       harpoon:list():add()
     end, { desc = 'Harpoon: Add file' })
 
-    vim.keymap.set('n', '<leader>h', function()
+    vim.keymap.set('n', '<leader>H', function()
       harpoon.ui:toggle_quick_menu(harpoon:list())
     end, { desc = 'Harpoon: Toggle menu' })
 

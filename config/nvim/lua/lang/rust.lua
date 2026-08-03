@@ -199,17 +199,8 @@ M.plugins = {
     'saecki/crates.nvim',
     ft = { 'rust', 'toml' },
     config = function()
-      require('crates').setup {
-        completion = {
-          cmp = {
-            enabled = true,
-          },
-          crates = {
-            enabled = true,
-            max_results = 8,
-            min_chars = 3,
-          },
-        },
+      local crates = require('crates')
+      crates.setup {
         lsp = {
           enabled = true,
           actions = true,
@@ -218,27 +209,33 @@ M.plugins = {
         },
       }
 
-      -- Crates.nvim keymaps
-      local opts = { silent = true }
-      vim.keymap.set('n', '<leader>ct', require('crates').toggle, vim.tbl_extend('force', opts, { desc = 'Crates: Toggle' }))
-      vim.keymap.set('n', '<leader>cr', require('crates').reload, vim.tbl_extend('force', opts, { desc = 'Crates: Reload' }))
-
-      vim.keymap.set('n', '<leader>cv', require('crates').show_versions_popup, vim.tbl_extend('force', opts, { desc = 'Crates: Show versions' }))
-      vim.keymap.set('n', '<leader>cf', require('crates').show_features_popup, vim.tbl_extend('force', opts, { desc = 'Crates: Show features' }))
-      vim.keymap.set('n', '<leader>cd', require('crates').show_dependencies_popup, vim.tbl_extend('force', opts, { desc = 'Crates: Show dependencies' }))
-
-      vim.keymap.set('n', '<leader>cu', require('crates').update_crate, vim.tbl_extend('force', opts, { desc = 'Crates: Update crate' }))
-      vim.keymap.set('v', '<leader>cu', require('crates').update_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update crates' }))
-      vim.keymap.set('n', '<leader>cua', require('crates').update_all_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Update all' }))
-
-      vim.keymap.set('n', '<leader>cU', require('crates').upgrade_crate, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade crate' }))
-      vim.keymap.set('v', '<leader>cU', require('crates').upgrade_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade crates' }))
-      vim.keymap.set('n', '<leader>cA', require('crates').upgrade_all_crates, vim.tbl_extend('force', opts, { desc = 'Crates: Upgrade all' }))
-
-      vim.keymap.set('n', '<leader>cH', require('crates').open_homepage, vim.tbl_extend('force', opts, { desc = 'Crates: Open homepage' }))
-      vim.keymap.set('n', '<leader>cR', require('crates').open_repository, vim.tbl_extend('force', opts, { desc = 'Crates: Open repository' }))
-      vim.keymap.set('n', '<leader>cD', require('crates').open_documentation, vim.tbl_extend('force', opts, { desc = 'Crates: Open documentation' }))
-      vim.keymap.set('n', '<leader>cC', require('crates').open_crates_io, vim.tbl_extend('force', opts, { desc = 'Crates: Open crates.io' }))
+      -- Crates.nvim keymaps (buffer-local for Cargo.toml only)
+      -- Uses <leader>C to avoid conflict with <leader>c (Code actions)
+      vim.api.nvim_create_autocmd('BufRead', {
+        group = vim.api.nvim_create_augroup('CratesKeymaps', { clear = true }),
+        pattern = 'Cargo.toml',
+        callback = function(event)
+          local wk_ok, wk = pcall(require, 'which-key')
+          if wk_ok then
+            wk.add({ { '<leader>C', group = 'Crates', icon = '📦', buffer = event.buf } })
+          end
+          local opts = { buffer = event.buf, silent = true }
+          vim.keymap.set('n', '<leader>Ct', crates.toggle, vim.tbl_extend('force', opts, { desc = 'Toggle crates' }))
+          vim.keymap.set('n', '<leader>Cr', crates.reload, vim.tbl_extend('force', opts, { desc = 'Reload crates' }))
+          vim.keymap.set('n', '<leader>Cv', crates.show_versions_popup, vim.tbl_extend('force', opts, { desc = 'Show versions' }))
+          vim.keymap.set('n', '<leader>Cf', crates.show_features_popup, vim.tbl_extend('force', opts, { desc = 'Show features' }))
+          vim.keymap.set('n', '<leader>Cd', crates.show_dependencies_popup, vim.tbl_extend('force', opts, { desc = 'Show dependencies' }))
+          vim.keymap.set('n', '<leader>Cu', crates.update_crate, vim.tbl_extend('force', opts, { desc = 'Update crate' }))
+          vim.keymap.set('v', '<leader>Cu', crates.update_crates, vim.tbl_extend('force', opts, { desc = 'Update crates' }))
+          vim.keymap.set('n', '<leader>CU', crates.upgrade_crate, vim.tbl_extend('force', opts, { desc = 'Upgrade crate' }))
+          vim.keymap.set('v', '<leader>CU', crates.upgrade_crates, vim.tbl_extend('force', opts, { desc = 'Upgrade crates' }))
+          vim.keymap.set('n', '<leader>CA', crates.upgrade_all_crates, vim.tbl_extend('force', opts, { desc = 'Upgrade all' }))
+          vim.keymap.set('n', '<leader>CH', crates.open_homepage, vim.tbl_extend('force', opts, { desc = 'Open homepage' }))
+          vim.keymap.set('n', '<leader>CR', crates.open_repository, vim.tbl_extend('force', opts, { desc = 'Open repository' }))
+          vim.keymap.set('n', '<leader>CD', crates.open_documentation, vim.tbl_extend('force', opts, { desc = 'Open docs' }))
+          vim.keymap.set('n', '<leader>CC', crates.open_crates_io, vim.tbl_extend('force', opts, { desc = 'Open crates.io' }))
+        end,
+      })
     end,
   },
 }
@@ -275,17 +272,23 @@ M.debug_config = {
   },
 }
 
--- Setup function called by the module system
-M.setup = function()
+-- Rust-specific keymaps (only active in Rust buffers)
+-- NOTE: Most Rust keymaps are set in rustaceanvim's on_attach
+M.setup_keymaps = function(bufnr)
+  -- Additional keymaps if needed can be added here
+  -- Rustaceanvim handles most keymaps in its on_attach
+end
+
+-- Rust-specific autocommands
+M.setup_autocmds = function()
+  local rust_group = vim.api.nvim_create_augroup('RustConfig', { clear = true })
+
   -- File type detection
   vim.filetype.add {
     extension = {
       rs = 'rust',
     },
   }
-
-  -- Rust-specific autocommands
-  local rust_group = vim.api.nvim_create_augroup('RustConfig', { clear = true })
 
   -- Auto-format on save
   vim.api.nvim_create_autocmd('BufWritePre', {
@@ -300,24 +303,29 @@ M.setup = function()
   vim.api.nvim_create_autocmd('FileType', {
     group = rust_group,
     pattern = 'rust',
-    callback = function()
+    callback = function(event)
       vim.opt_local.shiftwidth = 4
       vim.opt_local.tabstop = 4
       vim.opt_local.expandtab = true
       vim.opt_local.textwidth = 100
       vim.opt_local.colorcolumn = '100'
-    end,
-  })
 
-  -- Enhanced Rust snippets
-  vim.api.nvim_create_autocmd('FileType', {
-    group = rust_group,
-    pattern = 'rust',
-    callback = function()
-      -- Custom Rust snippets can be added here
-      -- They will be loaded by LuaSnip if available
+      -- Register Rust which-key group (buffer-local)
+      local wk_ok, wk = pcall(require, 'which-key')
+      if wk_ok then
+        wk.add({ { '<leader>r', group = 'Rust', icon = '🦀', buffer = event.buf } })
+      end
+
+      -- Setup Rust-specific keymaps for this buffer
+      M.setup_keymaps(event.buf)
     end,
   })
+end
+
+-- Setup function called by the module system
+M.setup = function()
+  -- Setup autocommands for Rust files
+  M.setup_autocmds()
 end
 
 return M

@@ -11,8 +11,10 @@ return { -- You can easily change to a different colorscheme.
       -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
       vim.cmd.colorscheme 'tokyonight-night'
 
-      -- You can configure highlights by doing something like:
       vim.cmd.hi 'Comment gui=none'
+
+      -- Make the active snippet tabstop visible during expansion (0.12+)
+      vim.api.nvim_set_hl(0, 'SnippetTabstopActive', { link = 'Visual' })
     end,
   }
 

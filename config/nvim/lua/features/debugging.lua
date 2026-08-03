@@ -24,7 +24,8 @@ M.plugins = {
       'jay-babu/mason-nvim-dap.nvim',
     },
     config = function()
-      -- This will be handled by the feature setup
+      -- Setup debugging when plugin loads
+      require('features.debugging').setup()
     end,
   },
 }
@@ -121,10 +122,11 @@ M.setup_virtual_text = function()
     all_references = false,
     clear_on_continue = false,
     display_callback = function(variable, buf, stackframe, node, options)
+      local val = variable.value:gsub('%s+', ' ')
       if options.virt_text_pos == 'inline' then
-        return ' = ' .. variable.value
+        return ' = ' .. val
       else
-        return variable.name .. ' = ' .. variable.value
+        return variable.name .. ' = ' .. val
       end
     end,
     virt_text_pos = vim.fn.has('nvim-0.10') == 1 and 'inline' or 'eol',
@@ -139,44 +141,45 @@ M.setup_keymaps = function()
   local dap = require('dap')
   local dapui = require('dapui')
 
-  -- Debug session control
-  vim.keymap.set('n', '<F5>', dap.continue, { desc = 'Debug: Start/Continue' })
-  vim.keymap.set('n', '<F1>', dap.step_into, { desc = 'Debug: Step Into' })
-  vim.keymap.set('n', '<F2>', dap.step_over, { desc = 'Debug: Step Over' })
-  vim.keymap.set('n', '<F3>', dap.step_out, { desc = 'Debug: Step Out' })
-  vim.keymap.set('n', '<F7>', dapui.toggle, { desc = 'Debug: See last session result' })
+  -- Function keys for stepping (IDE-like)
+  vim.keymap.set('n', '<F5>', dap.continue, { desc = 'Continue' })
+  vim.keymap.set('n', '<F9>', dap.toggle_breakpoint, { desc = 'Toggle breakpoint' })
+  vim.keymap.set('n', '<F10>', dap.step_over, { desc = 'Step over' })
+  vim.keymap.set('n', '<F11>', dap.step_into, { desc = 'Step into' })
+  vim.keymap.set('n', '<F12>', dap.step_out, { desc = 'Step out' })
 
-  -- Breakpoints
-  vim.keymap.set('n', '<leader>db', dap.toggle_breakpoint, { desc = 'Debug: Toggle Breakpoint' })
-  vim.keymap.set('n', '<leader>dB', function()
-    dap.set_breakpoint(vim.fn.input('Breakpoint condition: '))
-  end, { desc = 'Debug: Set Conditional Breakpoint' })
-  vim.keymap.set('n', '<leader>dlp', function()
-    dap.set_breakpoint(nil, nil, vim.fn.input('Log point message: '))
-  end, { desc = 'Debug: Set Log Point' })
+  -- Leader+d prefix for debug commands
+  vim.keymap.set('n', '<leader>dc', dap.continue, { desc = 'Continue' })
+  -- <leader>dB and conditional breakpoint owned by persistent-breakpoints.lua
+  vim.keymap.set('n', '<leader>dp', function()
+    dap.set_breakpoint(nil, nil, vim.fn.input('Log message: '))
+  end, { desc = 'Log point' })
+  vim.keymap.set('n', '<leader>dR', dap.run_to_cursor, { desc = 'Run to cursor' })
 
-  -- Debug UI
-  vim.keymap.set('n', '<leader>du', dapui.toggle, { desc = 'Debug: Toggle UI' })
-  vim.keymap.set('n', '<leader>de', dapui.eval, { desc = 'Debug: Evaluate Expression' })
-  vim.keymap.set('v', '<leader>de', dapui.eval, { desc = 'Debug: Evaluate Selection' })
+  -- Stepping
+  vim.keymap.set('n', '<leader>di', dap.step_into, { desc = 'Step into' })
+  vim.keymap.set('n', '<leader>do', dap.step_over, { desc = 'Step over' })
+  vim.keymap.set('n', '<leader>dO', dap.step_out, { desc = 'Step out' })
 
-  -- REPL
-  vim.keymap.set('n', '<leader>dr', dap.repl.open, { desc = 'Debug: Open REPL' })
-  vim.keymap.set('n', '<leader>dl', dap.run_last, { desc = 'Debug: Run Last' })
-
-  -- Session management
-  vim.keymap.set('n', '<leader>dt', dap.terminate, { desc = 'Debug: Terminate' })
-  vim.keymap.set('n', '<leader>dc', dap.clear_breakpoints, { desc = 'Debug: Clear Breakpoints' })
-
-  -- Frames and variables
-  vim.keymap.set('n', '<leader>df', dap.focus_frame, { desc = 'Debug: Focus Frame' })
+  -- UI and evaluation
+  vim.keymap.set('n', '<leader>du', dapui.toggle, { desc = 'Toggle UI' })
+  vim.keymap.set('n', '<leader>de', dapui.eval, { desc = 'Evaluate' })
+  vim.keymap.set('v', '<leader>de', dapui.eval, { desc = 'Evaluate selection' })
   vim.keymap.set('n', '<leader>dh', function()
     require('dap.ui.widgets').hover()
-  end, { desc = 'Debug: Hover Variables' })
+  end, { desc = 'Hover variable' })
   vim.keymap.set('n', '<leader>ds', function()
     local widgets = require('dap.ui.widgets')
     widgets.centered_float(widgets.scopes)
-  end, { desc = 'Debug: Scopes' })
+  end, { desc = 'Scopes' })
+
+  -- Session control
+  vim.keymap.set('n', '<leader>dr', function()
+    require('dapui').toggle_element('repl')
+  end, { desc = 'Toggle REPL' })
+  vim.keymap.set('n', '<leader>dl', dap.run_last, { desc = 'Run last' })
+  vim.keymap.set('n', '<leader>dt', dap.terminate, { desc = 'Terminate' })
+  vim.keymap.set('n', '<leader>dx', dap.clear_breakpoints, { desc = 'Clear breakpoints' })
 end
 
 -- Setup debug signs

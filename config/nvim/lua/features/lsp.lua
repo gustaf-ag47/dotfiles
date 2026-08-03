@@ -1,6 +1,7 @@
 -- LSP feature module - isolated and following SRP
 -- Responsible only for LSP server management and configuration
 -- No dependencies on language-specific modules (dependency rule compliance)
+-- Updated for Neovim 0.11+ native LSP configuration (vim.lsp.config)
 
 local M = {}
 
@@ -8,6 +9,7 @@ local M = {}
 M.plugins = {
   {
     'neovim/nvim-lspconfig',
+    event = { 'BufReadPre', 'BufNewFile' },
     dependencies = {
       { 'williamboman/mason.nvim', config = true },
       'williamboman/mason-lspconfig.nvim',
@@ -17,10 +19,12 @@ M.plugins = {
       'b0o/schemastore.nvim', -- JSON/YAML schema support
     },
     config = function()
-      -- This will be handled by the feature setup
+      -- Setup LSP when plugin loads
+      require('features.lsp').setup()
     end,
   },
 }
+
 
 -- LSP attach keymaps and behavior
 M.setup_lsp_attach = function()
@@ -29,27 +33,76 @@ M.setup_lsp_attach = function()
     callback = function(event)
       local map = function(keys, func, desc, mode)
         mode = mode or 'n'
-        vim.keymap.set(mode, keys, func, { buffer = event.buf, desc = 'LSP: ' .. desc })
+        vim.keymap.set(mode, keys, func, { buffer = event.buf, desc = desc })
       end
 
-      -- Navigation
-      map('gd', require('telescope.builtin').lsp_definitions, '[G]oto [D]efinition')
-      map('gr', require('telescope.builtin').lsp_references, '[G]oto [R]eferences')
-      map('gI', require('telescope.builtin').lsp_implementations, '[G]oto [I]mplementation')
-      map('<leader>D', require('telescope.builtin').lsp_type_definitions, 'Type [D]efinition')
-      map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+      -- Navigation (g prefix - standard vim convention)
+      --
+      -- Telescope's lsp_definitions/etc. capture the window inside the async
+      -- vim.schedule callback, so nvim_get_current_win() may return a Telescope
+      -- picker window by the time it fires (e.g. intelephense returns 9 results
+      -- for an interface → picker opens → picker window becomes current →
+      -- nvim_win_set_buf on the picker window closes it → nvim_set_current_win
+      -- fails with "Invalid window id"). Fix: capture win BEFORE the LSP request
+      -- using vim.lsp.buf.definition with on_list, then pass the pre-captured
+      -- win to the single-result jump, or open Telescope with pre-resolved items
+      -- for multi-result cases.
+      local function lsp_goto(method, telescope_fn)
+        return function()
+          local win = vim.api.nvim_get_current_win()
+          local opts = {
+            on_list = function(options)
+              if #options.items == 0 then return end
+              if #options.items == 1 then
+                local item = options.items[1]
+                local b = item.bufnr or vim.fn.bufadd(item.filename)
+                vim.cmd("normal! m'")
+                vim.bo[b].buflisted = true
+                vim.api.nvim_win_set_buf(win, b)
+                vim.api.nvim_win_set_cursor(win, { item.lnum, item.col - 1 })
+              else
+                local conf = require('telescope.config').values
+                require('telescope.pickers').new({}, {
+                  prompt_title = telescope_fn:gsub('_', ' '):gsub('^%l', string.upper),
+                  finder = require('telescope.finders').new_table({
+                    results = options.items,
+                    entry_maker = require('telescope.make_entry').gen_from_quickfix({}),
+                  }),
+                  previewer = conf.qflist_previewer({}),
+                  sorter = conf.generic_sorter({}),
+                  push_cursor_on_edit = true,
+                  push_tagstack_on_edit = true,
+                }):find()
+              end
+            end,
+          }
+          -- vim.lsp.buf.references has signature (context, opts); others have (opts)
+          if method == 'references' then
+            vim.lsp.buf.references(nil, opts)
+          else
+            vim.lsp.buf[method](opts)
+          end
+        end
+      end
+      map('gd', lsp_goto('definition', 'lsp_definitions'), 'Go to definition')
+      map('gr', lsp_goto('references', 'lsp_references'), 'Go to references')
+      map('gI', lsp_goto('implementation', 'lsp_implementations'), 'Go to implementation')
+      map('gD', vim.lsp.buf.declaration, 'Go to declaration')
+      map('gy', lsp_goto('type_definition', 'lsp_type_definitions'), 'Go to type definition')
 
-      -- Symbols and workspace
-      map('<leader>ds', require('telescope.builtin').lsp_document_symbols, '[D]ocument [S]ymbols')
-      map('<leader>ws', require('telescope.builtin').lsp_dynamic_workspace_symbols, '[W]orkspace [S]ymbols')
+      -- LSP commands (l prefix)
+      map('<leader>ls', require('telescope.builtin').lsp_document_symbols, 'Document symbols')
+      map('<leader>lS', require('telescope.builtin').lsp_dynamic_workspace_symbols, 'Workspace symbols')
+      map('<leader>li', ':LspInfo<CR>', 'LSP info')
+      map('<leader>lr', ':LspRestart<CR>', 'LSP restart')
 
-      -- Code actions
-      map('<leader>rn', vim.lsp.buf.rename, '[R]e[n]ame')
-      map('<leader>ca', vim.lsp.buf.code_action, '[C]ode [A]ction', { 'n', 'x' })
+      -- Code actions (c prefix)
+      -- Rename handled by inc-rename.nvim plugin
+      map('<leader>ca', vim.lsp.buf.code_action, 'Code action', { 'n', 'x' })
 
       -- Document highlighting
       local client = vim.lsp.get_client_by_id(event.data.client_id)
-      if client and client.supports_method(vim.lsp.protocol.Methods.textDocument_documentHighlight) then
+      if client and client:supports_method(vim.lsp.protocol.Methods.textDocument_documentHighlight) then
         local highlight_augroup = vim.api.nvim_create_augroup('lsp-highlight', { clear = false })
         vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
           buffer = event.buf,
@@ -72,11 +125,11 @@ M.setup_lsp_attach = function()
         })
       end
 
-      -- Inlay hints
-      if client and client.supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
-        map('<leader>th', function()
+      -- Inlay hints toggle
+      if client and client:supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
+        map('<leader>uh', function()
           vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf })
-        end, '[T]oggle Inlay [H]ints')
+        end, 'Toggle inlay hints')
       end
     end,
   })
@@ -87,13 +140,12 @@ M.base_servers = {
   -- Bash language server with .env file exclusion
   bashls = {
     filetypes = { 'sh', 'bash' },
-    root_dir = function(fname)
-      local util = require('lspconfig.util')
-      -- Don't attach to .env files
+    root_markers = { '.git', '.hg' },
+    on_attach = function(client, bufnr)
+      local fname = vim.api.nvim_buf_get_name(bufnr)
       if fname:match('%.env') or fname:match('%.env%.') then
-        return nil
+        client:stop()
       end
-      return util.find_git_ancestor(fname)
     end,
     settings = {
       bashIde = {
@@ -123,6 +175,23 @@ M.base_servers = {
       },
     },
   },
+
+  -- Python language servers
+  pyright = {
+    settings = {
+      python = {
+        analysis = {
+          typeCheckingMode = 'basic',
+          autoImportCompletions = true,
+          diagnosticMode = 'workspace',
+          autoSearchPaths = true,
+          useLibraryCodeForTypes = true,
+        },
+      },
+    },
+  },
+
+  ruff = {},
 
   -- JSON language server
   jsonls = {
@@ -228,23 +297,40 @@ M.setup_mason = function()
     'json-lsp',
     'yaml-language-server',
     'dockerfile-language-server',
-    'taplo', -- TOML language server
+    'taplo',
     'bash-language-server',
+    'intelephense',
+    'phpactor',
+    'twiggy-language-server',
 
     -- Formatters
-    'stylua', -- Lua formatter
-    'prettier', -- JS/TS/JSON/YAML formatter
-    'ruff', -- Python formatter/linter
-    'rustfmt', -- Rust formatter
+    'stylua',
+    'prettier',
+    'ruff',
+    'php-cs-fixer',
 
     -- Linters
-    'eslint_d', -- Fast ESLint
-    'mypy', -- Python type checker
+    'eslint_d',
+    'mypy',
+    'phpstan',
+
+    -- Go tools
+    'gopls',
+    'gofumpt',
+    'goimports',
+    'golangci-lint',
+    'delve',
+    'gotestsum',
+    'impl',
+    'gomodifytags',
+    'staticcheck',
+    -- govulncheck is not in the Mason registry; install via: go install golang.org/x/vuln/cmd/govulncheck@latest
 
     -- Debug adapters
-    'js-debug-adapter', -- JavaScript/TypeScript debugger
-    'debugpy', -- Python debugger
-    'codelldb', -- Rust/C++ debugger
+    'js-debug-adapter',
+    'debugpy',
+    'codelldb',
+    'php-debug-adapter',
   })
 
   require('mason-tool-installer').setup {
@@ -255,16 +341,26 @@ M.setup_mason = function()
     debounce_hours = 5, -- at least 5 hours between attempts
   }
 
+  -- Setup mason-lspconfig with automatic installation
   require('mason-lspconfig').setup {
     automatic_installation = true,
-    handlers = {
-      function(server_name)
-        local server = M.base_servers[server_name] or {}
-        server.capabilities = vim.tbl_deep_extend('force', {}, M.get_capabilities(), server.capabilities or {})
-        require('lspconfig')[server_name].setup(server)
-      end,
-    },
   }
+
+  -- Configure and enable LSP servers using Neovim 0.11+ native API
+  local capabilities = M.get_capabilities()
+  local servers_to_enable = {}
+
+  for server_name, server_config in pairs(M.base_servers) do
+    local config = vim.tbl_deep_extend('force', {}, server_config)
+    config.capabilities = vim.tbl_deep_extend('force', {}, capabilities, config.capabilities or {})
+
+    -- Use vim.lsp.config for Neovim 0.11+
+    vim.lsp.config(server_name, config)
+    table.insert(servers_to_enable, server_name)
+  end
+
+  -- Enable all configured servers
+  vim.lsp.enable(servers_to_enable)
 end
 
 -- Register a language server configuration
@@ -277,10 +373,9 @@ M.register_server = function(server_name, config)
     capabilities = M.get_capabilities(),
   }, config or {})
 
-  -- If LSP is already setup, configure this server immediately
-  if package.loaded['lspconfig'] then
-    require('lspconfig')[server_name].setup(M.base_servers[server_name])
-  end
+  -- Configure and enable this server immediately using native API
+  vim.lsp.config(server_name, M.base_servers[server_name])
+  vim.lsp.enable(server_name)
 end
 
 -- Setup LSP diagnostics
@@ -290,7 +385,14 @@ M.setup_diagnostics = function()
       prefix = '●',
       source = 'if_many',
     },
-    signs = true,
+    signs = vim.g.have_nerd_font and {
+      text = {
+        [vim.diagnostic.severity.ERROR] = '󰅚 ',
+        [vim.diagnostic.severity.WARN]  = '󰀪 ',
+        [vim.diagnostic.severity.HINT]  = '󰌶 ',
+        [vim.diagnostic.severity.INFO]  = ' ',
+      },
+    } or true,
     underline = true,
     update_in_insert = false,
     severity_sort = true,
@@ -301,15 +403,6 @@ M.setup_diagnostics = function()
       prefix = '',
     },
   })
-
-  -- Diagnostic signs
-  if vim.g.have_nerd_font then
-    local signs = { Error = '󰅚 ', Warn = '󰀪 ', Hint = '󰌶 ', Info = ' ' }
-    for type, icon in pairs(signs) do
-      local hl = 'DiagnosticSign' .. type
-      vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = hl })
-    end
-  end
 end
 
 -- Setup the LSP feature module
