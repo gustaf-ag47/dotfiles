@@ -18,6 +18,11 @@ config/zsh/.zhistory
 config/tmux/plugins/**
 .claude/settings.local.json
 
+// Machine-specific / generated nvim state (let git own lazy-lock, don't sync it)
+config/nvim/lazy-lock.json
+config/nvim/.repro/**
+config/nvim/queries/**
+
 // Syncthing's own conflict files (belt and suspenders)
 *.sync-conflict-*
 .sync-conflict-*

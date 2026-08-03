@@ -57,7 +57,7 @@ This document contains ALL keybindings for your development environment across a
 ---
 
 ## 📺 Tmux (Terminal Multiplexer)
-
+<D-V><D-V>
 **Prefix Key: `Ctrl + Space`**
 
 ### Session Management
@@ -66,25 +66,28 @@ This document contains ALL keybindings for your development environment across a
 | `Ctrl + Space + $` | Rename session |
 | `Ctrl + Space + s` | List sessions |
 | `Ctrl + Space + d` | Detach from session |
+| `Ctrl + Space + Ctrl+S` | Save session (tmux-safe-save) |
+| `Ctrl + Space + Ctrl+R` | Restore session (tmux-resurrect) |
+| `F9` | Toggle remote mode (disable local prefix for nested tmux) |
 
 ### Window Management
 | Keybinding | Action |
 |------------|--------|
-| `Ctrl + Space + c` | Create new window |
+| `Ctrl + Space + w` | Create new window |
 | `Ctrl + Space + &` | Kill window |
-| `Ctrl + Space + ,` | Rename window |
-| `Ctrl + Space + n` | Next window |
-| `Ctrl + Space + p` | Previous window |
+| `Ctrl + Space + n` | Rename window |
+| `Alt + k` | Next window (no prefix) |
+| `Alt + j` | Previous window (no prefix) |
 | `Ctrl + Space + 1-9` | Switch to window 1-9 |
 
 ### Pane Management
 | Keybinding | Action |
 |------------|--------|
-| `Ctrl + Space + %` | Split horizontally |
-| `Ctrl + Space + "` | Split vertically |
+| `Ctrl + Space + v` | Split vertically (side by side) |
+| `Ctrl + Space + h` | Split horizontally (top/bottom) |
 | `Ctrl + Space + x` | Kill pane |
-| `Ctrl + Space + h/j/k/l` | Navigate panes (vim-style) |
-| `Ctrl + Space + H/J/K/L` | Resize panes |
+| `C-h/j/k/l` | Navigate panes (no prefix, vim-aware) |
+| `C-\` | Navigate to last pane (no prefix, vim-aware) |
 | `Ctrl + Space + {` | Swap pane left |
 | `Ctrl + Space + }` | Swap pane right |
 
@@ -93,9 +96,18 @@ This document contains ALL keybindings for your development environment across a
 |------------|--------|
 | `Ctrl + Space + [` | Enter copy mode |
 | `v` | Begin selection |
-| `V` | Line selection |
-| `y` | Copy selection |
-| `Ctrl + Space + ]` | Paste |
+| `y` | Copy selection (to system clipboard) |
+
+### Shell Aliases
+| Alias | Action |
+|-------|--------|
+| `tn` | Open session picker (ftmuxp) |
+| `tl` | List sessions |
+| `ta` | Attach to session |
+| `ts` | Save session |
+| `trs` | Restore session |
+| `tc` | Clean old resurrect files (>7 days) |
+| `ftsess` | Interactive session killer with preview |
 
 ---
 
@@ -293,7 +305,7 @@ pi                 # → 3.14159...
 e                  # → 2.71828...
 
 # Commands
-help()             # Show help (terminal only)
+<D-C>
 q or quit()        # Exit calculator
 c or clear()       # Clear screen/history
 ```

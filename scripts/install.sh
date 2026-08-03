@@ -46,6 +46,11 @@ link_config() {
 rm -rf "$ZDOTDIR"
 mkdir -p "$ZDOTDIR"
 link_config "$DOTFILES/config/zsh/.zshenv" "$HOME/.zshenv"
+# Also link into $ZDOTDIR: a login shell reads $HOME/.zshenv (ZDOTDIR unset),
+# but it then exports ZDOTDIR, so every child/nested zsh looks for
+# $ZDOTDIR/.zshenv instead. Without this link those shells skip .zshenv
+# entirely and miss all env/PATH exports.
+link_config "$DOTFILES/config/zsh/.zshenv" "$ZDOTDIR/.zshenv"
 link_config "$DOTFILES/config/zsh/.zshrc" "$ZDOTDIR/.zshrc"
 link_config "$DOTFILES/config/zsh/aliases" "$ZDOTDIR/aliases"
 link_config "$DOTFILES/config/zsh/external" "$ZDOTDIR/external"
@@ -73,6 +78,26 @@ link_config "$DOTFILES/config/lf" "$XDG_CONFIG_HOME/lf"
 link_config "$DOTFILES/config/npm" "$XDG_CONFIG_HOME/npm"
 link_config "$DOTFILES/config/mycli/myclirc" "$XDG_CONFIG_HOME/myclirc"
 link_config "$DOTFILES/config/xdg-user-dirs/user-dirs.dirs" "$XDG_CONFIG_HOME/user-dirs.dirs"
+
+# Claude Code auth helper: sourced by .zshenv to select the OAuth token with the
+# most quota headroom (see bin/claude-token-refresh / bin/claude-token-proxy).
+mkdir -p "$XDG_CONFIG_HOME/claude-code"
+link_config "$DOTFILES/config/claude-code/env.sh" "$XDG_CONFIG_HOME/claude-code/env.sh"
+
+# Hot-swap proxy as a user service so EVERY session can rotate tokens mid-run
+# (env.sh routes through it via ANTHROPIC_BASE_URL when it is active).
+# Symlink the binaries into ~/.local/bin so the unit's %h-relative ExecStart
+# resolves regardless of where $DOTFILES lives or what PATH systemd uses.
+mkdir -p "$HOME/.local/bin"
+link_config "$DOTFILES/bin/claude-token-proxy" "$HOME/.local/bin/claude-token-proxy"
+link_config "$DOTFILES/bin/claude-token-refresh" "$HOME/.local/bin/claude-token-refresh"
+mkdir -p "$XDG_CONFIG_HOME/systemd/user" "${XDG_CACHE_HOME:-$HOME/.cache}/cc-proxy"
+link_config "$DOTFILES/config/systemd/user/claude-token-proxy.service" \
+	"$XDG_CONFIG_HOME/systemd/user/claude-token-proxy.service"
+if command -v systemctl >/dev/null 2>&1; then
+	systemctl --user daemon-reload 2>/dev/null || true
+	systemctl --user enable --now claude-token-proxy.service 2>/dev/null || true
+fi
 
 rm -rf "$XDG_CONFIG_HOME/transmission-daemon"
 mkdir "$XDG_CONFIG_HOME/transmission-daemon"
@@ -154,3 +179,7 @@ for script in "$DOTFILES/bin/"*; do
         ln -sf "$script" "$HOME/.local/bin/$(basename "$script")"
     fi
 done
+
+# Link Claude Code user configuration
+mkdir -p "$HOME/.claude"
+link_config "$DOTFILES/.claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"

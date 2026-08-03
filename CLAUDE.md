@@ -106,12 +106,13 @@ rm test.sh
 # Tmux auto-starts in terminals with session persistence
 
 # Tmux session management
-ts                 # Save current tmux session
-tr                 # Restore last tmux session
-tc                 # Clean old session files
+tn                 # Open session picker (ftmuxp) — create or attach
 tl                 # List tmux sessions
 ta                 # Attach to session
-tn                 # Create new session
+ts                 # Save current tmux session (tmux-safe-save)
+trs                # Restore last tmux session (tmux-resurrect)
+tc                 # Clean old resurrect files (>7 days)
+ftsess             # Interactive session killer with fzf preview
 
 # Access file manager
 Super + R  # or run: filemanager
@@ -155,8 +156,9 @@ power             # Power management menu
    - Location: `config/tmux/`
    - Prefix: Ctrl-Space
    - **Automatic session persistence** with resurrect/continuum (saves every 5min)
-   - **Auto-restore** on terminal startup via enhanced `ftmuxp` function
-   - Manual save/restore: `Ctrl-Space + Ctrl-S/Ctrl-R`
+   - **Interactive session picker** on terminal startup via `ftmuxp` (attach, load layout, or create new)
+   - **Auto-restore** when tmux server starts via continuum (not on every terminal open)
+   - Manual save/restore: `Ctrl-Space + Ctrl-S` (save via wrapper) / `Ctrl-Space + Ctrl-R` (restore)
    - Vim-tmux-navigator for seamless pane navigation
    - Tokyo Night theme matching other components
 
@@ -209,10 +211,123 @@ The system uses enhanced versions of standard tools:
 
 ## Platform Support
 
-### Primary: Arch Linux
-- Full hardware support including NVIDIA graphics
-- Hyprland with Wayland as primary desktop
-- i3 with X11 as fallback option
+### Primary: Arch Linux (`arch` host — Dell XPS 15)
+
+**Hardware:** Intel Iris Xe + NVIDIA RTX 3050 Ti Mobile (Optimus hybrid)
+
+The `make install` script only manages user-space configs. The following
+system-level files must be created manually on a fresh install:
+
+#### `/etc/modprobe.d/nvidia-suspend.conf`
+Required for the display to survive suspend/resume (lid close). The laptop has
+no S3 sleep; only s2idle (Modern Standby / S0ix) is available.
+
+**Critical**: `EnableS0ixPowerManagement=1` implicitly activates
+`UseKernelSuspendNotifiers`, which means the kernel handles GPU state save/restore
+via PM callbacks — **not** via the nvidia-suspend/resume systemd services. The
+services must therefore be **disabled**; having both active double-handles GPU
+state and corrupts the driver on resume.
+
+`DynamicPowerManagement=0x01` is required: the default value (3) on laptops
+causes GSP Xid 120 task panics on resume with nvidia-open 595 on Optimus systems.
+
+```
+options nvidia NVreg_PreserveVideoMemoryAllocations=1
+options nvidia NVreg_EnableS0ixPowerManagement=1
+options nvidia NVreg_DynamicPowerManagement=0x01
+```
+After creating the file: `sudo mkinitcpio -P`
+
+#### Systemd services — keep DISABLED
+```bash
+# DO NOT enable these — kernel notifiers (activated by EnableS0ixPowerManagement)
+# handle GPU state. Enabling the services alongside notifiers causes double
+# save/restore which corrupts the driver and produces a black screen on resume.
+sudo systemctl disable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service
+```
+
+#### `/etc/systemd/logind.conf.d/idle.conf`
+Prevents logind from double-suspending alongside idle-manager:
+```ini
+[Login]
+IdleAction=ignore
+```
+
+#### Kernel cmdline (`/etc/default/grub` → `GRUB_CMDLINE_LINUX_DEFAULT`)
+```
+nvidia_drm.modeset=1 i915.enable_psr=0 pcie_aspm=off acpi_osi=!ACPI-Video
+```
+- `i915.enable_psr=0`: disables Intel Panel Self Refresh. Without it, i915 on
+  Alder Lake can fail to re-initialize the eDP link at the correct clock
+  frequency on s2idle resume (black screen despite NVIDIA resuming correctly).
+- `pcie_aspm=off`: prevents ASPM link state transitions that can race with
+  NVIDIA S0ix resume, causing hangs.
+- `acpi_osi=!ACPI-Video`: stops the ACPI subsystem from delivering D-Notifier
+  events to the NVIDIA driver during resume. Without it, the driver logs
+  `RmHandleDNotifierEvent: Failed … status=0x11` on every wake — the RM objects
+  haven't been reconstructed yet when the events arrive, leaving the driver in
+  an inconsistent state that can cause downstream crashes.
+
+After editing grub: `sudo grub-mkconfig -o /boot/grub/grub.cfg`
+
+#### Lid switch handling (Hyprland host config)
+Use **`dispatch dpms`** for lid open/close — never `keyword monitor "eDP-1, disable"`.
+
+`keyword monitor` tears down Aquamarine's `SDRMConnector` for eDP-1. On resume
+the reconnect path hits a use-after-free in `CLogger` inside
+`SDRMConnector::disconnect()`, crashing Hyprland (confirmed in coredump, March
+2026). `dispatch dpms off eDP-1` / `dispatch dpms on` only toggles display
+power; the DRM pipeline stays intact, so there is nothing to reconstruct.
+
+```ini
+# config/gui/Wayland/hypr/hosts/arch.conf
+bindl=,switch:on:Lid Switch,exec,hyprctl dispatch dpms off eDP-1
+bindl=,switch:off:Lid Switch,exec,sleep 2 && hyprctl dispatch dpms on
+```
+
+#### `/etc/systemd/system-sleep/hyprland-sigstop`
+Prevents Hyprland from issuing DRM/NVIDIA ioctls during the GPU suspend/resume
+transition. Without this, Hyprland blocks on an NVIDIA driver call that only
+resolves after a ~20 s timeout, after which Hyprland calls `exit()` — producing
+a black screen with no coredump (confirmed June 2026).
+
+```bash
+#!/bin/bash
+HYPRLAND_PID=$(pgrep -x Hyprland 2>/dev/null)
+[[ -z "$HYPRLAND_PID" ]] && exit 0
+case "$1" in
+    pre)  kill -STOP "$HYPRLAND_PID" ;;
+    post) kill -CONT "$HYPRLAND_PID" ;;
+esac
+```
+Make executable: `sudo chmod +x /etc/systemd/system-sleep/hyprland-sigstop`
+
+**Do not** use `nvidia-suspend/resume.service` for this — those services must
+stay disabled (see modprobe.conf note above).
+
+#### `/usr/src/hid-annepro2-1.0/` — AnnePro2 BLE keyboard DKMS module
+The AnnePro2 sends a malformed 44-byte HID descriptor over BLE. A DKMS module
+is required to replace it with a valid 6KRO descriptor. Without it, the kernel
+truncates the descriptor to 4 bytes, creating no input device.
+
+The module source lives at `/usr/src/hid-annepro2-1.0/hid-annepro2.c` and is
+**not owned by any pacman package** — it must be created manually. The key fix:
+`report_fixup` must return a hardcoded valid descriptor, not try to trim the
+malformed one (the trim approach always produces a 4-byte no-op descriptor).
+
+```bash
+sudo dkms add /usr/src/hid-annepro2-1.0
+sudo dkms build hid-annepro2/1.0
+sudo dkms install hid-annepro2/1.0
+```
+`AUTOINSTALL=yes` in `dkms.conf` rebuilds automatically on kernel updates.
+
+#### Lock manager notes
+- Idle daemon: `hypridle` — started via `exec-once` in hyprland.conf
+- Screen locker: `hyprlock` with `hyprlock-safe` wrapper (restarts on crash)
+- Session launcher: `bin/hyprland-session` wrapper (saves Hyprland log to
+  `~/.local/share/hyprland/logs/` on every exit for post-mortem debugging)
+- `bin/idle-manager` (swayidle wrapper) is kept as fallback but is no longer active.
 
 ### Testing: Docker
 - Dockerfile provides clean testing environment
@@ -241,7 +356,7 @@ The system uses enhanced versions of standard tools:
 ### Auto-start Behavior
 - **tty1**: Automatically launches Hyprland (see `config/zsh/.zshrc`)
 - **Other terminals**: Automatically starts tmux with session restoration
-- **Session persistence**: Tmux saves every 5min, auto-restores on terminal startup
+- **Session persistence**: Tmux saves every 5min via continuum; restores when tmux server starts
 
 ### Shell Functions (config/zsh/scripts/functions.zsh)
 - `docker-nuke <project>` - Complete cleanup of Docker resources for a project

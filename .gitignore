@@ -13,7 +13,22 @@ config/tmux/plugins/
 # See $SYNC/dotfiles-local/README.md for usage
 local
 
+# Neovim minimal.lua repro environment (plugin installs for isolated testing)
+config/nvim/.repro/
+
 # Syncthing conflict files
 *.sync-conflict-*
 .sync-conflict-*
 config/gui/Wayland/hypr/host.conf
+
+# Claude Code OAuth token store + caches (NEVER commit — contain live tokens)
+cctoken
+*cctoken*
+claude-code-token.env
+.credentials.json
+
+# Company/personal-specific files kept on disk (synced via Syncthing) but never
+# committed to this PUBLIC repo. Templates (*.example) ARE committed.
+config/nvim/lua/dbui_private.lua
+.claude/CLAUDE.md
+.claude/skills/
