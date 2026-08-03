@@ -1,0 +1,24 @@
+[Unit]
+Description=Claude Code quota-aware OAuth token hot-swap proxy
+Documentation=https://github.com/KarpelesLab/teamclaude
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Bind localhost only; selects the ~/cctoken token with the most weekly headroom
+# and fails over on 429/401/403/529 so a running `claude` rotates without restart.
+ExecStart=%h/.local/bin/claude-token-proxy --port 8788
+Restart=always
+RestartSec=2
+# Hardening: the proxy reads ~/cctoken and holds tokens in memory only.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadOnlyPaths=%h/cctoken
+# force_cooldown control file lives here.
+ReadWritePaths=%h/.cache/cc-proxy
+
+[Install]
+WantedBy=default.target
