@@ -6,21 +6,25 @@
 --
 -- To test a specific language, uncomment the relevant section below.
 
-local root = vim.fn.fnamemodify(vim.fn.resolve(vim.fn.expand('<sfile>')), ':h')
+local root = vim.fn.fnamemodify(vim.fn.resolve(vim.fn.expand '<sfile>'), ':h')
 local repro = root .. '/.repro'
 
 -- Redirect all XDG dirs so this never touches your real Neovim state
-for _, name in ipairs({ 'config', 'data', 'state', 'cache' }) do
+for _, name in ipairs { 'config', 'data', 'state', 'cache' } do
   vim.env[('XDG_%s_HOME'):format(name:upper())] = repro .. '/' .. name
 end
 
 -- Bootstrap lazy.nvim
 local lazypath = repro .. '/data/lazy/lazy.nvim'
 if not vim.uv.fs_stat(lazypath) then
-  vim.fn.system({
-    'git', 'clone', '--filter=blob:none', '--single-branch',
-    'https://github.com/folke/lazy.nvim.git', lazypath,
-  })
+  vim.fn.system {
+    'git',
+    'clone',
+    '--filter=blob:none',
+    '--single-branch',
+    'https://github.com/folke/lazy.nvim.git',
+    lazypath,
+  }
 end
 vim.opt.rtp:prepend(lazypath)
 
@@ -36,7 +40,7 @@ require('lazy').setup({
     -- highlight is enabled by default. Install parsers on demand via :TSInstall.
   },
   { 'neovim/nvim-lspconfig' },
-  { 'williamboman/mason.nvim',            config = true },
+  { 'williamboman/mason.nvim', config = true },
   { 'williamboman/mason-lspconfig.nvim' },
 
   -- Uncomment to test Go workflow:
@@ -49,7 +53,7 @@ require('lazy').setup({
   -- Uncomment to test a specific plugin from your config:
   -- { dir = root },  -- loads your full config as the plugin under test
 }, {
-  root     = repro .. '/data/lazy',
+  root = repro .. '/data/lazy',
   lockfile = repro .. '/lazy-lock.json',
   -- XDG overrides above already prevent ~/.config/nvim from loading
 })

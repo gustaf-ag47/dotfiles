@@ -6,10 +6,34 @@ return {
   dependencies = { 'nvim-lua/plenary.nvim' },
   ft = { 'go' },
   keys = {
-    { '<leader>gcl', function() require('coverage').load(true) end,  desc = 'Coverage: load & show' },
-    { '<leader>gch', function() require('coverage').hide() end,      desc = 'Coverage: hide' },
-    { '<leader>gcs', function() require('coverage').summary() end,   desc = 'Coverage: summary' },
-    { '<leader>gct', function() require('coverage').toggle() end,    desc = 'Coverage: toggle' },
+    {
+      '<leader>gcl',
+      function()
+        require('coverage').load(true)
+      end,
+      desc = 'Coverage: load & show',
+    },
+    {
+      '<leader>gch',
+      function()
+        require('coverage').hide()
+      end,
+      desc = 'Coverage: hide',
+    },
+    {
+      '<leader>gcs',
+      function()
+        require('coverage').summary()
+      end,
+      desc = 'Coverage: summary',
+    },
+    {
+      '<leader>gct',
+      function()
+        require('coverage').toggle()
+      end,
+      desc = 'Coverage: toggle',
+    },
   },
   config = function()
     require('coverage').setup {
@@ -21,9 +45,9 @@ return {
         },
       },
       signs = {
-        covered   = { hl = 'CoverageCovered',   text = '▎' },
-        uncovered = { hl = 'CoverageUncovered',  text = '▎' },
-        partial   = { hl = 'CoveragePartial',    text = '▎' },
+        covered = { hl = 'CoverageCovered', text = '▎' },
+        uncovered = { hl = 'CoverageUncovered', text = '▎' },
+        partial = { hl = 'CoveragePartial', text = '▎' },
       },
     }
   end,

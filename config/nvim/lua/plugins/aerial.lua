@@ -10,7 +10,7 @@ return {
   },
   event = { 'BufReadPre', 'BufNewFile' },
   config = function()
-    require('aerial').setup({
+    require('aerial').setup {
       -- Priority of backends (LSP preferred, Treesitter fallback)
       backends = { 'lsp', 'treesitter', 'markdown', 'man' },
 
@@ -117,11 +117,11 @@ return {
           ['K'] = 'actions.prev_sibling',
         },
       },
-    })
+    }
 
     -- Load Telescope extension
     pcall(function()
-      require('telescope').load_extension('aerial')
+      require('telescope').load_extension 'aerial'
     end)
   end,
   keys = {

@@ -15,16 +15,20 @@ local M = {}
 -- config stays generic and safe to publish. Set them in local/env/.env
 -- (gitignored, synced privately) — see local/env/.env.example. When unset,
 -- :DBUILogin reports "not configured" rather than running with placeholders.
-local AWS_PROFILE     = vim.env.DBUI_AWS_PROFILE
+local AWS_PROFILE = vim.env.DBUI_AWS_PROFILE
 local AWS_SSO_SESSION = vim.env.DBUI_AWS_SSO_SESSION
 
 local DEFAULTS = {
   -- Login command, assembled from the env-provided profile/session. nil when
   -- unconfigured so M.login() can degrade gracefully instead of erroring.
   sso_login_cmd = (AWS_PROFILE and AWS_SSO_SESSION) and {
-    'aws', 'sso', 'login',
-    '--profile',     AWS_PROFILE,
-    '--sso-session', AWS_SSO_SESSION,
+    'aws',
+    'sso',
+    'login',
+    '--profile',
+    AWS_PROFILE,
+    '--sso-session',
+    AWS_SSO_SESSION,
     '--use-device-code',
     '--no-browser',
   } or nil,
@@ -49,10 +53,10 @@ local DEFAULTS = {
 }
 
 local config = vim.deepcopy(DEFAULTS)
-local watcher_timer  ---@type uv.uv_timer_t?
-local in_progress = false   -- guards against double :DBUILogin
+local watcher_timer ---@type uv.uv_timer_t?
+local in_progress = false -- guards against double :DBUILogin
 local in_progress_since = 0 -- epoch seconds when in_progress was set to true
-local last_warn_minute = 0  -- so we don't spam
+local last_warn_minute = 0 -- so we don't spam
 
 function M.setup(opts)
   config = vim.tbl_deep_extend('force', config, opts or {})
@@ -63,26 +67,26 @@ end
 -- ---------------------------------------------------------------------------
 
 local function run_token_refresh()
-  local cmd = type(config.token_refresh_cmd) == 'function'
-              and config.token_refresh_cmd() or config.token_refresh_cmd
+  local cmd = type(config.token_refresh_cmd) == 'function' and config.token_refresh_cmd() or config.token_refresh_cmd
 
   -- Preflight: the refresh command's first element should be an executable
   -- or a readable script. If neither, surface a clear error rather than
   -- letting jobstart fail silently with code 127.
   local first = cmd[1] or ''
-  local resolved = vim.fn.executable(first) == 1 and first or nil
-  if not resolved and vim.fn.filereadable(first) == 1 then resolved = first end
+  local resolved = vim.fn.executable(first) == 1 or vim.fn.filereadable(first) == 1
   -- Also check arg-1 if first is 'bash' (the default form: { 'bash', '/path/to/script.sh' })
   if first == 'bash' and cmd[2] then
     if vim.fn.filereadable(cmd[2]) == 0 then
-      vim.notify(
-        ('[DBUI] Token refresh script %s not found. Configure features.dbui_sso with token_refresh_cmd.'):format(cmd[2]),
-        vim.log.levels.ERROR)
+      vim.notify(('[DBUI] Token refresh script %s not found. Configure features.dbui_sso with token_refresh_cmd.'):format(cmd[2]), vim.log.levels.ERROR)
       in_progress = false
-
       in_progress_since = 0
       return
     end
+  elseif not resolved then
+    vim.notify(('[DBUI] Token refresh command %q not found. Configure features.dbui_sso with token_refresh_cmd.'):format(first), vim.log.levels.ERROR)
+    in_progress = false
+    in_progress_since = 0
+    return
   end
 
   vim.notify('[DBUI] SSO login succeeded — refreshing IAM token…', vim.log.levels.INFO)
@@ -92,9 +96,7 @@ local function run_token_refresh()
     on_exit = function(_, code)
       vim.schedule(function()
         if code == 0 then
-          vim.notify(
-            '[DBUI] IAM token refreshed. autoreloader will rebind buffers shortly.',
-            vim.log.levels.INFO)
+          vim.notify('[DBUI] IAM token refreshed. autoreloader will rebind buffers shortly.', vim.log.levels.INFO)
           -- Also kick the tunnel service so the user doesn't wait for the
           -- next systemd auto-restart cycle.
           if config.tunnel_restart_cmd then
@@ -106,22 +108,17 @@ local function run_token_refresh()
                   else
                     vim.notify(
                       ('[DBUI] Tunnel restart exited %d (it auto-restarts on its own; should recover within ~10s).'):format(tcode),
-                      vim.log.levels.WARN)
+                      vim.log.levels.WARN
+                    )
                   end
                 end)
               end,
             })
           end
         elseif code == 127 then
-          vim.notify(
-            ('[DBUI] Token refresh command not found (exit 127): %s'):format(
-              table.concat(cmd, ' ')),
-            vim.log.levels.ERROR)
+          vim.notify(('[DBUI] Token refresh command not found (exit 127): %s'):format(table.concat(cmd, ' ')), vim.log.levels.ERROR)
         else
-          vim.notify(
-            ('[DBUI] Token refresh exited %d. Run `%s` manually to diagnose.'):format(
-              code, table.concat(cmd, ' ')),
-            vim.log.levels.ERROR)
+          vim.notify(('[DBUI] Token refresh exited %d. Run `%s` manually to diagnose.'):format(code, table.concat(cmd, ' ')), vim.log.levels.ERROR)
         end
         in_progress = false
 
@@ -135,9 +132,9 @@ function M.login()
   -- Not configured: no AWS profile/session in the environment. Nothing to run.
   if not config.sso_login_cmd then
     vim.notify(
-      '[DBUI] SSO login not configured. Set DBUI_AWS_PROFILE and '
-      .. 'DBUI_AWS_SSO_SESSION in local/env/.env (see local/env/.env.example).',
-      vim.log.levels.WARN)
+      '[DBUI] SSO login not configured. Set DBUI_AWS_PROFILE and ' .. 'DBUI_AWS_SSO_SESSION in local/env/.env (see local/env/.env.example).',
+      vim.log.levels.WARN
+    )
     return
   end
 
@@ -147,17 +144,13 @@ function M.login()
     -- Reset and proceed.
     local stale_after = 10 * 60
     if in_progress_since > 0 and (os.time() - in_progress_since) > stale_after then
-      vim.notify(
-        '[DBUI] login was marked in-progress for >10 min — auto-resetting and retrying.',
-        vim.log.levels.WARN)
+      vim.notify('[DBUI] login was marked in-progress for >10 min — auto-resetting and retrying.', vim.log.levels.WARN)
       in_progress = false
 
       in_progress_since = 0
       in_progress_since = 0
     else
-      vim.notify(
-        '[DBUI] login already in progress. Run :DBUIAbortLogin to reset if it\'s stuck.',
-        vim.log.levels.WARN)
+      vim.notify("[DBUI] login already in progress. Run :DBUIAbortLogin to reset if it's stuck.", vim.log.levels.WARN)
       return
     end
   end
@@ -165,10 +158,7 @@ function M.login()
   -- Preflight: confirm the aws binary exists. Otherwise spawning the terminal
   -- shows a vague "command not found" deep in the term split.
   if vim.fn.executable(config.sso_login_cmd[1]) == 0 then
-    vim.notify(
-      ('[DBUI] `%s` not in $PATH. Install the AWS CLI v2 (or override config.sso_login_cmd).'):format(
-        config.sso_login_cmd[1]),
-      vim.log.levels.ERROR)
+    vim.notify(('[DBUI] `%s` not in $PATH. Install the AWS CLI v2 (or override config.sso_login_cmd).'):format(config.sso_login_cmd[1]), vim.log.levels.ERROR)
     return
   end
 
@@ -180,17 +170,18 @@ function M.login()
 
   -- Open a horizontal terminal split at the bottom.
   vim.cmd(('botright %dsplit'):format(config.term_height))
-  vim.cmd('enew')  -- fresh buffer in the new split
+  vim.cmd 'enew' -- fresh buffer in the new split
 
   local term_buf = vim.api.nvim_get_current_buf()
   vim.bo[term_buf].buflisted = false
-  vim.bo[term_buf].buftype = ''  -- normal buf so termopen can attach
+  vim.bo[term_buf].buftype = '' -- normal buf so termopen can attach
 
   vim.notify(
-    '[DBUI] Opening browser-less SSO login. Watch the terminal below for a ' ..
-    'device-code URL, open it in your browser, approve, then return here — ' ..
-    'token refresh runs automatically.',
-    vim.log.levels.INFO)
+    '[DBUI] Opening browser-less SSO login. Watch the terminal below for a '
+      .. 'device-code URL, open it in your browser, approve, then return here — '
+      .. 'token refresh runs automatically.',
+    vim.log.levels.INFO
+  )
 
   local job_id = vim.fn.termopen(config.sso_login_cmd, {
     on_exit = function(_, code, _)
@@ -206,9 +197,7 @@ function M.login()
           end, 1500)
           run_token_refresh()
         else
-          vim.notify(
-            ('[DBUI] SSO login exited %d. Terminal kept open for diagnostics.'):format(code),
-            vim.log.levels.ERROR)
+          vim.notify(('[DBUI] SSO login exited %d. Terminal kept open for diagnostics.'):format(code), vim.log.levels.ERROR)
           in_progress = false
 
           in_progress_since = 0
@@ -242,12 +231,10 @@ local function read_expiry_seconds_left()
     local raw = table.concat(vim.fn.readfile(f), '\n')
     local ok, data = pcall(vim.json.decode, raw)
     if ok and data.startUrl == config.sso_start_url and data.expiresAt then
-      local y, mo, d, h, mi, s = data.expiresAt:match(
-        '^(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)Z?$')
+      local y, mo, d, h, mi, s = data.expiresAt:match '^(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)Z?$'
       if y then
-        local t = os.time({ year=y, month=mo, day=d, hour=h, min=mi, sec=s,
-                            isdst=false })
-        local now_utc = os.time(os.date('!*t'))
+        local t = os.time { year = y, month = mo, day = d, hour = h, min = mi, sec = s, isdst = false }
+        local now_utc = os.time(os.date '!*t')
         return t - now_utc, data.expiresAt
       end
     end
@@ -256,49 +243,57 @@ local function read_expiry_seconds_left()
 end
 
 local function watcher_tick()
-  if in_progress then return end
+  if in_progress then
+    return
+  end
   local secs, iso = read_expiry_seconds_left()
-  if not secs then return end
+  if not secs then
+    return
+  end
   if secs <= 0 then
     -- Only nag once per minute boundary
     local this_minute = os.time() / 60
     if math.floor(this_minute) ~= last_warn_minute then
       last_warn_minute = math.floor(this_minute)
-      vim.notify(
-        ('[DBUI] AWS SSO expired (%s). Run :DBUILogin to keep querying prod.'):format(iso),
-        vim.log.levels.WARN)
+      vim.notify(('[DBUI] AWS SSO expired (%s). Run :DBUILogin to keep querying prod.'):format(iso), vim.log.levels.WARN)
     end
   elseif secs < config.warn_threshold_s then
     -- Approaching expiry: warn once every 60s
     local this_minute = math.floor(os.time() / 60)
     if this_minute ~= last_warn_minute then
       last_warn_minute = this_minute
-      vim.notify(
-        ('[DBUI] AWS SSO expires in %dm%ds. :DBUILogin to refresh.'):format(
-          math.floor(secs/60), secs%60),
-        vim.log.levels.WARN)
+      vim.notify(('[DBUI] AWS SSO expires in %dm%ds. :DBUILogin to refresh.'):format(math.floor(secs / 60), secs % 60), vim.log.levels.WARN)
     end
   end
 end
 
 function M.start_watcher()
-  if watcher_timer then return end
+  if watcher_timer then
+    return
+  end
   watcher_timer = vim.uv.new_timer()
   watcher_timer:start(
-    config.watcher_interval_ms,                -- first tick after one interval
-    config.watcher_interval_ms,                -- repeat interval
-    vim.schedule_wrap(watcher_tick))
+    config.watcher_interval_ms, -- first tick after one interval
+    config.watcher_interval_ms, -- repeat interval
+    vim.schedule_wrap(watcher_tick)
+  )
   vim.api.nvim_create_autocmd('VimLeavePre', {
     once = true,
-    callback = function() M.stop_watcher() end,
+    callback = function()
+      M.stop_watcher()
+    end,
   })
 end
 
 function M.stop_watcher()
   if watcher_timer then
-    pcall(function() watcher_timer:stop() end)
+    pcall(function()
+      watcher_timer:stop()
+    end)
     if watcher_timer and not watcher_timer:is_closing() then
-      pcall(function() watcher_timer:close() end)
+      pcall(function()
+        watcher_timer:close()
+      end)
     end
     watcher_timer = nil
   end

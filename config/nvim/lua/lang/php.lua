@@ -64,7 +64,7 @@ M.plugins = {
       install = {
         -- Point to the phar directly — the Mason bin is a shell wrapper and
         -- phpactor.nvim calls it as `php <bin>`, which breaks on a shell script.
-        bin = vim.fn.stdpath('data') .. '/mason/packages/phpactor/phpactor.phar',
+        bin = vim.fn.stdpath 'data' .. '/mason/packages/phpactor/phpactor.phar',
         check_on_startup = 'none',
         confirm = false,
       },
@@ -101,20 +101,80 @@ M.lsp_config = {
       intelephense = {
         -- Stub configuration for framework support
         stubs = {
-          'apache', 'bcmath', 'bz2', 'calendar', 'com_dotnet', 'Core',
-          'ctype', 'curl', 'date', 'dba', 'dom', 'enchant', 'exif',
-          'FFI', 'fileinfo', 'filter', 'fpm', 'ftp', 'gd', 'gettext',
-          'gmp', 'hash', 'iconv', 'imap', 'intl', 'json', 'ldap',
-          'libxml', 'mbstring', 'meta', 'mysqli', 'oci8', 'odbc',
-          'openssl', 'pcntl', 'pcre', 'PDO', 'pdo_ibm', 'pdo_mysql',
-          'pdo_pgsql', 'pdo_sqlite', 'pgsql', 'Phar', 'posix',
-          'pspell', 'readline', 'Reflection', 'session', 'shmop',
-          'SimpleXML', 'snmp', 'soap', 'sockets', 'sodium', 'SPL',
-          'sqlite3', 'standard', 'superglobals', 'sysvmsg', 'sysvsem',
-          'sysvshm', 'tidy', 'tokenizer', 'xml', 'xmlreader',
-          'xmlrpc', 'xmlwriter', 'xsl', 'Zend OPcache', 'zip', 'zlib',
+          'apache',
+          'bcmath',
+          'bz2',
+          'calendar',
+          'com_dotnet',
+          'Core',
+          'ctype',
+          'curl',
+          'date',
+          'dba',
+          'dom',
+          'enchant',
+          'exif',
+          'FFI',
+          'fileinfo',
+          'filter',
+          'fpm',
+          'ftp',
+          'gd',
+          'gettext',
+          'gmp',
+          'hash',
+          'iconv',
+          'imap',
+          'intl',
+          'json',
+          'ldap',
+          'libxml',
+          'mbstring',
+          'meta',
+          'mysqli',
+          'oci8',
+          'odbc',
+          'openssl',
+          'pcntl',
+          'pcre',
+          'PDO',
+          'pdo_ibm',
+          'pdo_mysql',
+          'pdo_pgsql',
+          'pdo_sqlite',
+          'pgsql',
+          'Phar',
+          'posix',
+          'pspell',
+          'readline',
+          'Reflection',
+          'session',
+          'shmop',
+          'SimpleXML',
+          'snmp',
+          'soap',
+          'sockets',
+          'sodium',
+          'SPL',
+          'sqlite3',
+          'standard',
+          'superglobals',
+          'sysvmsg',
+          'sysvsem',
+          'sysvshm',
+          'tidy',
+          'tokenizer',
+          'xml',
+          'xmlreader',
+          'xmlrpc',
+          'xmlwriter',
+          'xsl',
+          'Zend OPcache',
+          'zip',
+          'zlib',
           -- Framework stubs
-          'phpunit', 'symfony',
+          'phpunit',
+          'symfony',
         },
         -- File configuration
         files = {
@@ -277,13 +337,13 @@ M.debug_config = {
       type = 'executable',
       command = 'node',
       args = (function()
-        local mason_path = vim.fn.stdpath('data') .. '/mason/packages/php-debug-adapter/extension/out/phpDebug.js'
+        local mason_path = vim.fn.stdpath 'data' .. '/mason/packages/php-debug-adapter/extension/out/phpDebug.js'
         if vim.fn.filereadable(mason_path) == 1 then
           return { mason_path }
         end
         -- Fallback: let mason-registry resolve it if available
         local ok, reg = pcall(require, 'mason-registry')
-        if ok and reg.is_installed('php-debug-adapter') then
+        if ok and reg.is_installed 'php-debug-adapter' then
           return { reg.get_package('php-debug-adapter'):get_install_path() .. '/extension/out/phpDebug.js' }
         end
         return { 'php-debug-adapter' }
@@ -351,38 +411,53 @@ M.setup_keymaps = function(bufnr)
   map('n', '<leader>Pcd', '<cmd>!composer dump-autoload<cr>', vim.tbl_extend('force', opts, { desc = 'Composer dump' }))
 
   -- Testing (PHPUnit via neotest — uses Docker-aware wrapper)
-  map('n', '<leader>Ptt', function() require('neotest').run.run() end,                   vim.tbl_extend('force', opts, { desc = 'Run nearest test' }))
-  map('n', '<leader>Ptf', function() require('neotest').run.run(vim.fn.expand('%')) end, vim.tbl_extend('force', opts, { desc = 'Run test file' }))
-  map('n', '<leader>Ptd', function() require('neotest').run.run({ strategy = 'dap' }) end, vim.tbl_extend('force', opts, { desc = 'Debug nearest test' }))
-  map('n', '<leader>Pto', function() require('neotest').output.open({ enter = true }) end, vim.tbl_extend('force', opts, { desc = 'Show test output' }))
+  map('n', '<leader>Ptt', function()
+    require('neotest').run.run()
+  end, vim.tbl_extend('force', opts, { desc = 'Run nearest test' }))
+  map('n', '<leader>Ptf', function()
+    require('neotest').run.run(vim.fn.expand '%')
+  end, vim.tbl_extend('force', opts, { desc = 'Run test file' }))
+  map('n', '<leader>Ptd', function()
+    require('neotest').run.run { strategy = 'dap' }
+  end, vim.tbl_extend('force', opts, { desc = 'Debug nearest test' }))
+  map('n', '<leader>Pto', function()
+    require('neotest').output.open { enter = true }
+  end, vim.tbl_extend('force', opts, { desc = 'Show test output' }))
 
   -- Make-based test suites (integration/API tests need ephemeral DB via Make)
   local function make(target)
     return function()
       vim.cmd('botright 15split | terminal make ' .. target)
-      vim.cmd('startinsert')
+      vim.cmd 'startinsert'
     end
   end
-  map('n', '<leader>Ptu', make('test-unit'),        vim.tbl_extend('force', opts, { desc = 'make test-unit' }))
-  map('n', '<leader>Pti', make('test-integration'), vim.tbl_extend('force', opts, { desc = 'make test-integration' }))
-  map('n', '<leader>Pta', make('test-api'),          vim.tbl_extend('force', opts, { desc = 'make test-api' }))
-  map('n', '<leader>PtA', make('test'),              vim.tbl_extend('force', opts, { desc = 'make test (all)' }))
+  map('n', '<leader>Ptu', make 'test-unit', vim.tbl_extend('force', opts, { desc = 'make test-unit' }))
+  map('n', '<leader>Pti', make 'test-integration', vim.tbl_extend('force', opts, { desc = 'make test-integration' }))
+  map('n', '<leader>Pta', make 'test-api', vim.tbl_extend('force', opts, { desc = 'make test-api' }))
+  map('n', '<leader>PtA', make 'test', vim.tbl_extend('force', opts, { desc = 'make test (all)' }))
 
   -- Kill whatever holds port 9004, then start a fresh DAP listener.
   -- on_ready() is called immediately after dap.run() (adapter binds asynchronously).
   local function launch_php_dap(root, on_ready)
-    local dap = require('dap')
+    local dap = require 'dap'
     local function do_launch()
-      pcall(function() require('dapui').close() end)
+      pcall(function()
+        require('dapui').close()
+      end)
       vim.fn.jobstart('fuser -k 9004/tcp 2>/dev/null; true', {
         on_exit = function()
           vim.defer_fn(function()
-            dap.run({
-              type = 'php', request = 'launch', name = 'PHP Xdebug 9004',
-              port = 9004, hostname = '0.0.0.0',
+            dap.run {
+              type = 'php',
+              request = 'launch',
+              name = 'PHP Xdebug 9004',
+              port = 9004,
+              hostname = '0.0.0.0',
               pathMappings = { ['/srv'] = root },
-            })
-            if on_ready then on_ready() end
+            }
+            if on_ready then
+              on_ready()
+            end
           end, 150)
         end,
       })
@@ -399,16 +474,18 @@ M.setup_keymaps = function(bufnr)
   -- then open a terminal split running cmd. Uses the event lifecycle rather than
   -- port polling so the test starts only after the adapter is ready for Xdebug.
   local function run_when_dap_ready(cmd)
-    local dap = require('dap')
+    local dap = require 'dap'
     local id = 'php_autorun_' .. tostring(vim.fn.localtime())
     local fired = false
     dap.listeners.after.event_initialized[id] = function()
-      if fired then return end
+      if fired then
+        return
+      end
       fired = true
       dap.listeners.after.event_initialized[id] = nil
       vim.schedule(function()
         vim.cmd('botright 15split | terminal ' .. cmd)
-        vim.cmd('startinsert')
+        vim.cmd 'startinsert'
       end)
     end
     vim.defer_fn(function()
@@ -426,7 +503,7 @@ M.setup_keymaps = function(bufnr)
 
   -- Debug nearest integration test: set breakpoint at cursor, start DAP, run test in terminal
   map('n', '<leader>PtD', function()
-    local dap = require('dap')
+    local dap = require 'dap'
     local root = vim.fn.getcwd()
     local buf = vim.api.nvim_get_current_buf()
     local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -434,9 +511,9 @@ M.setup_keymaps = function(bufnr)
 
     -- Detect test type from path
     local make_target
-    if file:match('[/\\]tests[/\\]Integration[/\\]') then
+    if file:match '[/\\]tests[/\\]Integration[/\\]' then
       make_target = 'test-integration-debug-filter'
-    elseif file:match('[/\\]tests[/\\]Unit[/\\]') then
+    elseif file:match '[/\\]tests[/\\]Unit[/\\]' then
       make_target = 'test-unit-debug-filter'
     else
       vim.notify('Not a recognized test file (must be under tests/Unit/ or tests/Integration/)', vim.log.levels.WARN)
@@ -450,7 +527,7 @@ M.setup_keymaps = function(bufnr)
     local method_name = nil
     local lines = vim.api.nvim_buf_get_lines(buf, 0, line, false)
     for i = #lines, 1, -1 do
-      local m = lines[i]:match('%s*public%s+function%s+([%w_]+)')
+      local m = lines[i]:match '%s*public%s+function%s+([%w_]+)'
       if m and m ~= 'setUp' and m ~= 'tearDown' then
         method_name = m
         break
@@ -459,7 +536,9 @@ M.setup_keymaps = function(bufnr)
 
     -- Build filter string; pass TESTFILE so phpunit loads only this file (fast with Xdebug)
     local filter = class_name
-    if method_name then filter = class_name .. '::' .. method_name end
+    if method_name then
+      filter = class_name .. '::' .. method_name
+    end
     local relative_file = vim.fn.fnamemodify(file, ':.')
     local cmd = string.format('make %s FILTER="%s" TESTFILE="%s"', make_target, filter, relative_file)
 
@@ -479,17 +558,17 @@ M.setup_keymaps = function(bufnr)
 
   -- Phpactor RPC commands (via gbprod/phpactor.nvim)
   -- Navigation / file ops
-  map('n', '<leader>Pn', '<cmd>PhpActor navigate<cr>',              vim.tbl_extend('force', opts, { desc = 'Navigate (class↔test)' }))
-  map('n', '<leader>Pm', '<cmd>PhpActor move_class<cr>',            vim.tbl_extend('force', opts, { desc = 'Move/rename class' }))
-  map('n', '<leader>Pco', '<cmd>PhpActor copy_class<cr>',           vim.tbl_extend('force', opts, { desc = 'Copy class' }))
-  map('n', '<leader>Pnc', '<cmd>PhpActor new_class<cr>',            vim.tbl_extend('force', opts, { desc = 'New class from template' }))
+  map('n', '<leader>Pn', '<cmd>PhpActor navigate<cr>', vim.tbl_extend('force', opts, { desc = 'Navigate (class↔test)' }))
+  map('n', '<leader>Pm', '<cmd>PhpActor move_class<cr>', vim.tbl_extend('force', opts, { desc = 'Move/rename class' }))
+  map('n', '<leader>Pco', '<cmd>PhpActor copy_class<cr>', vim.tbl_extend('force', opts, { desc = 'Copy class' }))
+  map('n', '<leader>Pnc', '<cmd>PhpActor new_class<cr>', vim.tbl_extend('force', opts, { desc = 'New class from template' }))
   -- Imports / symbols
   map('n', '<leader>Pi', '<cmd>PhpActor import_missing_classes<cr>', vim.tbl_extend('force', opts, { desc = 'Import missing classes' }))
   map('n', '<leader>Pq', '<cmd>PhpActor copy_qualified_class_name<cr>', vim.tbl_extend('force', opts, { desc = 'Copy FQCN' }))
   -- Code actions
-  map('n', '<leader>Pv', '<cmd>PhpActor change_visibility<cr>',     vim.tbl_extend('force', opts, { desc = 'Change visibility' }))
-  map('n', '<leader>Px', '<cmd>PhpActor context_menu<cr>',          vim.tbl_extend('force', opts, { desc = 'Context menu' }))
-  map('n', '<leader>Pa', '<cmd>PhpActor generate_accessor<cr>',     vim.tbl_extend('force', opts, { desc = 'Generate accessor' }))
+  map('n', '<leader>Pv', '<cmd>PhpActor change_visibility<cr>', vim.tbl_extend('force', opts, { desc = 'Change visibility' }))
+  map('n', '<leader>Px', '<cmd>PhpActor context_menu<cr>', vim.tbl_extend('force', opts, { desc = 'Context menu' }))
+  map('n', '<leader>Pa', '<cmd>PhpActor generate_accessor<cr>', vim.tbl_extend('force', opts, { desc = 'Generate accessor' }))
 
   -- PHP tools (ccaglak/phptools.nvim)
   map('n', '<leader>PM', '<cmd>PhpMethod<cr>', vim.tbl_extend('force', opts, { desc = 'Generate method' }))
@@ -524,20 +603,20 @@ M.setup_autocmds = function()
       vim.opt_local.colorcolumn = '120'
 
       -- Include $ in keyword so hover/search captures $variable
-      vim.opt_local.iskeyword:append('$')
+      vim.opt_local.iskeyword:append '$'
 
       -- Register PHP which-key group (buffer-local)
       local wk_ok, wk = pcall(require, 'which-key')
       if wk_ok then
-        wk.add({
-          { '<leader>P',  group = 'PHP',          icon = '',  buffer = event.buf },
-          { '<leader>Pt', group = 'test',          icon = '',  buffer = event.buf },
-          { '<leader>Pd', group = 'debug',         icon = '',  buffer = event.buf },
-          { '<leader>Pc', group = 'composer',      icon = '📦', buffer = event.buf },
-          { '<leader>Ps', group = 'symfony',       icon = '🎵', buffer = event.buf },
-          { '<leader>Pr', group = 'refactor',      icon = '',  buffer = event.buf },
-          { '<leader>PR', group = 'rector',        icon = '⚡', buffer = event.buf },
-        })
+        wk.add {
+          { '<leader>P', group = 'PHP', icon = '', buffer = event.buf },
+          { '<leader>Pt', group = 'test', icon = '', buffer = event.buf },
+          { '<leader>Pd', group = 'debug', icon = '', buffer = event.buf },
+          { '<leader>Pc', group = 'composer', icon = '📦', buffer = event.buf },
+          { '<leader>Ps', group = 'symfony', icon = '🎵', buffer = event.buf },
+          { '<leader>Pr', group = 'refactor', icon = '', buffer = event.buf },
+          { '<leader>PR', group = 'rector', icon = '⚡', buffer = event.buf },
+        }
       end
 
       -- Setup PHP-specific keymaps
@@ -578,14 +657,14 @@ M.setup = function()
   if M.lsp_config.intelephense then
     local config = vim.tbl_deep_extend('force', M.lsp_config.intelephense, { capabilities = capabilities })
     vim.lsp.config('intelephense', config)
-    vim.lsp.enable('intelephense')
+    vim.lsp.enable 'intelephense'
   end
 
   -- Configure and enable Phpactor using native Neovim 0.11+ API
   if M.lsp_config.phpactor then
     local config = vim.tbl_deep_extend('force', M.lsp_config.phpactor, { capabilities = capabilities })
     vim.lsp.config('phpactor', config)
-    vim.lsp.enable('phpactor')
+    vim.lsp.enable 'phpactor'
   end
 end
 

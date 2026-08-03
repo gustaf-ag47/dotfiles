@@ -12,7 +12,7 @@ return {
     {
       '<leader>GH',
       function()
-        local l1, l2 = vim.fn.line("'<"), vim.fn.line("'>")
+        local l1, l2 = vim.fn.line "'<", vim.fn.line "'>"
         vim.cmd(string.format('DiffviewFileHistory %% -L%d,%d', l1, l2))
       end,
       mode = 'v',

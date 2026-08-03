@@ -11,7 +11,7 @@ vim.api.nvim_create_autocmd('User', {
   once = true,
   group = augroup 'project-config',
   callback = function()
-    local notes = os.getenv('NOTES') or (os.getenv('HOME') .. '/sync/Vault')
+    local notes = os.getenv 'NOTES' or (os.getenv 'HOME' .. '/sync/Vault')
     local name = vim.fn.fnamemodify(vim.fn.getcwd(), ':t')
     local config = notes .. '/nvim-projects/' .. name .. '.lua'
     if vim.fn.filereadable(config) == 1 then
@@ -79,7 +79,7 @@ vim.api.nvim_create_autocmd('VimResized', {
   group = augroup 'resize-splits',
   callback = function()
     local current_tab = vim.fn.tabpagenr()
-    vim.cmd('tabdo wincmd =')
+    vim.cmd 'tabdo wincmd ='
     vim.cmd('tabnext ' .. current_tab)
   end,
 })
@@ -110,7 +110,7 @@ vim.api.nvim_create_autocmd('TermOpen', {
     vim.opt_local.number = false
     vim.opt_local.relativenumber = false
     vim.opt_local.signcolumn = 'no'
-    vim.cmd('startinsert')
+    vim.cmd 'startinsert'
   end,
 })
 
@@ -119,7 +119,7 @@ vim.api.nvim_create_autocmd({ 'FocusGained', 'TermClose', 'TermLeave' }, {
   group = augroup 'checktime',
   callback = function()
     if vim.o.buftype ~= 'nofile' then
-      vim.cmd('checktime')
+      vim.cmd 'checktime'
     end
   end,
 })

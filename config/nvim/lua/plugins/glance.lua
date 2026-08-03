@@ -6,13 +6,13 @@ return {
   cmd = 'Glance',
   event = 'LspAttach',
   build = function()
-    vim.fn.system({ 'python3', vim.fn.expand('$DOTFILES') .. '/bin/nvim-patch-plugins', 'glance' })
+    vim.fn.system { 'python3', vim.fn.expand '$DOTFILES' .. '/bin/nvim-patch-plugins', 'glance' }
   end,
   config = function()
-    local glance = require('glance')
+    local glance = require 'glance'
     local actions = glance.actions
 
-    glance.setup({
+    glance.setup {
       -- Height of the glance window
       height = 18,
       -- Z-index of the glance window
@@ -61,7 +61,7 @@ return {
           ['o'] = actions.jump,
           ['l'] = actions.open_fold,
           ['h'] = actions.close_fold,
-          ['<leader>l'] = actions.enter_win('preview'),
+          ['<leader>l'] = actions.enter_win 'preview',
           ['q'] = actions.close,
           ['Q'] = actions.close,
           ['<Esc>'] = actions.close,
@@ -71,7 +71,7 @@ return {
           ['Q'] = actions.close,
           ['<Tab>'] = actions.next_location,
           ['<S-Tab>'] = actions.previous_location,
-          ['<leader>l'] = actions.enter_win('list'),
+          ['<leader>l'] = actions.enter_win 'list',
         },
       },
       -- Hooks
@@ -103,7 +103,7 @@ return {
       },
       -- Use Trouble.nvim for quickfix if available
       use_trouble_qf = true,
-    })
+    }
   end,
   keys = {
     { 'gD', '<cmd>Glance definitions<CR>', desc = 'Glance definitions' },

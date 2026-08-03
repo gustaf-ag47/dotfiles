@@ -25,7 +25,6 @@ M.plugins = {
   },
 }
 
-
 -- LSP attach keymaps and behavior
 M.setup_lsp_attach = function()
   vim.api.nvim_create_autocmd('LspAttach', {
@@ -52,27 +51,31 @@ M.setup_lsp_attach = function()
           local win = vim.api.nvim_get_current_win()
           local opts = {
             on_list = function(options)
-              if #options.items == 0 then return end
+              if #options.items == 0 then
+                return
+              end
               if #options.items == 1 then
                 local item = options.items[1]
                 local b = item.bufnr or vim.fn.bufadd(item.filename)
-                vim.cmd("normal! m'")
+                vim.cmd "normal! m'"
                 vim.bo[b].buflisted = true
                 vim.api.nvim_win_set_buf(win, b)
                 vim.api.nvim_win_set_cursor(win, { item.lnum, item.col - 1 })
               else
                 local conf = require('telescope.config').values
-                require('telescope.pickers').new({}, {
-                  prompt_title = telescope_fn:gsub('_', ' '):gsub('^%l', string.upper),
-                  finder = require('telescope.finders').new_table({
-                    results = options.items,
-                    entry_maker = require('telescope.make_entry').gen_from_quickfix({}),
-                  }),
-                  previewer = conf.qflist_previewer({}),
-                  sorter = conf.generic_sorter({}),
-                  push_cursor_on_edit = true,
-                  push_tagstack_on_edit = true,
-                }):find()
+                require('telescope.pickers')
+                  .new({}, {
+                    prompt_title = telescope_fn:gsub('_', ' '):gsub('^%l', string.upper),
+                    finder = require('telescope.finders').new_table {
+                      results = options.items,
+                      entry_maker = require('telescope.make_entry').gen_from_quickfix {},
+                    },
+                    previewer = conf.qflist_previewer {},
+                    sorter = conf.generic_sorter {},
+                    push_cursor_on_edit = true,
+                    push_tagstack_on_edit = true,
+                  })
+                  :find()
               end
             end,
           }
@@ -143,13 +146,13 @@ M.base_servers = {
     root_markers = { '.git', '.hg' },
     on_attach = function(client, bufnr)
       local fname = vim.api.nvim_buf_get_name(bufnr)
-      if fname:match('%.env') or fname:match('%.env%.') then
+      if fname:match '%.env' or fname:match '%.env%.' then
         client:stop()
       end
     end,
     settings = {
       bashIde = {
-        globPattern = "**/*@(.sh|.inc|.bash|.command)",
+        globPattern = '**/*@(.sh|.inc|.bash|.command)',
       },
     },
   },
@@ -166,8 +169,8 @@ M.base_servers = {
         workspace = {
           library = {
             vim.env.VIMRUNTIME,
-            "${3rd}/luv/library",
-            "${3rd}/busted/library",
+            '${3rd}/luv/library',
+            '${3rd}/busted/library',
           },
           checkThirdParty = false,
         },
@@ -273,17 +276,17 @@ end
 
 -- Setup Mason and LSP servers
 M.setup_mason = function()
-  require('mason').setup({
+  require('mason').setup {
     ui = {
       border = 'rounded',
       icons = {
         package_installed = '✓',
         package_pending = '➜',
-        package_uninstalled = '✗'
-      }
+        package_uninstalled = '✗',
+      },
     },
-    install_root_dir = vim.fn.stdpath('data') .. '/mason',
-  })
+    install_root_dir = vim.fn.stdpath 'data' .. '/mason',
+  }
 
   -- Modern language servers and tools
   local ensure_installed = vim.tbl_keys(M.base_servers or {})
@@ -380,7 +383,7 @@ end
 
 -- Setup LSP diagnostics
 M.setup_diagnostics = function()
-  vim.diagnostic.config({
+  vim.diagnostic.config {
     virtual_text = {
       prefix = '●',
       source = 'if_many',
@@ -388,9 +391,9 @@ M.setup_diagnostics = function()
     signs = vim.g.have_nerd_font and {
       text = {
         [vim.diagnostic.severity.ERROR] = '󰅚 ',
-        [vim.diagnostic.severity.WARN]  = '󰀪 ',
-        [vim.diagnostic.severity.HINT]  = '󰌶 ',
-        [vim.diagnostic.severity.INFO]  = ' ',
+        [vim.diagnostic.severity.WARN] = '󰀪 ',
+        [vim.diagnostic.severity.HINT] = '󰌶 ',
+        [vim.diagnostic.severity.INFO] = ' ',
       },
     } or true,
     underline = true,
@@ -402,7 +405,7 @@ M.setup_diagnostics = function()
       header = '',
       prefix = '',
     },
-  })
+  }
 end
 
 -- Setup the LSP feature module

@@ -21,9 +21,9 @@ return {
         end,
       },
       strategies = {
-        chat   = { adapter = 'anthropic' },
+        chat = { adapter = 'anthropic' },
         inline = { adapter = 'anthropic' },
-        cmd    = { adapter = 'anthropic' },
+        cmd = { adapter = 'anthropic' },
       },
       display = {
         chat = {
@@ -33,13 +33,13 @@ return {
       },
     },
     keys = {
-      { '<leader>ac', '<cmd>CodeCompanionChat Toggle<cr>',    desc = 'AI: Chat toggle',       mode = { 'n', 'v' } },
-      { '<leader>aa', '<cmd>CodeCompanionActions<cr>',        desc = 'AI: Actions',           mode = { 'n', 'v' } },
-      { '<leader>ai', '<cmd>CodeCompanion<cr>',               desc = 'AI: Inline prompt',     mode = { 'n', 'v' } },
-      { '<leader>at', '<cmd>CodeCompanion /test<cr>',         desc = 'AI: Generate tests',    mode = { 'n', 'v' } },
-      { '<leader>ae', '<cmd>CodeCompanion /explain<cr>',      desc = 'AI: Explain',           mode = { 'n', 'v' } },
-      { '<leader>af', '<cmd>CodeCompanion /fix<cr>',          desc = 'AI: Fix',               mode = { 'n', 'v' } },
-      { 'ga',         '<cmd>CodeCompanionChat Add<cr>',        desc = 'AI: Add to chat',       mode = 'v' },
+      { '<leader>ac', '<cmd>CodeCompanionChat Toggle<cr>', desc = 'AI: Chat toggle', mode = { 'n', 'v' } },
+      { '<leader>aa', '<cmd>CodeCompanionActions<cr>', desc = 'AI: Actions', mode = { 'n', 'v' } },
+      { '<leader>ai', '<cmd>CodeCompanion<cr>', desc = 'AI: Inline prompt', mode = { 'n', 'v' } },
+      { '<leader>at', '<cmd>CodeCompanion /test<cr>', desc = 'AI: Generate tests', mode = { 'n', 'v' } },
+      { '<leader>ae', '<cmd>CodeCompanion /explain<cr>', desc = 'AI: Explain', mode = { 'n', 'v' } },
+      { '<leader>af', '<cmd>CodeCompanion /fix<cr>', desc = 'AI: Fix', mode = { 'n', 'v' } },
+      { 'ga', '<cmd>CodeCompanionChat Add<cr>', desc = 'AI: Add to chat', mode = 'v' },
     },
   },
 }

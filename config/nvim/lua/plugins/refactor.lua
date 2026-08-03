@@ -10,7 +10,7 @@ return {
   },
   event = { 'BufReadPre', 'BufNewFile' },
   config = function()
-    require('refactoring').setup({
+    require('refactoring').setup {
       -- Prompt for function return type (for statically typed languages)
       prompt_func_return_type = {
         go = true,
@@ -32,15 +32,14 @@ return {
       print_var_statements = {},
       -- Show success message after refactoring
       show_success_message = true,
-    })
-
+    }
   end,
   keys = {
     -- Visual mode refactoring
     {
       '<leader>re',
       function()
-        require('refactoring').refactor('Extract Function')
+        require('refactoring').refactor 'Extract Function'
       end,
       mode = 'x',
       desc = 'Extract function',
@@ -48,7 +47,7 @@ return {
     {
       '<leader>rf',
       function()
-        require('refactoring').refactor('Extract Function To File')
+        require('refactoring').refactor 'Extract Function To File'
       end,
       mode = 'x',
       desc = 'Extract function to file',
@@ -56,7 +55,7 @@ return {
     {
       '<leader>rv',
       function()
-        require('refactoring').refactor('Extract Variable')
+        require('refactoring').refactor 'Extract Variable'
       end,
       mode = 'x',
       desc = 'Extract variable',
@@ -64,7 +63,7 @@ return {
     {
       '<leader>rI',
       function()
-        require('refactoring').refactor('Inline Function')
+        require('refactoring').refactor 'Inline Function'
       end,
       mode = 'n',
       desc = 'Inline function',
@@ -72,7 +71,7 @@ return {
     {
       '<leader>ri',
       function()
-        require('refactoring').refactor('Inline Variable')
+        require('refactoring').refactor 'Inline Variable'
       end,
       mode = { 'n', 'x' },
       desc = 'Inline variable',
@@ -80,7 +79,7 @@ return {
     {
       '<leader>rb',
       function()
-        require('refactoring').refactor('Extract Block')
+        require('refactoring').refactor 'Extract Block'
       end,
       mode = 'n',
       desc = 'Extract block',
@@ -88,7 +87,7 @@ return {
     {
       '<leader>rB',
       function()
-        require('refactoring').refactor('Extract Block To File')
+        require('refactoring').refactor 'Extract Block To File'
       end,
       mode = 'n',
       desc = 'Extract block to file',
@@ -106,7 +105,7 @@ return {
     {
       '<leader>rp',
       function()
-        require('refactoring').debug.printf({ below = false })
+        require('refactoring').debug.printf { below = false }
       end,
       mode = 'n',
       desc = 'Debug print',
@@ -122,7 +121,7 @@ return {
     {
       '<leader>rc',
       function()
-        require('refactoring').debug.cleanup({})
+        require('refactoring').debug.cleanup {}
       end,
       mode = 'n',
       desc = 'Debug cleanup',

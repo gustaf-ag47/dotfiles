@@ -4,7 +4,7 @@ return {
   'Weissle/persistent-breakpoints.nvim',
   event = 'BufReadPost',
   opts = {
-    save_dir = vim.fn.stdpath('data') .. '/breakpoints',
+    save_dir = vim.fn.stdpath 'data' .. '/breakpoints',
     load_breakpoints_event = { 'BufReadPost' },
     perf_record = false,
   },

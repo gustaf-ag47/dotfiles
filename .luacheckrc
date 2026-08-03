@@ -6,6 +6,7 @@ globals = {
     "vim",  -- Neovim global API
     "s", "t", "i", "f", "c", "d", "sn", "isn", "r", "fmt", -- LuaSnip helpers
     "unpack",  -- Lua 5.1 compatibility
+    "MiniGit",  -- global exposed by mini.nvim's mini.git module after setup
 }
 
 -- Ignore specific warnings

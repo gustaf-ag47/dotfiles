@@ -5,7 +5,7 @@ return {
   version = '*',
   event = 'BufReadPre',
   build = function()
-    vim.fn.system({ 'python3', vim.fn.expand('$DOTFILES') .. '/bin/nvim-patch-plugins', 'git-conflict' })
+    vim.fn.system { 'python3', vim.fn.expand '$DOTFILES' .. '/bin/nvim-patch-plugins', 'git-conflict' }
   end,
   opts = {
     default_mappings = true,

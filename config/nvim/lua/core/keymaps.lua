@@ -49,8 +49,12 @@ map('v', 'p', '"_dP', opts 'Paste without yanking')
 -- ╰──────────────────────────────────────────────────────────╯
 map('n', '[d', vim.diagnostic.goto_prev, opts 'Previous diagnostic')
 map('n', ']d', vim.diagnostic.goto_next, opts 'Next diagnostic')
-map('n', '[e', function() vim.diagnostic.goto_prev({ severity = vim.diagnostic.severity.ERROR }) end, opts 'Previous error')
-map('n', ']e', function() vim.diagnostic.goto_next({ severity = vim.diagnostic.severity.ERROR }) end, opts 'Next error')
+map('n', '[e', function()
+  vim.diagnostic.goto_prev { severity = vim.diagnostic.severity.ERROR }
+end, opts 'Previous error')
+map('n', ']e', function()
+  vim.diagnostic.goto_next { severity = vim.diagnostic.severity.ERROR }
+end, opts 'Next error')
 map('n', '<leader>xd', vim.diagnostic.open_float, opts 'Show diagnostic')
 map('n', '<leader>xq', vim.diagnostic.setloclist, opts 'Diagnostic loclist')
 

@@ -45,11 +45,11 @@ M.setup = function()
 
       -- Set proper options for .env files
       vim.opt_local.filetype = 'dotenv'
-      vim.opt_local.syntax = 'sh'  -- Use shell syntax highlighting but disable linting
+      vim.opt_local.syntax = 'sh' -- Use shell syntax highlighting but disable linting
       vim.opt_local.commentstring = '# %s'
 
       -- Disable LSP for this buffer if it's attached
-      local clients = vim.lsp.get_active_clients({ bufnr = 0 })
+      local clients = vim.lsp.get_active_clients { bufnr = 0 }
       for _, client in ipairs(clients) do
         if client.name == 'bashls' or client.name == 'bash-language-server' then
           vim.lsp.buf_detach_client(0, client.id)
@@ -65,7 +65,7 @@ M.setup = function()
       local client = vim.lsp.get_client_by_id(args.data.client_id)
       if client and (client.name == 'bashls' or client.name == 'bash-language-server') then
         local bufname = vim.api.nvim_buf_get_name(args.buf)
-        if bufname:match('%.env') or bufname:match('%.env%.') then
+        if bufname:match '%.env' or bufname:match '%.env%.' then
           vim.lsp.buf_detach_client(args.buf, client.id)
         end
       end
@@ -84,7 +84,7 @@ M.setup = function()
         local line = vim.api.nvim_get_current_line()
         local row = vim.api.nvim_win_get_cursor(0)[1]
 
-        if line:match('^%s*#') then
+        if line:match '^%s*#' then
           -- Uncomment
           local new_line = line:gsub('^(%s*)#%s*', '%1')
           vim.api.nvim_buf_set_lines(0, row - 1, row, false, { new_line })
@@ -97,7 +97,7 @@ M.setup = function()
 
       -- Sort environment variables
       vim.keymap.set('n', '<leader>es', function()
-        vim.cmd('sort')
+        vim.cmd 'sort'
       end, vim.tbl_extend('force', opts, { desc = 'Sort env vars' }))
     end,
   })
@@ -108,7 +108,7 @@ M.setup = function()
     pattern = 'dotenv',
     callback = function()
       -- Define custom syntax highlighting
-      vim.cmd([[
+      vim.cmd [[
         syntax match EnvComment "^#.*$"
         syntax match EnvKey "^[A-Z_][A-Z0-9_]*" nextgroup=EnvEquals
         syntax match EnvEquals "=" contained nextgroup=EnvValue
@@ -121,7 +121,7 @@ M.setup = function()
         highlight default link EnvEquals Operator
         highlight default link EnvValue String
         highlight default link EnvQuotedValue String
-      ]])
+      ]]
     end,
   })
 end

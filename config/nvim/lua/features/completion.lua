@@ -51,16 +51,16 @@ M.plugins = {
 
 -- Setup completion configuration
 M.setup_completion = function()
-  local cmp = require('cmp')
-  local luasnip = require('luasnip')
+  local cmp = require 'cmp'
+  local luasnip = require 'luasnip'
 
   -- Helper function for super tab behavior
   local has_words_before = function()
     local line, col = unpack(vim.api.nvim_win_get_cursor(0))
-    return col ~= 0 and vim.api.nvim_buf_get_lines(0, line - 1, line, true)[1]:sub(col, col):match('%s') == nil
+    return col ~= 0 and vim.api.nvim_buf_get_lines(0, line - 1, line, true)[1]:sub(col, col):match '%s' == nil
   end
 
-  cmp.setup({
+  cmp.setup {
     snippet = {
       expand = function(args)
         luasnip.lsp_expand(args.body)
@@ -81,7 +81,7 @@ M.setup_completion = function()
       max_view_entries = 200,
     },
 
-    mapping = cmp.mapping.preset.insert({
+    mapping = cmp.mapping.preset.insert {
       -- Scroll documentation
       ['<C-b>'] = cmp.mapping.scroll_docs(-4),
       ['<C-f>'] = cmp.mapping.scroll_docs(4),
@@ -93,7 +93,7 @@ M.setup_completion = function()
       ['<C-e>'] = cmp.mapping.abort(),
 
       -- Confirm completion
-      ['<CR>'] = cmp.mapping.confirm({ select = false }),
+      ['<CR>'] = cmp.mapping.confirm { select = false },
 
       -- Super Tab behavior
       ['<Tab>'] = cmp.mapping(function(fallback)
@@ -117,7 +117,7 @@ M.setup_completion = function()
           fallback()
         end
       end, { 'i', 's' }),
-    }),
+    },
 
     sources = cmp.config.sources({
       { name = 'nvim_lsp', priority = 1000 },
@@ -193,24 +193,23 @@ M.setup_completion = function()
         hl_group = 'CmpGhostText',
       },
     },
-  })
+  }
 
   -- Command line completion
   cmp.setup.cmdline({ '/', '?' }, {
     mapping = cmp.mapping.preset.cmdline(),
     sources = {
-      { name = 'buffer' }
-    }
+      { name = 'buffer' },
+    },
   })
-
 end
 
 -- Setup snippet configuration
 M.setup_snippets = function()
-  local luasnip = require('luasnip')
+  local luasnip = require 'luasnip'
 
   -- Snippet configuration
-  luasnip.config.setup({
+  luasnip.config.setup {
     history = true,
     updateevents = 'TextChanged,TextChangedI',
     enable_autosnippets = true,
@@ -221,19 +220,19 @@ M.setup_snippets = function()
         },
       },
     },
-  })
+  }
 
   -- Load snippets from friendly-snippets
   require('luasnip.loaders.from_vscode').lazy_load()
 
   -- Load custom VSCode-format snippets if they exist
-  local custom_snippets_path = vim.fn.stdpath('config') .. '/snippets'
+  local custom_snippets_path = vim.fn.stdpath 'config' .. '/snippets'
   if vim.fn.isdirectory(custom_snippets_path) == 1 then
-    require('luasnip.loaders.from_vscode').lazy_load({ paths = { custom_snippets_path } })
+    require('luasnip.loaders.from_vscode').lazy_load { paths = { custom_snippets_path } }
   end
 
   -- Load custom Lua-format snippets (lua/snippets/*.lua)
-  require('luasnip.loaders.from_lua').lazy_load({ paths = { vim.fn.stdpath('config') .. '/lua/snippets' } })
+  require('luasnip.loaders.from_lua').lazy_load { paths = { vim.fn.stdpath 'config' .. '/lua/snippets' } }
 
   -- Snippet keymaps
   vim.keymap.set({ 'i', 's' }, '<C-k>', function()
@@ -257,7 +256,7 @@ end
 
 -- Add completion source
 M.add_source = function(source_config)
-  local cmp = require('cmp')
+  local cmp = require 'cmp'
   local config = cmp.get_config()
   table.insert(config.sources, source_config)
   cmp.setup(config)

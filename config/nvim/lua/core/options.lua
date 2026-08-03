@@ -78,13 +78,13 @@ local function osc52_copy(reg)
   end
 end
 local function paste()
-  return { vim.fn.split(vim.fn.getreg('"'), '\n'), vim.fn.getregtype('"') }
+  return { vim.fn.split(vim.fn.getreg '"', '\n'), vim.fn.getregtype '"' }
 end
 vim.g.clipboard = {
   name = 'OSC 52',
   copy = {
-    ['+'] = osc52_copy('+'),
-    ['*'] = osc52_copy('*'),
+    ['+'] = osc52_copy '+',
+    ['*'] = osc52_copy '*',
   },
   paste = {
     ['+'] = paste,

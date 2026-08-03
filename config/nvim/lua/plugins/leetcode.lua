@@ -13,7 +13,7 @@ return {
   },
   opts = {
     storage = {
-      home = vim.fn.expand('$SYNC/src/problems/leetcode')
+      home = vim.fn.expand '$SYNC/src/problems/leetcode',
     },
   },
 }

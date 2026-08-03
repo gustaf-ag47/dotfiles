@@ -5,7 +5,7 @@ return {
   ft = 'markdown',
   -- Only activate for files inside the Obsidian vault
   cond = function()
-    local vault = vim.fn.resolve(vim.fn.expand('~/sync/Vault'))
+    local vault = vim.fn.resolve(vim.fn.expand '~/sync/Vault')
     local cwd = vim.fn.resolve(vim.fn.getcwd())
     return vim.startswith(cwd, vault)
   end,
@@ -54,13 +54,15 @@ return {
   config = function(_, opts)
     require('obsidian').setup(opts)
 
-    local vault = vim.fn.expand('~/sync/Vault')
+    local vault = vim.fn.expand '~/sync/Vault'
     local books_dir = vault .. '/PARA/3_RESOURCES/Books'
 
     -- :BookNew — create a new literature note in Books/
     vim.api.nvim_create_user_command('BookNew', function()
-      local title = vim.fn.input('Book title: ')
-      if title == '' then return end
+      local title = vim.fn.input 'Book title: '
+      if title == '' then
+        return
+      end
 
       local slug = title:gsub('%s+', '-'):gsub('[^%w-]', ''):lower()
       local filepath = books_dir .. '/' .. slug .. '.md'
@@ -74,7 +76,7 @@ return {
       vim.cmd('edit ' .. vim.fn.fnameescape(filepath))
       -- Trigger Templater if available, otherwise insert template via ObsidianTemplate
       vim.defer_fn(function()
-        vim.cmd('ObsidianTemplate zettel-literature')
+        vim.cmd 'ObsidianTemplate zettel-literature'
       end, 100)
     end, { desc = 'Create new book/literature note' })
   end,

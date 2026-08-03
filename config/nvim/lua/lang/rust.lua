@@ -35,27 +35,27 @@ M.plugins = {
 
             -- Rust-specific actions
             vim.keymap.set('n', '<leader>rr', function()
-              vim.cmd.RustLsp('runnables')
+              vim.cmd.RustLsp 'runnables'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Run targets' }))
 
             vim.keymap.set('n', '<leader>rd', function()
-              vim.cmd.RustLsp('debuggables')
+              vim.cmd.RustLsp 'debuggables'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Debug targets' }))
 
             vim.keymap.set('n', '<leader>re', function()
-              vim.cmd.RustLsp('expandMacro')
+              vim.cmd.RustLsp 'expandMacro'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Expand macro' }))
 
             vim.keymap.set('n', '<leader>rc', function()
-              vim.cmd.RustLsp('openCargo')
+              vim.cmd.RustLsp 'openCargo'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Open Cargo.toml' }))
 
             vim.keymap.set('n', '<leader>rp', function()
-              vim.cmd.RustLsp('parentModule')
+              vim.cmd.RustLsp 'parentModule'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Go to parent module' }))
 
             vim.keymap.set('n', '<leader>rj', function()
-              vim.cmd.RustLsp('joinLines')
+              vim.cmd.RustLsp 'joinLines'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Join lines' }))
 
             vim.keymap.set('n', '<leader>rh', function()
@@ -63,7 +63,7 @@ M.plugins = {
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Hover actions' }))
 
             vim.keymap.set('n', '<leader>ra', function()
-              vim.cmd.RustLsp('codeAction')
+              vim.cmd.RustLsp 'codeAction'
             end, vim.tbl_extend('force', opts, { desc = 'Rust: Code actions' }))
 
             -- NOTE: Standard LSP keymaps (gd, gr, K, etc.) are set globally in features/lsp.lua
@@ -199,7 +199,7 @@ M.plugins = {
     'saecki/crates.nvim',
     ft = { 'rust', 'toml' },
     config = function()
-      local crates = require('crates')
+      local crates = require 'crates'
       crates.setup {
         lsp = {
           enabled = true,
@@ -217,7 +217,7 @@ M.plugins = {
         callback = function(event)
           local wk_ok, wk = pcall(require, 'which-key')
           if wk_ok then
-            wk.add({ { '<leader>C', group = 'Crates', icon = '📦', buffer = event.buf } })
+            wk.add { { '<leader>C', group = 'Crates', icon = '📦', buffer = event.buf } }
           end
           local opts = { buffer = event.buf, silent = true }
           vim.keymap.set('n', '<leader>Ct', crates.toggle, vim.tbl_extend('force', opts, { desc = 'Toggle crates' }))
@@ -313,7 +313,7 @@ M.setup_autocmds = function()
       -- Register Rust which-key group (buffer-local)
       local wk_ok, wk = pcall(require, 'which-key')
       if wk_ok then
-        wk.add({ { '<leader>r', group = 'Rust', icon = '🦀', buffer = event.buf } })
+        wk.add { { '<leader>r', group = 'Rust', icon = '🦀', buffer = event.buf } }
       end
 
       -- Setup Rust-specific keymaps for this buffer

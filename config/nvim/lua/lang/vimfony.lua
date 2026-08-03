@@ -19,7 +19,7 @@ M.lsp_config = {
 }
 
 M.setup = function()
-  if vim.fn.executable('vimfony') == 0 then
+  if vim.fn.executable 'vimfony' == 0 then
     -- Binary not installed — skip silently.
     -- Install: go install github.com/shinyvision/vimfony@latest
     return
@@ -31,11 +31,8 @@ M.setup = function()
     capabilities = vim.tbl_deep_extend('force', capabilities, cmp_nvim_lsp.default_capabilities())
   end
 
-  vim.lsp.config('vimfony', vim.tbl_deep_extend('force',
-    M.lsp_config.vimfony,
-    { capabilities = capabilities }
-  ))
-  vim.lsp.enable('vimfony')
+  vim.lsp.config('vimfony', vim.tbl_deep_extend('force', M.lsp_config.vimfony, { capabilities = capabilities }))
+  vim.lsp.enable 'vimfony'
 end
 
 return M

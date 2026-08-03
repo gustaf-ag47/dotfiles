@@ -17,6 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Lua 5.1 matches the luajit std used by Neovim / .luacheckrc, provides
+      # `luac` for the syntax check, and avoids the luacheck-on-Lua-5.5 breakage.
+      - name: Setup Lua 5.1
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: "5.1"
+
+      - name: Setup LuaRocks
+        uses: leafo/gh-actions-luarocks@v5
+
       - name: Check Lua syntax (luac)
         run: |
           find config/nvim/lua -name '*.lua' -print0 \
@@ -31,9 +41,9 @@ jobs:
           args: --check config/nvim/
 
       - name: Lint Lua (luacheck)
-        uses: lunarmodules/luacheck-action@v1
-        with:
-          args: config/nvim/lua --config .luacheckrc
+        run: |
+          luarocks install luacheck
+          luacheck config/nvim/lua --config .luacheckrc
 
   load-test:
     name: Headless load test

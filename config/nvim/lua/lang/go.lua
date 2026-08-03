@@ -5,7 +5,6 @@
 
 local M = {}
 
-
 -- Go-specific plugin specifications
 M.plugins = {
   {
@@ -13,7 +12,7 @@ M.plugins = {
     dependencies = { 'ray-x/guihua.lua', 'nvim-treesitter/nvim-treesitter' },
     ft = { 'go', 'gomod', 'gowork', 'gotmpl' },
     config = function()
-      require('go').setup({
+      require('go').setup {
         -- Go tool configuration
         goimports = 'gopls',
         gofmt = 'gofumpt',
@@ -55,7 +54,7 @@ M.plugins = {
         -- Trouble integration
         trouble = true,
         luasnip = true,
-      })
+      }
     end,
   },
 
@@ -65,10 +64,10 @@ M.plugins = {
     ft = 'go',
     dependencies = { 'mfussenegger/nvim-dap' },
     build = function()
-      vim.fn.system({ 'python3', vim.fn.expand('$DOTFILES') .. '/bin/nvim-patch-plugins', 'nvim-dap-go' })
+      vim.fn.system { 'python3', vim.fn.expand '$DOTFILES' .. '/bin/nvim-patch-plugins', 'nvim-dap-go' }
     end,
     config = function()
-      require('dap-go').setup({
+      require('dap-go').setup {
         dap_configurations = {
           {
             type = 'go',
@@ -84,7 +83,7 @@ M.plugins = {
           args = {},
           build_flags = { '-tags', 'integration' },
         },
-      })
+      }
     end,
   },
 }
@@ -106,12 +105,12 @@ M.lsp_config = {
           unusedparams = true,
           unreachable = true,
           unusedwrite = true,
-          nilness = true,    -- nil pointer dereference detection
-          shadow = true,     -- variable shadowing detection
+          nilness = true, -- nil pointer dereference detection
+          shadow = true, -- variable shadowing detection
           stdversion = true, -- warns on stdlib APIs newer than go.mod go directive
           -- Suppress low-signal style checks for application code
-          ST1000 = false,    -- package comment requirement (noisy on non-library code)
-          QF1008 = false,    -- embedded field selector can be omitted (minor style)
+          ST1000 = false, -- package comment requirement (noisy on non-library code)
+          QF1008 = false, -- embedded field selector can be omitted (minor style)
         },
 
         -- Code actions and codelenses
@@ -188,13 +187,15 @@ M.setup_keymaps = function(bufnr)
   map('n', '<leader>gvu', '<cmd>GoVulnCheck<cr>', vim.tbl_extend('force', opts, { desc = 'Go vuln check' }))
 
   -- Alternate between foo.go and foo_test.go
-  map('n', '<leader>go', '<cmd>GoAlt<cr>',  vim.tbl_extend('force', opts, { desc = 'Go alternate file' }))
+  map('n', '<leader>go', '<cmd>GoAlt<cr>', vim.tbl_extend('force', opts, { desc = 'Go alternate file' }))
   map('n', '<leader>gO', '<cmd>GoAltV<cr>', vim.tbl_extend('force', opts, { desc = 'Go alternate file (vsplit)' }))
 
   -- Run go generate and refresh buffers
   map('n', '<leader>gg', function()
-    vim.cmd('GoGenerate')
-    vim.defer_fn(function() vim.cmd('checktime') end, 500)
+    vim.cmd 'GoGenerate'
+    vim.defer_fn(function()
+      vim.cmd 'checktime'
+    end, 500)
   end, vim.tbl_extend('force', opts, { desc = 'Go generate' }))
 
   -- Import management
@@ -234,7 +235,7 @@ M.setup_autocmds = function()
       -- Register Go which-key group (buffer-local)
       local wk_ok, wk = pcall(require, 'which-key')
       if wk_ok then
-        wk.add({ { '<leader>g', group = 'Go', icon = '󰟓', buffer = event.buf } })
+        wk.add { { '<leader>g', group = 'Go', icon = '󰟓', buffer = event.buf } }
       end
 
       -- Auto-enable inlay hints for Go buffers
@@ -322,7 +323,7 @@ M.setup = function()
   if M.lsp_config.gopls then
     local config = vim.tbl_deep_extend('force', M.lsp_config.gopls, { capabilities = capabilities })
     vim.lsp.config('gopls', config)
-    vim.lsp.enable('gopls')
+    vim.lsp.enable 'gopls'
   end
 end
 

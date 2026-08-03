@@ -26,17 +26,27 @@ return { -- Collection of various small independent plugins/modules
     -- Disable in non-editing buffers
     vim.api.nvim_create_autocmd('FileType', {
       pattern = {
-        'help', 'neo-tree', 'Trouble', 'trouble', 'lazy', 'mason',
-        'TelescopePrompt', 'oil', 'dbui', 'toggleterm',
+        'help',
+        'neo-tree',
+        'Trouble',
+        'trouble',
+        'lazy',
+        'mason',
+        'TelescopePrompt',
+        'oil',
+        'dbui',
+        'toggleterm',
       },
-      callback = function() vim.b.miniindentscope_disable = true end,
+      callback = function()
+        vim.b.miniindentscope_disable = true
+      end,
     })
 
     -- Git utilities: show_range_history() shows how selected lines evolved in git
     -- Usage: visual select a method body, then :lua MiniGit.show_range_history()
     require('mini.git').setup()
     vim.keymap.set({ 'n', 'x' }, '<leader>gh', MiniGit.show_range_history, { desc = 'Git: line range history' })
-    vim.keymap.set({ 'n', 'x' }, '<leader>gG', MiniGit.show_at_cursor,    { desc = 'Git: show at cursor' })
+    vim.keymap.set({ 'n', 'x' }, '<leader>gG', MiniGit.show_at_cursor, { desc = 'Git: show at cursor' })
 
     -- Statusline (keep existing setup)
     local statusline = require 'mini.statusline'

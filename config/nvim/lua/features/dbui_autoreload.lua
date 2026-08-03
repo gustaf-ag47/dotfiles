@@ -20,10 +20,10 @@ local M = {}
 -- connections.json AND the inherited workspace-level connections.json
 -- simultaneously. Set via M.update_paths({...}) from features/dbui_project.lua
 -- whenever the scope changes.
-local watchers = {}    ---@type table<string, uv.uv_fs_event_t>
-local debounce_timer   ---@type uv.uv_timer_t?
+local watchers = {} ---@type table<string, uv.uv_fs_event_t>
+local debounce_timer ---@type uv.uv_timer_t?
 local watched_paths = {} ---@type string[]
-local last_mtime = {}  ---@type table<string, integer>  -- per-path mtime guard
+local last_mtime = {} ---@type table<string, integer>  -- per-path mtime guard
 
 -- Legacy single-path globals kept for backward compatibility with the older
 -- start()/status() callsites:
@@ -36,11 +36,15 @@ end
 ---@return table<string,string>  name -> url
 local function read_connections()
   local f = io.open(connections_path, 'r')
-  if not f then return {} end
-  local content = f:read('*a')
+  if not f then
+    return {}
+  end
+  local content = f:read '*a'
   f:close()
   local ok, conns = pcall(vim.json.decode, content)
-  if not ok or type(conns) ~= 'table' then return {} end
+  if not ok or type(conns) ~= 'table' then
+    return {}
+  end
   local by_name = {}
   for _, c in ipairs(conns) do
     if type(c) == 'table' and c.name and c.url then
@@ -61,12 +65,16 @@ local function refresh()
   -- (so the project's connections.json shadows the workspace's).
   local by_name = {}
   for _, p in ipairs(watched_paths) do
-    local file_path = p  -- capture for closure
-    connections_path = file_path  -- read_connections reads from this global; gross but minimal change
+    local file_path = p -- capture for closure
+    connections_path = file_path -- read_connections reads from this global; gross but minimal change
     local m = read_connections()
-    for k, v in pairs(m) do by_name[k] = v end
+    for k, v in pairs(m) do
+      by_name[k] = v
+    end
   end
-  if not next(by_name) then return end
+  if not next(by_name) then
+    return
+  end
 
   -- 1) Patch b:db on every loaded dbui-bound buffer so whole-buffer %DB picks up the fresh URL.
   local patched = 0
@@ -117,10 +125,7 @@ local function refresh()
   end
 
   if patched > 0 then
-    vim.notify(
-      ('[DBUI] auto-reloaded — %d buffer%s rebound'):format(patched, patched == 1 and '' or 's'),
-      vim.log.levels.INFO
-    )
+    vim.notify(('[DBUI] auto-reloaded — %d buffer%s rebound'):format(patched, patched == 1 and '' or 's'), vim.log.levels.INFO)
   end
 end
 
@@ -129,71 +134,84 @@ local function schedule_refresh()
   -- (open-truncate then a final flush). 250 ms collapses both into one refresh.
   if debounce_timer then
     debounce_timer:stop()
-    if not debounce_timer:is_closing() then debounce_timer:close() end
-  end
-  debounce_timer = vim.uv.new_timer()
-  debounce_timer:start(250, 0, vim.schedule_wrap(function()
-    if debounce_timer and not debounce_timer:is_closing() then
+    if not debounce_timer:is_closing() then
       debounce_timer:close()
     end
-    debounce_timer = nil
-    -- mtime check across ALL watched paths. If ANY changed, refresh.
-    local any_changed = false
-    for _, p in ipairs(watched_paths) do
-      local st = vim.uv.fs_stat(p)
-      if st then
-        local mtime = st.mtime.sec * 1e9 + st.mtime.nsec
-        if mtime ~= last_mtime[p] then
-          any_changed = true
-          last_mtime[p] = mtime
+  end
+  debounce_timer = vim.uv.new_timer()
+  debounce_timer:start(
+    250,
+    0,
+    vim.schedule_wrap(function()
+      if debounce_timer and not debounce_timer:is_closing() then
+        debounce_timer:close()
+      end
+      debounce_timer = nil
+      -- mtime check across ALL watched paths. If ANY changed, refresh.
+      local any_changed = false
+      for _, p in ipairs(watched_paths) do
+        local st = vim.uv.fs_stat(p)
+        if st then
+          local mtime = st.mtime.sec * 1e9 + st.mtime.nsec
+          if mtime ~= last_mtime[p] then
+            any_changed = true
+            last_mtime[p] = mtime
+          end
         end
       end
-    end
-    if any_changed then refresh() end
-  end))
-end
-
-local function on_change(err, _filename, events)
-  if err then return end
-  schedule_refresh()
-  -- Some editors do atomic-rename writes. Truncate-writes (what our token script
-  -- does) keep the inode and the watcher stays attached. For renames, the watcher
-  -- detaches silently — re-arm on the path.
-  if events and events.rename and watcher then
-    pcall(function() watcher:stop() end)
-    vim.defer_fn(function()
-      if watcher and connections_path then
-        pcall(function() watcher:start(connections_path, {}, vim.schedule_wrap(on_change)) end)
+      if any_changed then
+        refresh()
       end
-    end, 50)
-  end
+    end)
+  )
 end
 
 -- Internal: start a single watcher on one path.
 local function start_one(path)
-  if watchers[path] then return end
-  if vim.fn.filereadable(path) == 0 then return end
+  if watchers[path] then
+    return
+  end
+  if vim.fn.filereadable(path) == 0 then
+    return
+  end
   local st = vim.uv.fs_stat(path)
-  if st then last_mtime[path] = st.mtime.sec * 1e9 + st.mtime.nsec end
+  if st then
+    last_mtime[path] = st.mtime.sec * 1e9 + st.mtime.nsec
+  end
   local handle = vim.uv.new_fs_event()
-  if not handle then return end
+  if not handle then
+    return
+  end
+  -- Single callback reused for the initial arm AND the post-rename re-arm.
+  -- Some editors do atomic-rename writes; on a rename the fs_event detaches
+  -- silently, so we re-arm the same handle+callback on the same path.
+  local cb
+  cb = vim.schedule_wrap(function(err, _filename, events)
+    if err then
+      return
+    end
+    schedule_refresh()
+    -- atomic-rename re-arm (per-path)
+    if events and events.rename then
+      pcall(function()
+        handle:stop()
+      end)
+      vim.defer_fn(function()
+        if watchers[path] then
+          pcall(function()
+            handle:start(path, {}, cb)
+          end)
+        end
+      end, 50)
+    end
+  end)
   local ok = pcall(function()
-    handle:start(path, {}, vim.schedule_wrap(function(err, _filename, events)
-      if err then return end
-      schedule_refresh()
-      -- atomic-rename re-arm (per-path)
-      if events and events.rename then
-        pcall(function() handle:stop() end)
-        vim.defer_fn(function()
-          if watchers[path] then
-            pcall(function() handle:start(path, {}, vim.schedule_wrap(on_change)) end)
-          end
-        end, 50)
-      end
-    end))
+    handle:start(path, {}, cb)
   end)
   if not ok then
-    pcall(function() handle:close() end)
+    pcall(function()
+      handle:close()
+    end)
     return
   end
   watchers[path] = handle
@@ -201,9 +219,15 @@ end
 
 local function stop_one(path)
   local h = watchers[path]
-  if not h then return end
-  pcall(function() h:stop() end)
-  pcall(function() h:close() end)
+  if not h then
+    return
+  end
+  pcall(function()
+    h:stop()
+  end)
+  pcall(function()
+    h:close()
+  end)
   watchers[path] = nil
   last_mtime[path] = nil
 end
@@ -223,10 +247,14 @@ function M.update_paths(paths)
   end
   -- Stop watchers no longer wanted
   for path, _ in pairs(watchers) do
-    if not seen[path] then stop_one(path) end
+    if not seen[path] then
+      stop_one(path)
+    end
   end
   -- Start new ones
-  for _, p in ipairs(new_paths) do start_one(p) end
+  for _, p in ipairs(new_paths) do
+    start_one(p)
+  end
   watched_paths = new_paths
   -- Keep the legacy global pointing at the first path (for status()).
   connections_path = new_paths[1]
@@ -235,31 +263,43 @@ end
 function M.start()
   -- Legacy startup: watch the default $NOTES/db_ui/connections.json. The
   -- project module (if loaded) will immediately overwrite via update_paths.
-  if next(watchers) ~= nil then return end
+  if next(watchers) ~= nil then
+    return
+  end
   local default = notes_dir() .. '/db_ui/connections.json'
-  M.update_paths({ default })
+  M.update_paths { default }
 
   vim.api.nvim_create_autocmd('VimLeavePre', {
     once = true,
-    callback = function() M.stop() end,
+    callback = function()
+      M.stop()
+    end,
   })
 end
 
 function M.stop()
   if debounce_timer then
-    pcall(function() debounce_timer:stop() end)
+    pcall(function()
+      debounce_timer:stop()
+    end)
     if debounce_timer and not debounce_timer:is_closing() then
-      pcall(function() debounce_timer:close() end)
+      pcall(function()
+        debounce_timer:close()
+      end)
     end
     debounce_timer = nil
   end
-  for path, _ in pairs(watchers) do stop_one(path) end
+  for path, _ in pairs(watchers) do
+    stop_one(path)
+  end
 end
 
 -- Manual probe: print current watcher state, useful when debugging.
 function M.status()
   local n = 0
-  for _ in pairs(watchers) do n = n + 1 end
+  for _ in pairs(watchers) do
+    n = n + 1
+  end
   return {
     active = n > 0,
     -- Legacy single-path field (first watched path) + new fields

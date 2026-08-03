@@ -23,8 +23,8 @@ return {
       function()
         vim.notify('Running phpstan…', vim.log.levels.INFO)
         vim.fn.setqflist({}, ' ', { title = 'PHPStan' })
-        vim.cmd('cexpr system("phpstan analyse --error-format=raw --no-progress 2>&1")')
-        vim.cmd('Trouble qflist')
+        vim.cmd 'cexpr system("phpstan analyse --error-format=raw --no-progress 2>&1")'
+        vim.cmd 'Trouble qflist'
       end,
       desc = 'PHPStan → Trouble',
     },

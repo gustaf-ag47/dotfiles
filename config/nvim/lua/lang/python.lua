@@ -37,7 +37,7 @@ M.plugins = {
     'alexpasmantier/pymple.nvim',
     ft = 'python',
     build = ':PympleBuild',
-    enabled = vim.fn.executable('gg') == 1, -- Only enable if gg is installed
+    enabled = vim.fn.executable 'gg' == 1, -- Only enable if gg is installed
     dependencies = {
       'nvim-lua/plenary.nvim',
       'MunifTanjim/nui.nvim',
@@ -45,10 +45,10 @@ M.plugins = {
       'nvim-tree/nvim-web-devicons',
     },
     config = function()
-      require('pymple').setup({
+      require('pymple').setup {
         -- Automatically update imports when moving files in oil.nvim
         -- Shows confirmation prompt with preview of changes
-      })
+      }
     end,
   },
 
@@ -104,23 +104,14 @@ M.lsp_config = {
   ruff = {
     cmd = { 'ruff', 'server', '--preview' },
     filetypes = { 'python' },
-    root_dir = root_pattern(
-      'pyproject.toml',
-      'ruff.toml',
-      '.ruff.toml',
-      'setup.py',
-      'setup.cfg',
-      'requirements.txt',
-      'Pipfile',
-      '.git'
-    ),
+    root_dir = root_pattern('pyproject.toml', 'ruff.toml', '.ruff.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
     init_options = {
       settings = {
         -- Ruff configuration
         args = {
           '--extend-select=I', -- Enable import sorting
         },
-      }
+      },
     },
     single_file_support = true,
   },
@@ -128,14 +119,7 @@ M.lsp_config = {
   pyright = {
     cmd = { 'pyright-langserver', '--stdio' },
     filetypes = { 'python' },
-    root_dir = root_pattern(
-      'pyproject.toml',
-      'setup.py',
-      'setup.cfg',
-      'requirements.txt',
-      'Pipfile',
-      '.git'
-    ),
+    root_dir = root_pattern('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
     settings = {
       python = {
         analysis = {
@@ -169,7 +153,7 @@ M.lsp_config = {
           },
 
           -- Stub path
-          stubPath = vim.fn.stdpath('data') .. '/lazy/python-type-stubs',
+          stubPath = vim.fn.stdpath 'data' .. '/lazy/python-type-stubs',
 
           -- Extra paths for analysis
           extraPaths = {},
@@ -180,7 +164,7 @@ M.lsp_config = {
           enabled = true,
           pylintEnabled = false, -- We'll use external tools
           flake8Enabled = false, -- We'll use external tools
-          mypyEnabled = false,   -- We'll use external tools
+          mypyEnabled = false, -- We'll use external tools
         },
 
         -- Formatting configuration
@@ -200,14 +184,7 @@ M.lsp_config = {
   pylsp = {
     cmd = { 'pylsp' },
     filetypes = { 'python' },
-    root_dir = root_pattern(
-      'pyproject.toml',
-      'setup.py',
-      'setup.cfg',
-      'requirements.txt',
-      'Pipfile',
-      '.git'
-    ),
+    root_dir = root_pattern('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
     settings = {
       pylsp = {
         plugins = {
@@ -368,7 +345,7 @@ M.setup_keymaps = function(bufnr)
   -- Python execution
   map('n', '<leader>pr', '<cmd>!python %<cr>', vim.tbl_extend('force', opts, { desc = 'Run Python file' }))
   map('n', '<leader>pR', function()
-    local file = vim.fn.expand('%:p')
+    local file = vim.fn.expand '%:p'
     vim.cmd('split | terminal python ' .. file)
   end, vim.tbl_extend('force', opts, { desc = 'Run Python file in terminal' }))
 
@@ -378,37 +355,37 @@ M.setup_keymaps = function(bufnr)
 
   -- Testing
   map('n', '<leader>pt', function()
-    vim.cmd('!python -m pytest ' .. vim.fn.expand('%:p'))
+    vim.cmd('!python -m pytest ' .. vim.fn.expand '%:p')
   end, vim.tbl_extend('force', opts, { desc = 'Run pytest on file' }))
   map('n', '<leader>pT', '<cmd>!python -m pytest<cr>', vim.tbl_extend('force', opts, { desc = 'Run all pytest' }))
   map('n', '<leader>pc', function()
-    vim.cmd('!python -m pytest --cov=' .. vim.fn.expand('%:p:h'))
+    vim.cmd('!python -m pytest --cov=' .. vim.fn.expand '%:p:h')
   end, vim.tbl_extend('force', opts, { desc = 'Run pytest with coverage' }))
 
   -- Formatting and linting with Ruff
   map('n', '<leader>pf', function()
-    vim.cmd('!ruff format ' .. vim.fn.expand('%:p'))
-    vim.cmd('edit!')
+    vim.cmd('!ruff format ' .. vim.fn.expand '%:p')
+    vim.cmd 'edit!'
   end, vim.tbl_extend('force', opts, { desc = 'Format with ruff' }))
   map('n', '<leader>pi', function()
-    vim.cmd('!ruff check --select I --fix ' .. vim.fn.expand('%:p'))
-    vim.cmd('edit!')
+    vim.cmd('!ruff check --select I --fix ' .. vim.fn.expand '%:p')
+    vim.cmd 'edit!'
   end, vim.tbl_extend('force', opts, { desc = 'Sort imports with ruff' }))
   map('n', '<leader>pl', '<cmd>!ruff check %<cr>', vim.tbl_extend('force', opts, { desc = 'Lint with ruff' }))
   map('n', '<leader>pL', '<cmd>!ruff check --fix %<cr>', vim.tbl_extend('force', opts, { desc = 'Lint and fix with ruff' }))
   map('n', '<leader>pm', '<cmd>!mypy %<cr>', vim.tbl_extend('force', opts, { desc = 'Type check with mypy' }))
   map('n', '<leader>pF', function()
-    vim.cmd('!ruff format ' .. vim.fn.expand('%:p'))
-    vim.cmd('!ruff check --fix ' .. vim.fn.expand('%:p'))
-    vim.cmd('edit!')
+    vim.cmd('!ruff format ' .. vim.fn.expand '%:p')
+    vim.cmd('!ruff check --fix ' .. vim.fn.expand '%:p')
+    vim.cmd 'edit!'
   end, vim.tbl_extend('force', opts, { desc = 'Format and fix with ruff' }))
 
   -- REPL and interactive
   map('n', '<leader>pp', function()
-    vim.cmd('split | terminal python')
+    vim.cmd 'split | terminal python'
   end, vim.tbl_extend('force', opts, { desc = 'Open Python REPL' }))
   map('n', '<leader>pI', function()
-    vim.cmd('split | terminal ipython')
+    vim.cmd 'split | terminal ipython'
   end, vim.tbl_extend('force', opts, { desc = 'Open IPython' }))
 
   -- Package management
@@ -473,7 +450,7 @@ M.setup_autocmds = function()
         './env/bin/python',
         './.venv/bin/python',
         './venv/Scripts/python.exe', -- Windows
-        './env/Scripts/python.exe',   -- Windows
+        './env/Scripts/python.exe', -- Windows
       }
 
       for _, path in ipairs(venv_paths) do
@@ -523,10 +500,10 @@ M.required_tools = {
 
 -- Setup Python debugging
 M.setup_debugging = function()
-  local dap_python = require('dap-python')
+  local dap_python = require 'dap-python'
 
   -- Auto-detect Python interpreter
-  local python_path = vim.fn.exepath('python')
+  local python_path = vim.fn.exepath 'python'
   local venv_python = vim.fn.getcwd() .. '/venv/bin/python'
 
   if vim.fn.executable(venv_python) == 1 then
@@ -541,7 +518,7 @@ end
 
 -- Setup virtual environment selector
 M.setup_venv_selector = function()
-  require('venv-selector').setup({
+  require('venv-selector').setup {
     -- Auto-activate when entering Python projects
     auto_refresh = true,
 
@@ -562,7 +539,7 @@ M.setup_venv_selector = function()
 
     -- DAP integration
     dap_enabled = true,
-  })
+  }
 end
 
 -- Initialize the Python module
@@ -591,14 +568,14 @@ M.setup = function()
   if M.lsp_config.ruff then
     local ruff_config = vim.tbl_deep_extend('force', M.lsp_config.ruff, { capabilities = capabilities })
     vim.lsp.config('ruff', ruff_config)
-    vim.lsp.enable('ruff')
+    vim.lsp.enable 'ruff'
   end
 
   -- Configure and enable Pyright using native Neovim 0.11+ API
   if M.lsp_config.pyright then
     local pyright_config = vim.tbl_deep_extend('force', M.lsp_config.pyright, { capabilities = capabilities })
     vim.lsp.config('pyright', pyright_config)
-    vim.lsp.enable('pyright')
+    vim.lsp.enable 'pyright'
   end
 end
 

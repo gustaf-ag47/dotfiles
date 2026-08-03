@@ -9,9 +9,9 @@ return {
     event = 'InsertEnter',
     opts = {
       keymaps = {
-        accept_suggestion = '<M-l>',  -- Alt+l — no conflict with cmp Tab
-        clear_suggestion  = '<C-]>',
-        accept_word       = '<M-w>',
+        accept_suggestion = '<M-l>', -- Alt+l — no conflict with cmp Tab
+        clear_suggestion = '<C-]>',
+        accept_word = '<M-w>',
       },
       ignore_filetypes = { 'TelescopePrompt', 'oil', 'dbui', 'help' },
       color = {

@@ -31,8 +31,20 @@ local DEFAULTS = {
   -- Dangerous keywords. Match if appearing as the first significant token
   -- of any line/`;`-statement after stripping safe prefixes and lock clauses.
   dangerous = {
-    'UPDATE','DELETE','INSERT','DROP','TRUNCATE','ALTER','REPLACE',
-    'GRANT','REVOKE','CREATE','RENAME','MERGE','CALL','LOAD',
+    'UPDATE',
+    'DELETE',
+    'INSERT',
+    'DROP',
+    'TRUNCATE',
+    'ALTER',
+    'REPLACE',
+    'GRANT',
+    'REVOKE',
+    'CREATE',
+    'RENAME',
+    'MERGE',
+    'CALL',
+    'LOAD',
   },
 
   -- Word-boundary keywords that should bypass the guard when they're the
@@ -52,13 +64,6 @@ local DEFAULTS = {
 }
 
 local config = vim.deepcopy(DEFAULTS)
-local dangerous_set = {}
-for _, k in ipairs(config.dangerous) do dangerous_set[k] = true end
-
-local function rebuild_dangerous_set()
-  dangerous_set = {}
-  for _, k in ipairs(config.dangerous) do dangerous_set[k] = true end
-end
 
 -- ---------------------------------------------------------------------------
 -- Pure parser
@@ -69,11 +74,11 @@ end
 -- empty markers (so position offsets stay roughly the same for downstream
 -- statement-splitting).
 local function strip_strings_and_comments(s)
-  s = s:gsub('/%*.-%*/', ' ')      -- /* block comment */
-  s = s:gsub('%-%-[^\n]*', ' ')    -- -- line comment
-  s = s:gsub("'[^']*'", "''")     -- 'string literal'
-  s = s:gsub('"[^"]*"', '""')     -- "double-quoted"
-  s = s:gsub('`[^`]*`', '``')     -- `backtick identifier`
+  s = s:gsub('/%*.-%*/', ' ') -- /* block comment */
+  s = s:gsub('%-%-[^\n]*', ' ') -- -- line comment
+  s = s:gsub("'[^']*'", "''") -- 'string literal'
+  s = s:gsub('"[^"]*"', '""') -- "double-quoted"
+  s = s:gsub('`[^`]*`', '``') -- `backtick identifier`
   return s
 end
 
@@ -82,7 +87,9 @@ end
 local function check_chunk(chunk)
   -- Trim leading whitespace + structural noise (parens, commas)
   local s = chunk:gsub('^[%s%(%),]+', ''):upper()
-  if s == '' then return nil end
+  if s == '' then
+    return nil
+  end
 
   -- EXPLAIN ANALYZE on MySQL and Postgres EXECUTES the inner statement;
   -- strip the prefix and re-check.
@@ -90,7 +97,9 @@ local function check_chunk(chunk)
 
   -- Bare safe prefixes: skip this chunk entirely.
   for _, p in ipairs(config.safe_prefixes) do
-    if s:match('^' .. p .. '%f[%W]') then return nil end
+    if s:match('^' .. p .. '%f[%W]') then
+      return nil
+    end
   end
 
   -- Strip lock clauses (read-intent, not write).
@@ -102,7 +111,9 @@ local function check_chunk(chunk)
   -- underscore as a word-char so identifiers like `update_log` /
   -- `customer_delete_id` / `created_at` don't trigger.
   for _, kw in ipairs(config.dangerous) do
-    if s:find('%f[%w_]' .. kw .. '%f[^%w_]') then return kw end
+    if s:find('%f[%w_]' .. kw .. '%f[^%w_]') then
+      return kw
+    end
   end
   return nil
 end
@@ -128,10 +139,12 @@ function M.check(lines)
     return nil
   end
   sql = strip_strings_and_comments(sql)
-  for line in sql:gmatch('[^\n]+') do
-    for chunk in line:gmatch('[^;]+') do
+  for line in sql:gmatch '[^\n]+' do
+    for chunk in line:gmatch '[^;]+' do
       local hit = check_chunk(chunk)
-      if hit then return hit end
+      if hit then
+        return hit
+      end
     end
   end
   return nil
@@ -139,10 +152,14 @@ end
 
 -- Decide whether the guard should activate for a given buffer's connection.
 function M.is_prod(key_name)
-  if not key_name then return false end
+  if not key_name then
+    return false
+  end
   local lower = key_name:lower()
   for _, tag in ipairs(config.prod_tags) do
-    if lower:find(tag, 1, true) then return true end
+    if lower:find(tag, 1, true) then
+      return true
+    end
   end
   return false
 end
@@ -155,7 +172,6 @@ local autocmd_id
 
 function M.setup(opts)
   config = vim.tbl_deep_extend('force', config, opts or {})
-  rebuild_dangerous_set()
 
   -- Tear down a prior autocmd if setup() is being re-called (lazy reload).
   if autocmd_id then
@@ -168,18 +184,21 @@ function M.setup(opts)
     desc = 'Block DML/DDL on prod-tagged connections',
     callback = function()
       local key = vim.b.dbui_db_key_name
-      if not M.is_prod(key) then return end
+      if not M.is_prod(key) then
+        return
+      end
 
       local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
       local hit = M.check(lines)
       if hit then
-        local msg = ('[DBUI] BLOCKED: %s on %s. Use a non-prod connection.')
-          :format(hit, key)
+        local msg = ('[DBUI] BLOCKED: %s on %s. Use a non-prod connection.'):format(hit, key)
         -- nvim_err_writeln persists to :messages (vim.notify inside silent
         -- doautocmd is sometimes swallowed). Schedule so it survives the
         -- error() that aborts :DB.
-        vim.schedule(function() vim.api.nvim_err_writeln(msg) end)
-        error('prod DML blocked: ' .. hit)  -- aborts :DB
+        vim.schedule(function()
+          vim.api.nvim_err_writeln(msg)
+        end)
+        error('prod DML blocked: ' .. hit) -- aborts :DB
       end
     end,
   })

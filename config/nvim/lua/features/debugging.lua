@@ -32,11 +32,11 @@ M.plugins = {
 
 -- Setup debug UI
 M.setup_dap_ui = function()
-  local dap = require('dap')
-  local dapui = require('dapui')
+  local dap = require 'dap'
+  local dapui = require 'dapui'
 
   -- Configure DAP UI
-  dapui.setup({
+  dapui.setup {
     icons = { expanded = '▾', collapsed = '▸', current_frame = '▸' },
     mappings = {
       expand = { '<CR>', '<2-LeftMouse>' },
@@ -47,7 +47,7 @@ M.setup_dap_ui = function()
       toggle = 't',
     },
     element_mappings = {},
-    expand_lines = vim.fn.has('nvim-0.7') == 1,
+    expand_lines = vim.fn.has 'nvim-0.7' == 1,
     layouts = {
       {
         elements = {
@@ -95,7 +95,7 @@ M.setup_dap_ui = function()
       max_type_length = nil,
       max_value_lines = 100,
     },
-  })
+  }
 
   -- Auto-open/close DAP UI
   dap.listeners.after.event_initialized['dapui_config'] = function()
@@ -111,7 +111,7 @@ end
 
 -- Setup virtual text for debugging
 M.setup_virtual_text = function()
-  require('nvim-dap-virtual-text').setup({
+  require('nvim-dap-virtual-text').setup {
     enabled = true,
     enabled_commands = true,
     highlight_changed_variables = true,
@@ -129,17 +129,17 @@ M.setup_virtual_text = function()
         return variable.name .. ' = ' .. val
       end
     end,
-    virt_text_pos = vim.fn.has('nvim-0.10') == 1 and 'inline' or 'eol',
+    virt_text_pos = vim.fn.has 'nvim-0.10' == 1 and 'inline' or 'eol',
     all_frames = false,
     virt_lines = false,
     virt_text_win_col = nil,
-  })
+  }
 end
 
 -- Setup debug keymaps
 M.setup_keymaps = function()
-  local dap = require('dap')
-  local dapui = require('dapui')
+  local dap = require 'dap'
+  local dapui = require 'dapui'
 
   -- Function keys for stepping (IDE-like)
   vim.keymap.set('n', '<F5>', dap.continue, { desc = 'Continue' })
@@ -152,7 +152,7 @@ M.setup_keymaps = function()
   vim.keymap.set('n', '<leader>dc', dap.continue, { desc = 'Continue' })
   -- <leader>dB and conditional breakpoint owned by persistent-breakpoints.lua
   vim.keymap.set('n', '<leader>dp', function()
-    dap.set_breakpoint(nil, nil, vim.fn.input('Log message: '))
+    dap.set_breakpoint(nil, nil, vim.fn.input 'Log message: ')
   end, { desc = 'Log point' })
   vim.keymap.set('n', '<leader>dR', dap.run_to_cursor, { desc = 'Run to cursor' })
 
@@ -169,13 +169,13 @@ M.setup_keymaps = function()
     require('dap.ui.widgets').hover()
   end, { desc = 'Hover variable' })
   vim.keymap.set('n', '<leader>ds', function()
-    local widgets = require('dap.ui.widgets')
+    local widgets = require 'dap.ui.widgets'
     widgets.centered_float(widgets.scopes)
   end, { desc = 'Scopes' })
 
   -- Session control
   vim.keymap.set('n', '<leader>dr', function()
-    require('dapui').toggle_element('repl')
+    require('dapui').toggle_element 'repl'
   end, { desc = 'Toggle REPL' })
   vim.keymap.set('n', '<leader>dl', dap.run_last, { desc = 'Run last' })
   vim.keymap.set('n', '<leader>dt', dap.terminate, { desc = 'Terminate' })
@@ -207,13 +207,13 @@ end
 
 -- Register debug adapter for a language
 M.register_adapter = function(language, adapter_config)
-  local dap = require('dap')
+  local dap = require 'dap'
   dap.adapters[language] = adapter_config
 end
 
 -- Register debug configuration for a language
 M.register_configuration = function(language, configurations)
-  local dap = require('dap')
+  local dap = require 'dap'
   if not dap.configurations[language] then
     dap.configurations[language] = {}
   end

@@ -65,7 +65,7 @@ M.plugins = {
     dependencies = 'MunifTanjim/nui.nvim',
     ft = 'json',
     config = function()
-      local pkg = require('package-info')
+      local pkg = require 'package-info'
       pkg.setup {
         colors = {
           up_to_date = '#3C4048',
@@ -112,24 +112,24 @@ M.lsp_config = {
       codeAction = {
         disableRuleComment = {
           enable = true,
-          location = 'separateLine'
+          location = 'separateLine',
         },
         showDocumentation = {
-          enable = true
-        }
+          enable = true,
+        },
       },
       codeActionOnSave = {
         enable = false,
-        mode = 'all'
+        mode = 'all',
       },
       experimental = {
-        useFlatConfig = false
+        useFlatConfig = false,
       },
       format = true,
       nodePath = '',
       onIgnoredFiles = 'off',
       problems = {
-        shortenToSingleLine = false
+        shortenToSingleLine = false,
       },
       quiet = false,
       rulesCustomizations = {},
@@ -137,9 +137,9 @@ M.lsp_config = {
       useESLintClass = false,
       validate = 'on',
       workingDirectory = {
-        mode = 'location'
-      }
-    }
+        mode = 'location',
+      },
+    },
   },
 }
 
@@ -154,16 +154,16 @@ M.debug_config = {
         command = 'node',
         args = function()
           local ok, mason_registry = pcall(require, 'mason-registry')
-          if ok and mason_registry.is_installed('js-debug-adapter') then
+          if ok and mason_registry.is_installed 'js-debug-adapter' then
             return {
               mason_registry.get_package('js-debug-adapter'):get_install_path() .. '/js-debug/src/dapDebugServer.js',
-              '${port}'
+              '${port}',
             }
           else
             return { 'js-debug-adapter', '${port}' }
           end
         end,
-      }
+      },
     },
     ['pwa-chrome'] = {
       type = 'server',
@@ -173,16 +173,16 @@ M.debug_config = {
         command = 'node',
         args = function()
           local ok, mason_registry = pcall(require, 'mason-registry')
-          if ok and mason_registry.is_installed('js-debug-adapter') then
+          if ok and mason_registry.is_installed 'js-debug-adapter' then
             return {
               mason_registry.get_package('js-debug-adapter'):get_install_path() .. '/js-debug/src/dapDebugServer.js',
-              '${port}'
+              '${port}',
             }
           else
             return { 'js-debug-adapter', '${port}' }
           end
         end,
-      }
+      },
     },
   },
   configurations = {
@@ -205,7 +205,7 @@ M.debug_config = {
           if ok then
             return dap_utils.pick_process()
           else
-            return vim.fn.input('Process ID: ')
+            return vim.fn.input 'Process ID: '
           end
         end,
         cwd = '${workspaceFolder}',
@@ -242,7 +242,7 @@ M.debug_config = {
           if ok then
             return dap_utils.pick_process()
           else
-            return vim.fn.input('Process ID: ')
+            return vim.fn.input 'Process ID: '
           end
         end,
         cwd = '${workspaceFolder}',
@@ -253,8 +253,8 @@ M.debug_config = {
         name = 'Start Chrome',
         url = 'http://localhost:3000',
         webRoot = '${workspaceFolder}',
-        userDataDir = '${workspaceFolder}/.vscode/vscode-chrome-debug-userdatadir'
-      }
+        userDataDir = '${workspaceFolder}/.vscode/vscode-chrome-debug-userdatadir',
+      },
     },
     typescriptreact = {
       {
@@ -263,8 +263,8 @@ M.debug_config = {
         name = 'Start Chrome',
         url = 'http://localhost:3000',
         webRoot = '${workspaceFolder}',
-        userDataDir = '${workspaceFolder}/.vscode/vscode-chrome-debug-userdatadir'
-      }
+        userDataDir = '${workspaceFolder}/.vscode/vscode-chrome-debug-userdatadir',
+      },
     },
     javascriptreact = {
       {
@@ -273,8 +273,8 @@ M.debug_config = {
         name = 'Start Chrome',
         url = 'http://localhost:3000',
         webRoot = '${workspaceFolder}',
-        userDataDir = '${workspaceFolder}/.vscode/vscode-chrome-debug-userdatadir'
-      }
+        userDataDir = '${workspaceFolder}/.vscode/vscode-chrome-debug-userdatadir',
+      },
     },
   },
 }
@@ -321,7 +321,7 @@ M.setup_autocmds = function()
       -- Only format if a formatter is available
       local clients = vim.lsp.get_clients()
       for _, client in ipairs(clients) do
-        if client:supports_method('textDocument/formatting') then
+        if client:supports_method 'textDocument/formatting' then
           vim.lsp.buf.format { async = false }
           break
         end
@@ -348,10 +348,10 @@ M.setup_autocmds = function()
       -- Register TypeScript which-key groups (buffer-local)
       local wk_ok, wk = pcall(require, 'which-key')
       if wk_ok then
-        wk.add({
+        wk.add {
           { '<leader>t', group = 'TypeScript', icon = '', buffer = event.buf },
           { '<leader>n', group = 'NPM Package', icon = '', buffer = event.buf },
-        })
+        }
       end
 
       -- Setup TS/JS-specific keymaps for this buffer
@@ -364,7 +364,7 @@ M.setup_autocmds = function()
     group = js_ts_group,
     pattern = { 'json', 'jsonc' },
     callback = function()
-      local filename = vim.fn.expand('%:t')
+      local filename = vim.fn.expand '%:t'
       if filename == 'package.json' or filename == 'tsconfig.json' or filename == 'jsconfig.json' then
         vim.opt_local.shiftwidth = 2
         vim.opt_local.tabstop = 2

@@ -18,11 +18,7 @@ M.safe_require = function(module_name)
   else
     M.registry.failed[module_name] = true
     vim.schedule(function()
-      vim.notify(
-        string.format('Failed to load module "%s": %s', module_name, module),
-        vim.log.levels.WARN,
-        { title = 'Module Loader' }
-      )
+      vim.notify(string.format('Failed to load module "%s": %s', module_name, module), vim.log.levels.WARN, { title = 'Module Loader' })
     end)
     return nil
   end
@@ -101,15 +97,11 @@ end
 M.setup_modules = function()
   -- Setup features first (they provide base functionality)
   for name, module in pairs(M.registry.loaded) do
-    if name:match('^features%.') and type(module.setup) == 'function' then
+    if name:match '^features%.' and type(module.setup) == 'function' then
       local ok, err = pcall(module.setup)
       if not ok then
         vim.schedule(function()
-          vim.notify(
-            string.format('Failed to setup feature "%s": %s', name, err),
-            vim.log.levels.ERROR,
-            { title = 'Module Loader' }
-          )
+          vim.notify(string.format('Failed to setup feature "%s": %s', name, err), vim.log.levels.ERROR, { title = 'Module Loader' })
         end)
       end
     end
@@ -117,15 +109,11 @@ M.setup_modules = function()
 
   -- Setup languages second (they depend on features)
   for name, module in pairs(M.registry.loaded) do
-    if name:match('^lang%.') and type(module.setup) == 'function' then
+    if name:match '^lang%.' and type(module.setup) == 'function' then
       local ok, err = pcall(module.setup)
       if not ok then
         vim.schedule(function()
-          vim.notify(
-            string.format('Failed to setup language "%s": %s', name, err),
-            vim.log.levels.ERROR,
-            { title = 'Module Loader' }
-          )
+          vim.notify(string.format('Failed to setup language "%s": %s', name, err), vim.log.levels.ERROR, { title = 'Module Loader' })
         end)
       end
     end
@@ -138,7 +126,7 @@ end
 -- Register cross-module dependencies after all modules are loaded
 M.register_cross_dependencies = function()
   for name, module in pairs(M.registry.loaded) do
-    if name:match('^lang%.') then
+    if name:match '^lang%.' then
       -- Register LSP configurations if available
       if module.lsp_config then
         local lsp_module = M.registry.loaded['features.lsp']

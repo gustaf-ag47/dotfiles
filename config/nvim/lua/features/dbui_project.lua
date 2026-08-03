@@ -49,7 +49,7 @@ local DEFAULTS = {
 local config = vim.deepcopy(DEFAULTS)
 local current = {
   workspace = nil,
-  project   = nil,
+  project = nil,
   save_location = nil,
   shared_path = nil,
 }
@@ -63,10 +63,14 @@ local function db_ui_root()
 end
 
 local function read_json(path)
-  if vim.fn.filereadable(path) == 0 then return nil end
+  if vim.fn.filereadable(path) == 0 then
+    return nil
+  end
   local raw = table.concat(vim.fn.readfile(path), '\n')
   local ok, parsed = pcall(vim.json.decode, raw)
-  if ok then return parsed end
+  if ok then
+    return parsed
+  end
   return nil
 end
 
@@ -83,7 +87,9 @@ local function find_marker_upwards(start, markers)
       end
     end
     local parent = vim.fn.fnamemodify(dir, ':h')
-    if parent == dir then break end
+    if parent == dir then
+      break
+    end
     dir = parent
   end
   return nil, nil
@@ -98,7 +104,9 @@ local function detect_workspace(cwd)
     local content = (vim.fn.readfile(mpath)[1] or ''):gsub('^%s+', ''):gsub('%s+$', '')
     if content ~= '' then
       for _, ws in ipairs(config.workspaces) do
-        if ws.name == content then return ws.name, ws end
+        if ws.name == content then
+          return ws.name, ws
+        end
       end
     end
   end
@@ -106,17 +114,21 @@ local function detect_workspace(cwd)
   -- 2. Path-pattern match
   for _, ws in ipairs(config.workspaces) do
     for _, pat in ipairs(ws.path_patterns or {}) do
-      if cwd:find(pat) then return ws.name, ws end
+      if cwd:find(pat) then
+        return ws.name, ws
+      end
     end
   end
 
   -- 3. Git remote match (slower; do last)
   for _, ws in ipairs(config.workspaces) do
     if ws.git_remote_patterns and #ws.git_remote_patterns > 0 then
-      local remote = vim.fn.system({ 'git', '-C', cwd, 'remote', 'get-url', 'origin' })
+      local remote = vim.fn.system { 'git', '-C', cwd, 'remote', 'get-url', 'origin' }
       if vim.v.shell_error == 0 then
         for _, pat in ipairs(ws.git_remote_patterns) do
-          if remote:find(pat) then return ws.name, ws end
+          if remote:find(pat) then
+            return ws.name, ws
+          end
         end
       end
     end
@@ -127,13 +139,17 @@ end
 
 -- Decide the project inside a workspace for the given cwd.
 local function detect_project(cwd, ws_name)
-  if not ws_name then return nil end
+  if not ws_name then
+    return nil
+  end
 
   -- 1. .dbui-project marker (must be a file with a project name inside)
   local _, mpath = find_marker_upwards(cwd, { '.dbui-project' })
   if mpath and vim.fn.filereadable(mpath) == 1 then
     local content = (vim.fn.readfile(mpath)[1] or ''):gsub('^%s+', ''):gsub('%s+$', '')
-    if content ~= '' then return content end
+    if content ~= '' then
+      return content
+    end
   end
 
   -- 2. Subdir-name match: any path component of cwd that equals a known
@@ -143,11 +159,11 @@ local function detect_project(cwd, ws_name)
     local known = vim.fn.readdir(projects_root) or {}
     -- Try the deepest match first (e.g. cwd contains both "api-platform"
     -- and a generic "platform" — prefer the more specific one).
-    table.sort(known, function(a, b) return #a > #b end)
+    table.sort(known, function(a, b)
+      return #a > #b
+    end)
     for _, p in ipairs(known) do
-      if cwd:find('/' .. p .. '/', 1, true)
-         or cwd:match('/' .. p .. '$')
-         or cwd:match('/' .. p .. '/$') then
+      if cwd:find('/' .. p .. '/', 1, true) or cwd:match('/' .. p .. '$') or cwd:match('/' .. p .. '/$') then
         return p
       end
     end
@@ -178,10 +194,10 @@ function M.apply(opts)
   local ws_name, proj
   if opts.force_workspace then
     ws_name = opts.force_workspace
-    proj    = opts.force_project
+    proj = opts.force_project
   else
     ws_name = detect_workspace(cwd)
-    proj    = detect_project(cwd, ws_name)
+    proj = detect_project(cwd, ws_name)
   end
 
   local save_loc, scope_label, shared_path
@@ -220,7 +236,9 @@ function M.apply(opts)
       local proj_cjson = save_loc .. '/connections.json'
       local proj_conns = read_json(proj_cjson) or {}
       for _, c in ipairs(proj_conns) do
-        if c and c.name then project_names[c.name] = true end
+        if c and c.name then
+          project_names[c.name] = true
+        end
       end
       local visible = {}
       for _, c in ipairs(shared) do
@@ -246,7 +264,8 @@ function M.apply(opts)
   for _, w in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(w)
     if vim.bo[b].filetype == 'dbui' then
-      drawer_open = true; break
+      drawer_open = true
+      break
     end
   end
   if drawer_open then
@@ -256,15 +275,15 @@ function M.apply(opts)
 
   -- Re-arm the autoreloader so it watches the right files.
   pcall(function()
-    local ar = require('features.dbui_autoreload')
+    local ar = require 'features.dbui_autoreload'
     if ar.update_paths then
-      ar.update_paths({ save_loc .. '/connections.json', shared_path })
+      ar.update_paths { save_loc .. '/connections.json', shared_path }
     end
   end)
 
   -- Persist current state for :DBUIHealth.
   current.workspace = ws_name
-  current.project   = proj
+  current.project = proj
   current.save_location = save_loc
   current.shared_path = shared_path
   current.scope_label = scope_label
@@ -291,7 +310,7 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd({ 'VimEnter', 'DirChanged' }, {
     callback = function(ev)
       -- VimEnter: silent. DirChanged: notify.
-      M.apply({ notify = ev.event == 'DirChanged' })
+      M.apply { notify = ev.event == 'DirChanged' }
     end,
   })
 
@@ -299,11 +318,11 @@ function M.setup(opts)
   -- pair without cd'ing. `:DBUIScope` (no arg) re-runs auto-detection.
   vim.api.nvim_create_user_command('DBUIScope', function(args)
     if args.args == '' or args.args == 'auto' then
-      M.apply({ notify = true })
+      M.apply { notify = true }
       return
     end
     -- Parse `workspace` or `workspace/project`
-    local ws, proj = args.args:match('^([^/]+)/?(.*)$')
+    local ws, proj = args.args:match '^([^/]+)/?(.*)$'
     if not ws or ws == '' then
       vim.notify('[DBUI] :DBUIScope <workspace>[/<project>]', vim.log.levels.WARN)
       return
@@ -311,14 +330,17 @@ function M.setup(opts)
     -- Verify the workspace exists in config
     local matched = false
     for _, w in ipairs(config.workspaces) do
-      if w.name == ws then matched = true; break end
+      if w.name == ws then
+        matched = true
+        break
+      end
     end
     if not matched then
       vim.notify(('[DBUI] unknown workspace: %s'):format(ws), vim.log.levels.ERROR)
       return
     end
     -- Apply the requested scope directly (bypass cwd-based detection).
-    M.apply({ force_workspace = ws, force_project = proj ~= '' and proj or nil, notify = true })
+    M.apply { force_workspace = ws, force_project = proj ~= '' and proj or nil, notify = true }
   end, {
     nargs = '?',
     complete = function()

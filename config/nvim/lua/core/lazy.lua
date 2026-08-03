@@ -17,7 +17,7 @@ function M.setup()
   vim.opt.rtp:prepend(lazypath)
 
   -- Collect plugins and register the LazyDone setup hook
-  local modules = require('core.modules')
+  local modules = require 'core.modules'
   local module_plugins = modules.setup()
 
   -- Build plugin list: start with imports, then add module plugins

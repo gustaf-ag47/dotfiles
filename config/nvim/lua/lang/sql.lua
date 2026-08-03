@@ -102,7 +102,7 @@ M.lsp_config = {
   sqlls = {
     cmd = { 'sql-language-server', 'up', '--method', 'stdio' },
     filetypes = { 'sql', 'mysql' },
-    root_dir = root_pattern('.git'),
+    root_dir = root_pattern '.git',
     settings = {},
   },
 }
@@ -113,40 +113,40 @@ M.setup_keymaps = function(bufnr)
   local map = vim.keymap.set
 
   -- Database operations (toggle is global <leader>du; execute is <leader>e in dadbod.lua autocmd)
-  map('n', '<leader>du', '<cmd>DBUIToggle<cr>',        vim.tbl_extend('force', opts, { desc = 'DB: Toggle UI' }))
+  map('n', '<leader>du', '<cmd>DBUIToggle<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Toggle UI' }))
   map('n', '<leader>da', '<cmd>DBUIAddConnection<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Add connection' }))
-  map('n', '<leader>df', '<cmd>DBUIFindBuffer<cr>',    vim.tbl_extend('force', opts, { desc = 'DB: Find buffer' }))
-  map('n', '<leader>dr', '<cmd>DBUIRenameBuffer<cr>',  vim.tbl_extend('force', opts, { desc = 'DB: Rename buffer' }))
+  map('n', '<leader>df', '<cmd>DBUIFindBuffer<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Find buffer' }))
+  map('n', '<leader>dr', '<cmd>DBUIRenameBuffer<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Rename buffer' }))
   map('n', '<leader>dl', '<cmd>DBUILastQueryInfo<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Last query info' }))
   map('n', '<leader>dc', '<cmd>DBCompletionClearCache<cr>', vim.tbl_extend('force', opts, { desc = 'DB: Clear completion cache' }))
   map('n', '<leader>sr', function()
-    vim.cmd('DB ' .. vim.fn.getline('.'))
+    vim.cmd('DB ' .. vim.fn.getline '.')
   end, vim.tbl_extend('force', opts, { desc = 'Execute current line' }))
 
   -- Query building helpers
   map('n', '<leader>ss', function()
-    local table_name = vim.fn.input('Table name: ')
+    local table_name = vim.fn.input 'Table name: '
     if table_name ~= '' then
       vim.api.nvim_put({ 'SELECT * FROM ' .. table_name .. ';' }, 'l', true, true)
     end
   end, vim.tbl_extend('force', opts, { desc = 'Insert SELECT statement' }))
 
   map('n', '<leader>si', function()
-    local table_name = vim.fn.input('Table name: ')
+    local table_name = vim.fn.input 'Table name: '
     if table_name ~= '' then
       vim.api.nvim_put({ 'INSERT INTO ' .. table_name .. ' () VALUES ();' }, 'l', true, true)
     end
   end, vim.tbl_extend('force', opts, { desc = 'Insert INSERT statement' }))
 
   map('n', '<leader>su', function()
-    local table_name = vim.fn.input('Table name: ')
+    local table_name = vim.fn.input 'Table name: '
     if table_name ~= '' then
       vim.api.nvim_put({ 'UPDATE ' .. table_name .. ' SET  WHERE ;' }, 'l', true, true)
     end
   end, vim.tbl_extend('force', opts, { desc = 'Insert UPDATE statement' }))
 
   map('n', '<leader>sd', function()
-    local table_name = vim.fn.input('Table name: ')
+    local table_name = vim.fn.input 'Table name: '
     if table_name ~= '' then
       vim.api.nvim_put({ 'DELETE FROM ' .. table_name .. ' WHERE ;' }, 'l', true, true)
     end
@@ -154,7 +154,7 @@ M.setup_keymaps = function(bufnr)
 
   -- Schema operations
   map('n', '<leader>st', function()
-    local table_name = vim.fn.input('Table name: ')
+    local table_name = vim.fn.input 'Table name: '
     if table_name ~= '' then
       vim.api.nvim_put({ 'DESCRIBE ' .. table_name .. ';' }, 'l', true, true)
     end
@@ -171,7 +171,7 @@ M.setup_keymaps = function(bufnr)
   -- Formatting
   map('n', '<leader>sf', function()
     -- Simple SQL formatting (you can integrate with external formatters)
-    vim.cmd('normal! gg=G')
+    vim.cmd 'normal! gg=G'
   end, vim.tbl_extend('force', opts, { desc = 'Format SQL' }))
 
   map('v', '<leader>sf', '=', vim.tbl_extend('force', opts, { desc = 'Format selected SQL' }))
@@ -186,7 +186,7 @@ M.setup_keymaps = function(bufnr)
 
   -- Snippets and templates
   map('n', '<leader>sp', function()
-    local proc_name = vim.fn.input('Procedure name: ')
+    local proc_name = vim.fn.input 'Procedure name: '
     if proc_name ~= '' then
       local lines = {
         'DELIMITER //',
@@ -201,7 +201,7 @@ M.setup_keymaps = function(bufnr)
   end, vim.tbl_extend('force', opts, { desc = 'Create stored procedure template' }))
 
   map('n', '<leader>sv', function()
-    local view_name = vim.fn.input('View name: ')
+    local view_name = vim.fn.input 'View name: '
     if view_name ~= '' then
       local lines = {
         'CREATE VIEW ' .. view_name .. ' AS',
@@ -234,12 +234,12 @@ M.setup_autocmds = function()
 
       -- Set up completion for dadbod
       if pcall(require, 'cmp') then
-        require('cmp').setup.buffer({
+        require('cmp').setup.buffer {
           sources = {
             { name = 'vim-dadbod-completion' },
             { name = 'buffer' },
           },
-        })
+        }
       end
     end,
   })
@@ -285,8 +285,8 @@ M.load_database_connections = function()
     -- This is a simplified example - you'd want more robust parsing
     local lines = vim.fn.readfile(env_file)
     for _, line in ipairs(lines) do
-      if line:match('^DATABASE_URL=') then
-        local url = line:match('DATABASE_URL=(.+)')
+      if line:match '^DATABASE_URL=' then
+        local url = line:match 'DATABASE_URL=(.+)'
         -- Add to dadbod connections
         vim.g.dbs = vim.g.dbs or {}
         vim.g.dbs.default = url
@@ -378,13 +378,26 @@ M.setup_completion = function()
   --    19 = Folder (schema)   ← keep
   -- Which SQL clauses imply "I'm typing a TABLE reference next, hide columns"?
   local FROM_LIKE_SET = {
-    FROM=true, JOIN=true, INTO=true, UPDATE=true, TABLE=true, USING=true,
+    FROM = true,
+    JOIN = true,
+    INTO = true,
+    UPDATE = true,
+    TABLE = true,
+    USING = true,
   }
   -- Which clauses unambiguously END the table-list region (we're now expecting
   -- columns or expressions)? Used to short-circuit the lookback.
   local AFTER_TABLES_SET = {
-    WHERE=true, ON=true, GROUP=true, ORDER=true, HAVING=true, LIMIT=true,
-    OFFSET=true, SELECT=true, SET=true, VALUES=true,
+    WHERE = true,
+    ON = true,
+    GROUP = true,
+    ORDER = true,
+    HAVING = true,
+    LIMIT = true,
+    OFFSET = true,
+    SELECT = true,
+    SET = true,
+    VALUES = true,
   }
   -- Find the last SQL clause keyword in the line (or nil if none). Used by
   -- both the table-context and column-context filters.
@@ -392,9 +405,11 @@ M.setup_completion = function()
     -- Bail if cursor is in a position where a different completion mode
     -- should take over (dot-trigger for column-of-table, quoted identifier,
     -- subquery start, etc.).
-    if line:find('[%.\"`%(%)]%s*[%w_]*$') then return nil end
+    if line:find '[%."`%(%)]%s*[%w_]*$' then
+      return nil
+    end
     local last
-    for word in line:gmatch('[%w_]+') do
+    for word in line:gmatch '[%w_]+' do
       if FROM_LIKE_SET[word] or AFTER_TABLES_SET[word] then
         last = word
       end
@@ -412,13 +427,13 @@ M.setup_completion = function()
     return last ~= nil and AFTER_TABLES_SET[last] == true
   end
   -- LSP kinds to hide based on context
-  local _HIDE_AFTER_FROM   = { [5] = true, [3] = true }   -- Field (column), Function
-  local _HIDE_AFTER_TABLES = { [7] = true }                -- Class (table)
+  local _HIDE_AFTER_FROM = { [5] = true, [3] = true } -- Field (column), Function
+  local _HIDE_AFTER_TABLES = { [7] = true } -- Class (table)
 
   vim.api.nvim_create_autocmd('FileType', {
     pattern = { 'sql', 'mysql', 'plsql' },
     callback = function()
-      require('cmp').setup.buffer({
+      require('cmp').setup.buffer {
         sources = {
           -- NB: features/sql_completion.lua used to register a `sql_dadbod`
           -- source here at priority 1000. It was always a no-op: its schema
@@ -454,12 +469,12 @@ M.setup_completion = function()
           autocomplete = {
             require('cmp.types').cmp.TriggerEvent.TextChanged,
             require('cmp.types').cmp.TriggerEvent.InsertEnter,
-          }
+          },
         },
         experimental = {
           ghost_text = true,
-        }
-      })
+        },
+      }
     end,
   })
 end
@@ -488,7 +503,7 @@ M.setup = function()
   if M.lsp_config.sqls then
     local config = vim.tbl_deep_extend('force', M.lsp_config.sqls, { capabilities = capabilities })
     vim.lsp.config('sqls', config)
-    vim.lsp.enable('sqls')
+    vim.lsp.enable 'sqls'
   end
 
   -- Create user commands for SQL operations
@@ -501,7 +516,7 @@ M.create_user_commands = function()
   vim.api.nvim_create_user_command('SQLConnect', function(opts)
     local connection_string = opts.args
     if connection_string == '' then
-      connection_string = vim.fn.input('Database connection string: ')
+      connection_string = vim.fn.input 'Database connection string: '
     end
     vim.g.db = connection_string
     print('Connected to: ' .. connection_string)
@@ -511,20 +526,20 @@ M.create_user_commands = function()
   vim.api.nvim_create_user_command('SQLExecute', function(opts)
     local query = opts.args
     if query == '' then
-      query = vim.fn.input('SQL Query: ')
+      query = vim.fn.input 'SQL Query: '
     end
     vim.cmd('DB ' .. query)
   end, { nargs = '?', desc = 'Execute SQL query' })
 
   -- Show database schema
   vim.api.nvim_create_user_command('SQLSchema', function()
-    vim.cmd('DB SHOW TABLES;')
+    vim.cmd 'DB SHOW TABLES;'
   end, { desc = 'Show database schema' })
 
   -- Format SQL buffer
   vim.api.nvim_create_user_command('SQLFormat', function()
     -- Simple formatting - could integrate with external tools
-    vim.cmd('normal! gg=G')
+    vim.cmd 'normal! gg=G'
   end, { desc = 'Format SQL buffer' })
 end
 

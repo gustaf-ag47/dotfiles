@@ -13,8 +13,7 @@ return {
         sync_on_ui_close = true,
         -- Scope list to git root so worktrees share the same file list
         key = function()
-          return vim.fn.system('git rev-parse --show-toplevel 2>/dev/null'):gsub('\n', '')
-            or vim.loop.cwd()
+          return vim.fn.system('git rev-parse --show-toplevel 2>/dev/null'):gsub('\n', '') or vim.loop.cwd()
         end,
       },
     }
