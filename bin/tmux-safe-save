@@ -1,0 +1,39 @@
+#!/bin/bash
+# tmux-safe-save: Wrapper around tmux-resurrect save that prevents empty saves
+# This prevents the common issue where rebooting with no sessions creates an empty save file
+# that overwrites the last good save.
+
+set -euo pipefail
+
+RESURRECT_SCRIPT="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tmux-resurrect/scripts/save.sh"
+
+# Check if there are any sessions to save
+session_count=$(tmux list-sessions 2>/dev/null | wc -l)
+
+if [ "$session_count" -eq 0 ]; then
+    echo "No tmux sessions to save, skipping to prevent empty save file"
+    exit 0
+fi
+
+# Check if the only session is a default empty one (e.g., session "0" with 1 window at home dir)
+# This helps prevent saving useless sessions created by continuum on empty restore
+if [ "$session_count" -eq 1 ]; then
+    session_info=$(tmux list-sessions -F "#{session_name}:#{session_windows}" 2>/dev/null)
+    session_name="${session_info%%:*}"
+    window_count="${session_info##*:}"
+
+    # If the only session is auto-numbered (0, 1, 2...) with 1 window, it's likely
+    # a bare session created by ftmuxp or continuum before real work has started
+    if [[ "$session_name" =~ ^[0-9]+$ ]] && [ "$window_count" = "1" ]; then
+        echo "Only default session '$session_name' exists, skipping save to preserve last good backup"
+        exit 0
+    fi
+fi
+
+# Run the actual save script
+if [ -x "$RESURRECT_SCRIPT" ]; then
+    "$RESURRECT_SCRIPT"
+else
+    echo "Error: tmux-resurrect save script not found at $RESURRECT_SCRIPT"
+    exit 1
+fi

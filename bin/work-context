@@ -1,0 +1,99 @@
+#!/bin/bash
+#
+# work-context - Launch Claude Code with work project context
+#
+# Reads the project index and latest daily log, then asks Claude
+# what the current context is and what should be done next.
+#
+# Configuration (set in $SYNC/dotfiles-local/env/.env or environment):
+#   WORK_PROJECT_NAME - Name of the work project directory in notes
+#   WORK_PROJECT_DIR  - Path to the work project source directory
+#
+
+set -euo pipefail
+
+# Load environment from local config if available
+if [[ -f "${SYNC:-$HOME/sync}/dotfiles-local/env/.env" ]]; then
+    source "${SYNC:-$HOME/sync}/dotfiles-local/env/.env"
+fi
+
+NOTES_DIR="${NOTES:-${SYNC:-$HOME/sync}/Vault}"
+PROJECT_NAME="${WORK_PROJECT_NAME:-}"
+PROJECT_DIR="${WORK_PROJECT_DIR:-}"
+
+# Validate configuration
+if [[ -z "$PROJECT_NAME" ]] || [[ -z "$PROJECT_DIR" ]]; then
+    echo "Error: Work context not configured"
+    echo ""
+    echo "Please set the following variables in ${SYNC:-$HOME/sync}/dotfiles-local/env/.env:"
+    echo "  export WORK_PROJECT_NAME='YourProjectName'"
+    echo "  export WORK_PROJECT_DIR='$HOME/sync/src/your-project'"
+    exit 1
+fi
+
+WORK_DIR="$NOTES_DIR/$PROJECT_NAME"
+
+# Colors
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+DIM='\033[2m'
+NC='\033[0m' # No Color
+
+# Find the latest daily log (excluding archive and templates)
+get_latest_daily() {
+    find "$WORK_DIR/daily" -name "*.md" -type f \
+        -not -path "*/archive/*" \
+        -not -name "_*.md" \
+        -not -name "*template*.md" 2>/dev/null \
+        | sort -r \
+        | head -1
+}
+
+# Build the prompt
+build_prompt() {
+    local latest_daily
+    latest_daily=$(get_latest_daily)
+
+    cat <<EOF
+Read these files to get context on what I'm working on:
+1. $WORK_DIR/index.md (main dashboard)
+2. $latest_daily (latest session log)
+
+After reading, summarize:
+1. What tickets are currently in progress or awaiting review
+2. What was worked on in the most recent session
+3. What the suggested next actions are
+
+Then ask me what I'd like to work on today.
+EOF
+}
+
+# Check if directories exist
+if [[ ! -d "$WORK_DIR" ]]; then
+    echo "Error: Work notes directory not found at $WORK_DIR"
+    echo "Make sure $PROJECT_NAME directory exists in $NOTES_DIR"
+    exit 1
+fi
+
+# Change to project directory if it exists
+if [[ -d "$PROJECT_DIR" ]]; then
+    cd "$PROJECT_DIR"
+else
+    echo "Warning: Project directory not found at $PROJECT_DIR"
+    echo "Continuing from current directory: $(pwd)"
+fi
+
+# Show loading feedback
+echo -e "${CYAN}Work Context${NC}"
+echo -e "${DIM}────────────────────────────────────${NC}"
+echo -e "  Project: ${GREEN}$PROJECT_NAME${NC}"
+echo -e "  Notes:   ${GREEN}$WORK_DIR${NC}"
+echo -e "  Code:    ${GREEN}$(pwd)${NC}"
+echo -e "  Daily:   ${GREEN}$(basename "$(get_latest_daily)")${NC}"
+echo -e "${DIM}────────────────────────────────────${NC}"
+echo ""
+echo -e "${DIM}Starting Claude Code...${NC}"
+echo ""
+
+# Launch Claude with the context prompt
+exec claude --print "$(build_prompt)"

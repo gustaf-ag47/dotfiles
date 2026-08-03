@@ -1,0 +1,195 @@
+#!/bin/bash
+set -euo pipefail
+
+TOKEN_FILE="${CCTOKEN_FILE:-$HOME/cctoken}"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
+CACHE_FILE="${CLAUDE_CODE_TOKEN_CACHE_FILE:-$CACHE_DIR/claude-code-token.env}"
+TTL_SECONDS="${CLAUDE_CODE_TOKEN_CACHE_TTL:-300}"
+PROBE_URL="${CLAUDE_CODE_TOKEN_PROBE_URL:-https://api.anthropic.com/v1/messages?beta=true}"
+PROBE_MODEL="${CLAUDE_CODE_TOKEN_PROBE_MODEL:-claude-haiku-4-5}"
+PROBE_MAX_TOKENS="${CLAUDE_CODE_TOKEN_PROBE_MAX_TOKENS:-4}"
+USER_AGENT="${CLAUDE_CODE_TOKEN_USER_AGENT:-claude-cli/2.1.75}"
+QUIET=false
+FORCE=false
+PRINT_ONLY=false
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--quiet)
+			QUIET=true
+			;;
+		--force)
+			FORCE=true
+			;;
+		--print)
+			PRINT_ONLY=true
+			;;
+		*)
+			echo "usage: claude-token-refresh [--quiet] [--force] [--print]" >&2
+			exit 1
+			;;
+	esac
+	shift
+done
+
+log() {
+	if [ "$QUIET" != true ]; then
+		echo "$*" >&2
+	fi
+}
+
+fail() {
+	echo "error: $*" >&2
+	exit 1
+}
+
+strip_quotes() {
+	local value="$1"
+	value="${value%\"}"
+	value="${value#\"}"
+	value="${value%\'}"
+	value="${value#\'}"
+	printf '%s' "$value"
+}
+
+cache_valid() {
+	[ -f "$CACHE_FILE" ] || return 1
+	[ "$FORCE" = true ] && return 1
+	local now mtime age
+	now=$(date +%s)
+	mtime=$(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
+	age=$((now - mtime))
+	[ "$age" -lt "$TTL_SECONDS" ]
+}
+
+emit_cache() {
+	cat "$CACHE_FILE"
+}
+
+extract_tokens() {
+	[ -f "$TOKEN_FILE" ] || fail "token file not found: $TOKEN_FILE"
+	awk -F= '/^export (CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_OAUTH_TOKEN)=/ {print substr($0, index($0, "=") + 1)}' "$TOKEN_FILE" |
+		while IFS= read -r raw; do
+			strip_quotes "$raw"
+			echo
+		done |
+		awk 'NF && !seen[$0]++'
+}
+
+probe_token() {
+	local token="$1"
+	local payload response body code util7d util5h hdrfile
+	payload=$(jq -cn \
+		--arg model "$PROBE_MODEL" \
+		--argjson max_tokens "$PROBE_MAX_TOKENS" \
+		--arg system_text "You are Claude Code, Anthropic's official CLI for Claude." \
+		'{
+			model: $model,
+			max_tokens: $max_tokens,
+			stream: false,
+			thinking: { type: "disabled" },
+			system: [{ type: "text", text: $system_text }],
+			messages: [{ role: "user", content: "Reply with exactly: ok" }]
+		}')
+
+	hdrfile=$(mktemp)
+	response=$(curl -sS --max-time 12 -D "$hdrfile" -w '\n%{http_code}' "$PROBE_URL" \
+		-H "Authorization: Bearer $token" \
+		-H "accept: application/json" \
+		-H "content-type: application/json" \
+		-H "anthropic-version: 2023-06-01" \
+		-H "anthropic-dangerous-direct-browser-access: true" \
+		-H "anthropic-beta: claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14" \
+		-H "user-agent: $USER_AGENT" \
+		-H "x-app: cli" \
+		-d "$payload" 2>/dev/null || true)
+	code=$(printf '%s' "$response" | tail -n 1)
+	body=$(printf '%s' "$response" | sed '$d')
+	# Quota utilization is reported on every response (0.0-1.0) and is the
+	# authoritative signal for which token has the most headroom left.
+	util7d=$(awk -F': ' 'tolower($1)=="anthropic-ratelimit-unified-7d-utilization"{gsub(/\r/,"",$2);print $2}' "$hdrfile")
+	util5h=$(awk -F': ' 'tolower($1)=="anthropic-ratelimit-unified-5h-utilization"{gsub(/\r/,"",$2);print $2}' "$hdrfile")
+	rm -f "$hdrfile"
+	# First line: code<TAB>weekly_util<TAB>5h_util ; remaining lines: body.
+	printf '%s\t%s\t%s\n%s\n' "$code" "${util7d:-}" "${util5h:-}" "$body"
+}
+
+# Select the valid token with the LOWEST weekly utilization (most headroom),
+# so we roll over to a fresh token proactively rather than only after a hard
+# 429. Order-independent: file position no longer decides the winner.
+select_token() {
+	local token probe meta body code util7d util5h message rank
+	local best_token="" best_code="" best_util="" best_5h=""
+	while IFS= read -r token; do
+		[ -n "$token" ] || continue
+		probe=$(probe_token "$token")
+		meta=$(printf '%s' "$probe" | sed -n '1p')
+		body=$(printf '%s' "$probe" | sed -n '2,$p')
+		code=$(printf '%s' "$meta" | cut -f1)
+		util7d=$(printf '%s' "$meta" | cut -f2)
+		util5h=$(printf '%s' "$meta" | cut -f3)
+		if [ "$code" != "200" ] || ! echo "$body" | jq -e '.type == "message"' >/dev/null 2>&1; then
+			message=$(echo "$body" | jq -r '.error.message // .message // "probe failed"' 2>/dev/null || echo "probe failed")
+			log "Skipping token: HTTP $code - $message"
+			continue
+		fi
+		# Missing weekly header => rank as worst so a token with a known-low
+		# utilization always wins, but a sole header-less token still selects.
+		rank="${util7d:-999}"
+		log "Candidate: HTTP 200 weekly=${util7d:-unknown} 5h=${util5h:-unknown}"
+		if [ -z "$best_token" ] || awk "BEGIN{exit !($rank < $best_util)}"; then
+			best_token="$token"
+			best_code="$code"
+			best_util="$rank"
+			best_5h="$util5h"
+		fi
+	done < <(extract_tokens)
+	[ -n "$best_token" ] || return 1
+	printf '%s\n%s\n%s\n%s\n' "$best_token" "$best_code" "$best_util" "$best_5h"
+	return 0
+}
+
+write_exports() {
+	local token="$1" probe_status="$2" weekly_util="${3:-}" five_hour_util="${4:-}" checked_at
+	checked_at=$(date -Is)
+	cat <<EOF
+export CLAUDE_CODE_OAUTH_TOKEN='$token'
+export ANTHROPIC_OAUTH_TOKEN='$token'
+export CLAUDE_CODE_TOKEN_SOURCE='$TOKEN_FILE'
+export CLAUDE_CODE_TOKEN_PROBE_MODEL='$PROBE_MODEL'
+export CLAUDE_CODE_TOKEN_PROBE_STATUS='$probe_status'
+export CLAUDE_CODE_TOKEN_WEEKLY_UTIL='$weekly_util'
+export CLAUDE_CODE_TOKEN_5H_UTIL='$five_hour_util'
+export CLAUDE_CODE_TOKEN_CHECKED_AT='$checked_at'
+EOF
+}
+
+mkdir -p "$CACHE_DIR"
+
+if cache_valid; then
+	emit_cache
+	exit 0
+fi
+
+if ! selection=$(select_token); then
+	fail "no token with quota left found in $TOKEN_FILE"
+fi
+
+selected_token=$(printf '%s' "$selection" | sed -n '1p')
+probe_status=$(printf '%s' "$selection" | sed -n '2p')
+weekly_util=$(printf '%s' "$selection" | sed -n '3p')
+five_hour_util=$(printf '%s' "$selection" | sed -n '4p')
+exports=$(write_exports "$selected_token" "$probe_status" "$weekly_util" "$five_hour_util")
+
+# Cache holds a live OAuth token: create it owner-only (umask-independent) so a
+# permissive default umask can't leave it world-readable.
+( umask 077; : > "$CACHE_FILE" )
+chmod 600 "$CACHE_FILE" 2>/dev/null || true
+printf '%s\n' "$exports" > "$CACHE_FILE"
+log "Selected Claude Code OAuth token from $TOKEN_FILE (probe HTTP ${probe_status}, weekly=${weekly_util:-unknown})"
+
+if [ "$PRINT_ONLY" = true ]; then
+	printf '%s\n' "$exports"
+else
+	emit_cache
+fi

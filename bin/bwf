@@ -1,0 +1,149 @@
+#!/bin/bash
+set -euo pipefail
+
+# Bitwarden fuzzy finder - search vault items and copy fields to clipboard
+# Dependencies: bw, jq, fzf, copy (from dotfiles bin/)
+
+CLEAR_SECONDS="${BW_CLEAR_SECONDS:-15}"
+
+# Check dependencies
+for cmd in bw jq fzf; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "Error: '$cmd' is not installed." >&2
+    exit 1
+  fi
+done
+
+# Ensure logged in
+if ! bw login --check &>/dev/null; then
+  echo "Not logged in. Running 'bw login'..."
+  BW_SESSION=$(bw login --raw)
+  export BW_SESSION
+fi
+
+# Ensure unlocked
+if ! bw unlock --check &>/dev/null; then
+  BW_SESSION=$(bw unlock --raw)
+  export BW_SESSION
+fi
+
+# Sync vault (background, best-effort)
+bw sync &>/dev/null || true
+
+# Fetch items and let user pick one
+item=$(bw list items 2>/dev/null \
+  | jq -r '.[] | select(.type == 1) | "\(.id)\t\(.name)\t\(.login.username // "")\t\(.login.uris[0].uri // "")"' \
+  | fzf --with-nth=2.. \
+        --delimiter='\t' \
+        --header="Select a login (name | username | url):" \
+        --preview='echo -e "Name: {2}\nUser: {3}\nURL:  {4}"' \
+        --preview-window=up:3:wrap \
+        --reverse)
+
+if [[ -z "$item" ]]; then
+  echo "No item selected."
+  exit 0
+fi
+
+item_id=$(echo "$item" | cut -f1)
+
+# Get full item details
+details=$(bw get item "$item_id" 2>/dev/null)
+
+# Build field list
+fields=()
+field_values=()
+
+username=$(echo "$details" | jq -r '.login.username // empty')
+if [[ -n "$username" ]]; then
+  fields+=("Username: $username")
+  field_values+=("$username")
+fi
+
+password=$(echo "$details" | jq -r '.login.password // empty')
+if [[ -n "$password" ]]; then
+  fields+=("Password: ********")
+  field_values+=("$password")
+fi
+
+totp=$(echo "$details" | jq -r '.login.totp // empty')
+if [[ -n "$totp" ]]; then
+  # Generate current TOTP code
+  totp_code=$(bw get totp "$item_id" 2>/dev/null || echo "")
+  if [[ -n "$totp_code" ]]; then
+    fields+=("TOTP: $totp_code")
+    field_values+=("$totp_code")
+  fi
+fi
+
+# URIs
+uri_count=$(echo "$details" | jq '.login.uris | length // 0')
+for ((i = 0; i < uri_count; i++)); do
+  uri=$(echo "$details" | jq -r ".login.uris[$i].uri // empty")
+  if [[ -n "$uri" ]]; then
+    fields+=("URI: $uri")
+    field_values+=("$uri")
+  fi
+done
+
+# Notes
+notes=$(echo "$details" | jq -r '.notes // empty')
+if [[ -n "$notes" ]]; then
+  short_notes=$(echo "$notes" | head -1 | cut -c1-60)
+  fields+=("Notes: ${short_notes}...")
+  field_values+=("$notes")
+fi
+
+# Custom fields
+custom_count=$(echo "$details" | jq '.fields | length // 0')
+for ((i = 0; i < custom_count; i++)); do
+  fname=$(echo "$details" | jq -r ".fields[$i].name // \"Field $i\"")
+  ftype=$(echo "$details" | jq -r ".fields[$i].type")
+  fvalue=$(echo "$details" | jq -r ".fields[$i].value // empty")
+  if [[ -n "$fvalue" ]]; then
+    if [[ "$ftype" == "1" ]]; then
+      # Hidden field
+      fields+=("$fname: ********")
+    else
+      fields+=("$fname: $fvalue")
+    fi
+    field_values+=("$fvalue")
+  fi
+done
+
+if [[ ${#fields[@]} -eq 0 ]]; then
+  echo "No fields available for this item."
+  exit 0
+fi
+
+# Let user pick a field
+selected_index=$(printf '%s\n' "${fields[@]}" \
+  | nl -ba -w1 -s$'\t' \
+  | fzf --with-nth=2.. \
+        --delimiter='\t' \
+        --header="Select field to copy:" \
+        --reverse \
+        --height=40% \
+  | cut -f1)
+
+if [[ -z "$selected_index" ]]; then
+  echo "No field selected."
+  exit 0
+fi
+
+value="${field_values[$((selected_index - 1))]}"
+
+# Copy to clipboard
+echo -n "$value" | copy
+
+echo "Copied to clipboard. Clearing in ${CLEAR_SECONDS}s."
+
+# Clear clipboard after timeout
+(
+  sleep "$CLEAR_SECONDS"
+  if command -v copy &>/dev/null; then
+    echo -n "" | copy
+  fi
+  echo "Clipboard cleared."
+) &
+disown

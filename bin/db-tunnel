@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+#
+# db-tunnel - Manage database tunnels for development
+#
+# Usage:
+#   db-tunnel start <env>    Start tunnel for environment (prod, dev, sandbox, etc.)
+#   db-tunnel stop [env]     Stop tunnel(s) - specific env or all
+#   db-tunnel status         Show status of all tunnels
+#   db-tunnel list           List available tunnel configurations
+#   db-tunnel logs <env>     Show logs for a tunnel
+#
+# Tunnels run in a dedicated tmux session called 'db-tunnels'
+# Config is read from $NOTES/db_ui/tunnels.json
+
+set -euo pipefail
+
+# Configuration
+TMUX_SESSION="db-tunnels"
+CONFIG_DIR="${NOTES:-${SYNC:-$HOME/sync}/Vault}/db_ui"
+TUNNELS_FILE="$CONFIG_DIR/tunnels.json"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+# Check dependencies
+check_deps() {
+    local missing=()
+    command -v jq &>/dev/null || missing+=("jq")
+    command -v tmux &>/dev/null || missing+=("tmux")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_error "Missing dependencies: ${missing[*]}"
+        exit 1
+    fi
+
+    if [[ ! -f "$TUNNELS_FILE" ]]; then
+        log_error "Tunnels config not found: $TUNNELS_FILE"
+        exit 1
+    fi
+}
+
+# Get tunnel config for an environment
+get_tunnel_config() {
+    local env="$1"
+    jq -r --arg env "$env" '.[$env] // empty' "$TUNNELS_FILE"
+}
+
+# List all available environments
+list_envs() {
+    jq -r 'keys[]' "$TUNNELS_FILE"
+}
+
+# Ensure tmux session exists
+ensure_session() {
+    if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        tmux new-session -d -s "$TMUX_SESSION" -n "tunnels"
+        log_info "Created tmux session: $TMUX_SESSION"
+    fi
+}
+
+# Check if a tunnel is running (by checking if local port is in use)
+is_tunnel_running() {
+    local port="$1"
+    lsof -i ":$port" &>/dev/null
+}
+
+# Get the PID using a port
+get_port_pid() {
+    local port="$1"
+    lsof -t -i ":$port" 2>/dev/null | head -1
+}
+
+# Start an SSM tunnel
+start_ssm_tunnel() {
+    local env="$1"
+    local config="$2"
+
+    local profile region bastion_filter remote_host remote_port local_port
+    profile=$(echo "$config" | jq -r '.profile')
+    region=$(echo "$config" | jq -r '.region')
+    bastion_filter=$(echo "$config" | jq -r '.bastion_filter')
+    remote_host=$(echo "$config" | jq -r '.remote_host')
+    remote_port=$(echo "$config" | jq -r '.remote_port')
+    local_port=$(echo "$config" | jq -r '.local_port')
+
+    if is_tunnel_running "$local_port"; then
+        log_warn "Port $local_port already in use - tunnel may already be running"
+        return 0
+    fi
+
+    ensure_session
+
+    # Create a new window for this tunnel
+    local window_name="$env"
+    if tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' | grep -q "^${window_name}$"; then
+        tmux kill-window -t "$TMUX_SESSION:$window_name" 2>/dev/null || true
+    fi
+
+    # Build the tunnel command
+    local cmd
+    cmd=$(cat <<EOF
+echo "Starting SSM tunnel for $env..."
+echo "Local port: $local_port -> $remote_host:$remote_port"
+echo ""
+
+# Get bastion instance ID
+BASTION_ID=\$(aws ec2 --profile "$profile" --region "$region" describe-instances \\
+    --filters '$bastion_filter' 'Name=instance-state-name,Values=running' \\
+    --query 'Reservations[0].Instances[0].InstanceId' \\
+    --output text)
+
+if [[ -z "\$BASTION_ID" || "\$BASTION_ID" == "None" ]]; then
+    echo "ERROR: Could not find bastion host"
+    exit 1
+fi
+
+echo "Using bastion: \$BASTION_ID"
+echo ""
+
+aws ssm start-session \\
+    --profile "$profile" \\
+    --region "$region" \\
+    --target "\$BASTION_ID" \\
+    --document-name AWS-StartPortForwardingSessionToRemoteHost \\
+    --parameters host="$remote_host",portNumber="$remote_port",localPortNumber="$local_port"
+EOF
+)
+
+    tmux new-window -t "$TMUX_SESSION" -n "$window_name" "$cmd"
+
+    # Wait a moment for the tunnel to establish
+    sleep 2
+
+    if is_tunnel_running "$local_port"; then
+        log_success "Tunnel $env started on port $local_port"
+    else
+        log_warn "Tunnel $env started - waiting for connection (check: db-tunnel logs $env)"
+    fi
+}
+
+# Start a kubectl port-forward tunnel
+start_kubectl_tunnel() {
+    local env="$1"
+    local config="$2"
+
+    local profile context namespace service remote_port local_port
+    profile=$(echo "$config" | jq -r '.profile // ""')
+    context=$(echo "$config" | jq -r '.context // ""')
+    namespace=$(echo "$config" | jq -r '.namespace')
+    service=$(echo "$config" | jq -r '.service')
+    remote_port=$(echo "$config" | jq -r '.remote_port')
+    local_port=$(echo "$config" | jq -r '.local_port')
+
+    if is_tunnel_running "$local_port"; then
+        log_warn "Port $local_port already in use - tunnel may already be running"
+        return 0
+    fi
+
+    ensure_session
+
+    # Create a new window for this tunnel
+    local window_name="$env"
+    if tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' | grep -q "^${window_name}$"; then
+        tmux kill-window -t "$TMUX_SESSION:$window_name" 2>/dev/null || true
+    fi
+
+    local context_arg=""
+    if [[ -n "$context" ]]; then
+        context_arg="--context $context"
+    fi
+
+    local profile_export=""
+    if [[ -n "$profile" ]]; then
+        profile_export="export AWS_PROFILE=$profile"
+    fi
+
+    local cmd
+    cmd=$(cat <<EOF
+echo "Starting kubectl port-forward for $env..."
+echo "Local port: $local_port -> $service:$remote_port in namespace $namespace"
+$profile_export
+echo "AWS_PROFILE: \${AWS_PROFILE:-default}"
+echo ""
+kubectl port-forward $context_arg -n "$namespace" "svc/$service" "$local_port:$remote_port"
+EOF
+)
+
+    tmux new-window -t "$TMUX_SESSION" -n "$window_name" "$cmd"
+
+    sleep 2
+
+    if is_tunnel_running "$local_port"; then
+        log_success "Tunnel $env started on port $local_port"
+    else
+        log_warn "Tunnel $env started - waiting for connection (check: db-tunnel logs $env)"
+    fi
+}
+
+# Start a tunnel
+cmd_start() {
+    local env="${1:-}"
+
+    if [[ -z "$env" ]]; then
+        log_error "Usage: db-tunnel start <env>"
+        echo "Available environments:"
+        list_envs | sed 's/^/  - /'
+        exit 1
+    fi
+
+    local config
+    config=$(get_tunnel_config "$env")
+
+    if [[ -z "$config" ]]; then
+        log_error "Unknown environment: $env"
+        echo "Available environments:"
+        list_envs | sed 's/^/  - /'
+        exit 1
+    fi
+
+    local tunnel_type
+    tunnel_type=$(echo "$config" | jq -r '.type')
+
+    case "$tunnel_type" in
+        ssm)
+            start_ssm_tunnel "$env" "$config"
+            ;;
+        kubectl)
+            start_kubectl_tunnel "$env" "$config"
+            ;;
+        *)
+            log_error "Unknown tunnel type: $tunnel_type"
+            exit 1
+            ;;
+    esac
+}
+
+# Stop tunnel(s)
+cmd_stop() {
+    local env="${1:-}"
+
+    if [[ -z "$env" ]]; then
+        # Stop all tunnels
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            tmux kill-session -t "$TMUX_SESSION"
+            log_success "Stopped all tunnels"
+        else
+            log_info "No tunnels running"
+        fi
+    else
+        # Stop specific tunnel
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            if tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' | grep -q "^${env}$"; then
+                tmux kill-window -t "$TMUX_SESSION:$env"
+                log_success "Stopped tunnel: $env"
+            else
+                log_warn "Tunnel not running: $env"
+            fi
+        else
+            log_info "No tunnels running"
+        fi
+    fi
+}
+
+# Show status of tunnels
+cmd_status() {
+    echo "Database Tunnels Status"
+    echo "========================"
+    echo ""
+
+    local has_tunnels=false
+
+    for env in $(list_envs); do
+        local config port description status
+        config=$(get_tunnel_config "$env")
+        port=$(echo "$config" | jq -r '.local_port')
+        description=$(echo "$config" | jq -r '.description // ""')
+
+        if is_tunnel_running "$port"; then
+            status="${GREEN}RUNNING${NC}"
+            has_tunnels=true
+        else
+            status="${RED}STOPPED${NC}"
+        fi
+
+        printf "  %-12s port %-6s %b  %s\n" "$env" "$port" "$status" "$description"
+    done
+
+    echo ""
+
+    if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        echo "Tmux session: $TMUX_SESSION"
+        echo "Attach with: tmux attach -t $TMUX_SESSION"
+    fi
+}
+
+# List available configurations
+cmd_list() {
+    echo "Available tunnel configurations:"
+    echo ""
+
+    for env in $(list_envs); do
+        local config type port description
+        config=$(get_tunnel_config "$env")
+        type=$(echo "$config" | jq -r '.type')
+        port=$(echo "$config" | jq -r '.local_port')
+        description=$(echo "$config" | jq -r '.description // "No description"')
+
+        printf "  ${GREEN}%-12s${NC} [%s] port %s\n" "$env" "$type" "$port"
+        printf "               %s\n" "$description"
+    done
+}
+
+# Show logs for a tunnel
+cmd_logs() {
+    local env="${1:-}"
+
+    if [[ -z "$env" ]]; then
+        log_error "Usage: db-tunnel logs <env>"
+        exit 1
+    fi
+
+    if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        log_error "No tunnels running"
+        exit 1
+    fi
+
+    if ! tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' | grep -q "^${env}$"; then
+        log_error "Tunnel not running: $env"
+        exit 1
+    fi
+
+    # Attach to the specific window
+    tmux attach -t "$TMUX_SESSION:$env"
+}
+
+# Main
+main() {
+    check_deps
+
+    local cmd="${1:-}"
+    shift || true
+
+    case "$cmd" in
+        start)
+            cmd_start "$@"
+            ;;
+        stop)
+            cmd_stop "$@"
+            ;;
+        status|st)
+            cmd_status
+            ;;
+        list|ls)
+            cmd_list
+            ;;
+        logs|log)
+            cmd_logs "$@"
+            ;;
+        -h|--help|help|"")
+            cat <<EOF
+db-tunnel - Manage database tunnels for development
+
+Usage:
+  db-tunnel start <env>    Start tunnel for environment
+  db-tunnel stop [env]     Stop tunnel(s) - specific env or all
+  db-tunnel status         Show status of all tunnels
+  db-tunnel list           List available configurations
+  db-tunnel logs <env>     Attach to tunnel window (view logs)
+
+Environments are configured in: $TUNNELS_FILE
+
+Examples:
+  db-tunnel start prod     # Start production tunnel
+  db-tunnel start dev      # Start dev tunnel
+  db-tunnel status         # Check which tunnels are running
+  db-tunnel stop           # Stop all tunnels
+EOF
+            ;;
+        *)
+            log_error "Unknown command: $cmd"
+            echo "Run 'db-tunnel --help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

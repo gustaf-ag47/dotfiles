@@ -1,21 +1,10 @@
 #!/bin/bash
+# Lock the session. On Wayland, routes through DBus so hypridle intercepts the
+# signal and starts hyprlock — keeping a single canonical lock path regardless
+# of caller (keybind, idle timeout, lid close, or manual invocation).
 
 if [ "$XDG_SESSION_TYPE" = "wayland" ]; then
-	swaylock \
-		--screenshots \
-		--ignore-empty-password \
-		--clock \
-		--indicator \
-		--indicator-radius 100 \
-		--indicator-thickness 7 \
-		--effect-blur 7x5 \
-		--effect-vignette 0.5:0.5 \
-		--ring-color bb00cc \
-		--key-hl-color 880033 \
-		--line-color 00000000 \
-		--inside-color 00000088 \
-		--separator-color 00000000 \
-		--fade-in 0.2
+	loginctl lock-session
 else
 	i3lock
 fi

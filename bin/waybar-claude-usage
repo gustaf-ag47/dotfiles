@@ -1,0 +1,67 @@
+#!/bin/bash
+# Waybar widget: Claude Code subscription usage (live from Anthropic API)
+#
+# Fetches real utilization % from the same endpoint /usage reads.
+# Credentials read from ~/.claude/.credentials.json (no extra setup needed).
+#
+# Shows: 5h window % and weekly (all-models) %, with reset countdowns in tooltip.
+#
+# Dependencies: jq, curl
+
+set -euo pipefail
+
+CREDS="$HOME/.claude/.credentials.json"
+
+error_output() {
+    jq -cn --arg msg "$1" '{"text":"󱙺 --","tooltip":$msg,"class":"error","percentage":0}'
+    exit 0
+}
+
+[ -f "$CREDS" ] || error_output "No credentials ($CREDS)"
+
+TOKEN=$(jq -r '.claudeAiOauth.accessToken // empty' "$CREDS")
+[ -n "$TOKEN" ] || error_output "No OAuth token in credentials"
+
+DATA=$(/usr/bin/curl -s --max-time 8 "https://api.anthropic.com/api/oauth/usage" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "anthropic-beta: oauth-2025-04-20" \
+    -H "User-Agent: claude-code/2.1.83" \
+    -H "Content-Type: application/json")
+echo "$DATA" | jq -e . >/dev/null 2>&1 || error_output "Bad response: ${DATA:0:80}"
+
+# Parse fields
+weekly_pct=$(echo "$DATA"    | jq -r '.seven_day.utilization // 0 | floor')
+weekly_reset=$(echo "$DATA"  | jq -r '.seven_day.resets_at // ""')
+fiveh_pct=$(echo "$DATA"     | jq -r '.five_hour.utilization // 0 | floor')
+fiveh_reset=$(echo "$DATA"   | jq -r '.five_hour.resets_at // ""')
+sonnet_pct=$(echo "$DATA"    | jq -r '.seven_day_sonnet.utilization // empty')
+opus_pct=$(echo "$DATA"      | jq -r '.seven_day_opus.utilization // empty')
+
+# Format reset time as local time (HH:MM)
+format_reset() {
+    [ -n "$1" ] && date -d "$1" '+%a %H:%M' 2>/dev/null || echo "?"
+}
+
+weekly_reset_fmt=$(format_reset "$weekly_reset")
+fiveh_reset_fmt=$(format_reset "$fiveh_reset")
+
+# CSS class based on weekly usage
+if   [ "$weekly_pct" -ge 90 ]; then CLASS="critical"
+elif [ "$weekly_pct" -ge 60 ]; then CLASS="warning"
+else                                 CLASS="normal"
+fi
+
+# Build tooltip lines
+T1="Weekly (all models): ${weekly_pct}%  — resets ${weekly_reset_fmt}"
+T2="5-hour window:       ${fiveh_pct}%  — resets ${fiveh_reset_fmt}"
+T3=""
+[ -n "$sonnet_pct" ] && T3="${T3}Weekly Sonnet:       ${sonnet_pct}%"$'\n'
+[ -n "$opus_pct"   ] && T3="${T3}Weekly Opus:         ${opus_pct}%"$'\n'
+TOOLTIP="${T1}"$'\n'"${T2}"$'\n'"${T3%$'\n'}"
+
+jq -cn \
+    --arg text "󱙺 ${weekly_pct}%" \
+    --arg tooltip "$TOOLTIP" \
+    --arg class "$CLASS" \
+    --argjson pct "$weekly_pct" \
+    '{"text":$text,"tooltip":$tooltip,"class":$class,"percentage":$pct}'

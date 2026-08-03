@@ -1,0 +1,76 @@
+#!/bin/bash
+# anki-capture — quick flashcard capture from anywhere
+#
+# Usage:
+#   Super+Shift+A     wofi prompt for front/back, saves to vault
+#
+# If clipboard has content, it's offered as the default back.
+# Cards are appended to $NOTES/Inbox/anki-capture.md for later triage.
+
+set -euo pipefail
+
+NOTES="${NOTES:-$HOME/sync/Vault}"
+CAPTURE_FILE="$NOTES/Inbox/anki-capture.md"
+
+# Ensure capture file exists with frontmatter
+if [[ ! -f "$CAPTURE_FILE" ]]; then
+    cat > "$CAPTURE_FILE" << 'EOF'
+---
+id: anki-capture
+tags:
+  - inbox
+type: source
+title: Anki Capture
+author:
+status: reading
+anki_deck: "Zettelkasten"
+---
+
+# Anki Capture
+
+Flashcards captured on the go. Triage and move to proper source notes.
+
+EOF
+fi
+
+# Get clipboard content as potential default
+clipboard=""
+if command -v wl-paste &>/dev/null && [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+    clipboard=$(wl-paste --no-newline 2>/dev/null || true)
+elif command -v xclip &>/dev/null; then
+    clipboard=$(xclip -selection clipboard -o 2>/dev/null || true)
+fi
+
+# Prompt for front (question)
+front=$(echo "" | wofi --dmenu --prompt="Front (question)") || true
+[[ -z "$front" ]] && exit 0
+
+# Prompt for back (answer) — pre-fill with clipboard if available
+if [[ -n "$clipboard" ]]; then
+    back=$(echo "$clipboard" | wofi --dmenu --prompt="Back (answer) — clipboard pre-filled") || true
+else
+    back=$(echo "" | wofi --dmenu --prompt="Back (answer)") || true
+fi
+[[ -z "$back" ]] && exit 0
+
+# Prompt for type
+card_type=$(printf "basic\ncloze" | wofi --dmenu --prompt="Card type") || true
+[[ -z "$card_type" ]] && card_type="basic"
+
+# Generate UUID
+uuid=$(uuidgen 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
+
+# Append to capture file
+cat >> "$CAPTURE_FILE" << EOF
+
+%%anki%%
+id: $uuid
+type: $card_type
+front: $front
+back: $back
+tags: captured
+context:
+%%end%%
+EOF
+
+notify-send "Anki Card Captured" "$front" --expire-time=3000 2>/dev/null || true

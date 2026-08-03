@@ -1,0 +1,85 @@
+#!/bin/bash
+# Docker-aware phpunit wrapper
+# Runs tests inside the Docker container when available, translating paths
+# between host and container. Falls back to local vendor/bin on no container.
+
+set -euo pipefail
+
+find_project_root() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        [[ -f "$dir/composer.json" ]] && echo "$dir" && return 0
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+PROJECT_ROOT="$(find_project_root 2>/dev/null || true)"
+CONTAINER_ROOT="/srv"
+
+if [[ -n "$PROJECT_ROOT" && -f "$PROJECT_ROOT/docker-compose.yml" ]]; then
+    CONTAINER="$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" ps -q php 2>/dev/null | head -1)"
+    if [[ -z "$CONTAINER" ]]; then
+        PROJECT_NAME="$(basename "$PROJECT_ROOT")"
+        CONTAINER="$(docker ps --filter "name=${PROJECT_NAME}.*php" --format '{{.Names}}' 2>/dev/null | head -1)"
+    fi
+
+    if [[ -n "$CONTAINER" ]]; then
+        # Translate args: host paths → container paths.
+        # If --log-junit points to a host temp path, redirect it to a container
+        # path inside the mounted volume so we can copy it back after the run.
+        ARGS=()
+        JUNIT_HOST_PATH=""
+        JUNIT_CONTAINER_PATH=""
+        NEXT_IS_JUNIT=0
+
+        for arg in "$@"; do
+            if [[ "$NEXT_IS_JUNIT" -eq 1 ]]; then
+                JUNIT_HOST_PATH="$arg"
+                JUNIT_CONTAINER_PATH="$CONTAINER_ROOT/var/neotest-junit-$$.xml"
+                ARGS+=("$JUNIT_CONTAINER_PATH")
+                NEXT_IS_JUNIT=0
+            elif [[ "$arg" == "--log-junit" ]]; then
+                ARGS+=("$arg")
+                NEXT_IS_JUNIT=1
+            elif [[ "$arg" == --log-junit=* ]]; then
+                # neotest-phpunit passes --log-junit=<path> (with equals sign)
+                JUNIT_HOST_PATH="${arg#--log-junit=}"
+                JUNIT_CONTAINER_PATH="$CONTAINER_ROOT/var/neotest-junit-$$.xml"
+                ARGS+=("--log-junit=$JUNIT_CONTAINER_PATH")
+            elif [[ "$arg" == "$PROJECT_ROOT"* ]]; then
+                ARGS+=("$CONTAINER_ROOT${arg#$PROJECT_ROOT}")
+            else
+                ARGS+=("$arg")
+            fi
+        done
+
+        # Run phpunit; pipe output through sed to translate container paths
+        # back to host paths (needed for neotest locationHint parsing).
+        docker exec -w "$CONTAINER_ROOT" "$CONTAINER" \
+            php -d "xdebug.mode=${XDEBUG_MODE:-off}" vendor/bin/phpunit "${ARGS[@]}" 2>&1 | \
+            sed "s|$CONTAINER_ROOT/|$PROJECT_ROOT/|g"
+        EXIT_CODE="${PIPESTATUS[0]}"
+
+        # Copy log-junit file from container back to host, translating
+        # container paths (e.g. /srv/...) to host paths inside the XML so
+        # neotest can match results to host buffer paths.
+        if [[ -n "$JUNIT_HOST_PATH" && -n "$JUNIT_CONTAINER_PATH" ]]; then
+            docker exec "$CONTAINER" cat "$JUNIT_CONTAINER_PATH" 2>/dev/null \
+                | sed "s|$CONTAINER_ROOT/|$PROJECT_ROOT/|g" \
+                > "$JUNIT_HOST_PATH" || true
+            docker exec "$CONTAINER" rm -f "$JUNIT_CONTAINER_PATH" \
+                2>/dev/null || true
+        fi
+
+        exit "$EXIT_CODE"
+    fi
+fi
+
+# Fallback: local vendor/bin
+if [[ -n "$PROJECT_ROOT" && -x "$PROJECT_ROOT/vendor/bin/phpunit" ]]; then
+    exec "$PROJECT_ROOT/vendor/bin/phpunit" "$@"
+fi
+
+echo "phpunit: no Docker container running and no local vendor/bin/phpunit found" >&2
+exit 1

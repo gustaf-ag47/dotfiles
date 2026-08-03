@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+
+DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
+EXT="${PI_CLAUDE_SUB_EXTENSION:-$DOTFILES/config/pi/anthropic-oauth-claude-code-identity.ts}"
+PI_BIN="${PI_CLAUDE_SUB_PI_BIN:-$(command -v pi || true)}"
+TOKEN_REFRESH_BIN="${PI_CLAUDE_SUB_TOKEN_REFRESH_BIN:-$(command -v claude-token-refresh || true)}"
+DEFAULT_MODEL="${PI_CLAUDE_SUB_MODEL:-claude-opus-4-8}"
+
+if [ -z "$PI_BIN" ]; then
+	echo "error: pi not found in PATH; install pi or set PI_CLAUDE_SUB_PI_BIN" >&2
+	exit 1
+fi
+
+if [ ! -f "$EXT" ]; then
+	echo "error: extension not found at $EXT; set PI_CLAUDE_SUB_EXTENSION" >&2
+	exit 1
+fi
+
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ] && [ -n "$TOKEN_REFRESH_BIN" ]; then
+	eval "$($TOKEN_REFRESH_BIN --print --quiet)"
+fi
+
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ]; then
+	echo "error: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_OAUTH_TOKEN, or configure claude-token-refresh" >&2
+	exit 1
+fi
+
+TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_OAUTH_TOKEN:-}}"
+
+has_model_flag=false
+for arg in "$@"; do
+	if [ "$arg" = "--model" ] || [[ "$arg" == --model=* ]]; then
+		has_model_flag=true
+		break
+	fi
+done
+
+if [ "$has_model_flag" = true ]; then
+	exec "$PI_BIN" -e "$EXT" --api-key "$TOKEN" "$@"
+fi
+
+exec "$PI_BIN" -e "$EXT" --api-key "$TOKEN" --provider anthropic --model "$DEFAULT_MODEL" "$@"

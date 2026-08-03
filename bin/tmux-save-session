@@ -1,0 +1,90 @@
+#!/bin/bash
+# tmux-save-session: Save current or specified tmux session as tmuxp yaml config
+# Saved to $NOTES/tmux-sessions/ for persistence across machines
+#
+# Usage:
+#   tmux-save-session              # Save current session
+#   tmux-save-session <name>       # Save specific session
+#   tmux-save-session --all        # Save all sessions
+
+set -euo pipefail
+
+SESSIONS_DIR="${NOTES:-$HOME/sync/Vault}/tmux-sessions"
+mkdir -p "$SESSIONS_DIR"
+
+save_session() {
+    local session_name="$1"
+    local output_file="$SESSIONS_DIR/${session_name}.yaml"
+
+    if ! tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Error: Session '$session_name' not found" >&2
+        return 1
+    fi
+
+    # Get session start directory (from first window)
+    local start_dir
+    start_dir=$(tmux display-message -t "$session_name:1" -p '#{pane_current_path}' 2>/dev/null || echo "$HOME")
+
+    # Start building the YAML
+    cat > "$output_file" << EOF
+# Tmux session: $session_name
+# Saved: $(date '+%Y-%m-%d %H:%M')
+# Load with: tmuxp load $session_name
+#        or: s (then select from saved sessions)
+
+session_name: $session_name
+start_directory: $start_dir
+
+windows:
+EOF
+
+    # Iterate through windows
+    local windows
+    windows=$(tmux list-windows -t "$session_name" -F '#{window_index}:#{window_name}')
+
+    while IFS= read -r window_info; do
+        local win_idx="${window_info%%:*}"
+        local win_name="${window_info#*:}"
+        local win_dir
+        win_dir=$(tmux display-message -t "$session_name:$win_idx" -p '#{pane_current_path}' 2>/dev/null || echo "")
+
+        cat >> "$output_file" << EOF
+  - window_name: $win_name
+    start_directory: $win_dir
+    panes:
+EOF
+
+        # Get panes in this window
+        local panes
+        panes=$(tmux list-panes -t "$session_name:$win_idx" -F '#{pane_current_path}')
+
+        while IFS= read -r pane_dir; do
+            cat >> "$output_file" << EOF
+      - start_directory: $pane_dir
+EOF
+        done <<< "$panes"
+
+    done <<< "$windows"
+
+    echo "Saved: $output_file"
+}
+
+# Parse arguments
+if [ $# -eq 0 ]; then
+    # Save current session
+    if [ -z "${TMUX:-}" ]; then
+        echo "Error: Not in a tmux session. Specify session name or use --all" >&2
+        exit 1
+    fi
+    current_session=$(tmux display-message -p '#S')
+    save_session "$current_session"
+elif [ "$1" = "--all" ]; then
+    # Save all sessions
+    while IFS= read -r session; do
+        save_session "$session"
+    done < <(tmux list-sessions -F '#S')
+    echo "All sessions saved to $SESSIONS_DIR/"
+else
+    # Save specific session
+    save_session "$1"
+fi

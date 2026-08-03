@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Local hot-swapping Anthropic proxy: rotate OAuth tokens by live quota.
+
+Point Claude Code at it and it never has to restart to change tokens:
+
+    claude-token-proxy &                 # starts on 127.0.0.1:8788
+    ANTHROPIC_BASE_URL=http://127.0.0.1:8788 claude
+
+Per request the proxy injects the `Authorization: Bearer` of the token with the
+most weekly headroom (read live from `anthropic-ratelimit-unified-7d-utilization`
+response headers), skips tokens in 429 cooldown, and on a 429/401/403/529 from
+upstream transparently retries the SAME request with the next-best token. So a
+long-lived `claude` session rolls over to a fresh token mid-stream with no restart
+— the same idea as KarpelesLab/teamclaude, reusing the selection logic from
+claude-token-refresh, dependency-free (Python stdlib only).
+
+Tokens are read from ~/cctoken (lines containing sk-ant-oat... tokens).
+Token values are never logged; rows are identified by a short SHA-256 fingerprint.
+
+Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
+CC_PROXY_SEED (1/0). A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may
+list fingerprints (whitespace-separated) to treat as cooled-down — used for
+testing rollover without burning real quota.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import http.client
+import json
+import os
+import re
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
+UPSTREAM_HOST = "api.anthropic.com"
+ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
+SEED = os.environ.get("CC_PROXY_SEED", "1") != "0"
+CONTROL_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-proxy"
+# Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
+OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+FAILOVER_STATUSES = {401, 403, 429, 529}
+HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "proxy-connection", "te", "trailer", "upgrade"}
+
+
+def fp(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def log(msg: str) -> None:
+    print(f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} cc-proxy: {msg}", file=sys.stderr, flush=True)
+
+
+def load_tokens(path: str) -> list[str]:
+    text = Path(path).read_text(encoding="utf-8")
+    out: list[str] = []
+    for m in TOKEN_RE.finditer(text):
+        if m.group(0) not in out:
+            out.append(m.group(0))
+    return out
+
+
+class Tok:
+    def __init__(self, token: str):
+        self.token = token
+        self.fp = fp(token)
+        self.u5: float | None = None
+        self.u7: float | None = None
+        self.cooldown_until = 0.0
+        self.valid = True
+        self.last_status: int | None = None
+
+
+STATE: list[Tok] = []
+LOCK = threading.Lock()
+
+
+def _hdr_float(headers, name: str) -> float | None:
+    val = headers.get(name)
+    try:
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def update_from_headers(tok: Tok, headers) -> None:
+    u5 = _hdr_float(headers, "anthropic-ratelimit-unified-5h-utilization")
+    u7 = _hdr_float(headers, "anthropic-ratelimit-unified-7d-utilization")
+    if u5 is not None:
+        tok.u5 = u5
+    if u7 is not None:
+        tok.u7 = u7
+
+
+def forced_cooldown_fps() -> set[str]:
+    try:
+        return set((CONTROL_DIR / "force_cooldown").read_text(encoding="utf-8").split())
+    except OSError:
+        return set()
+
+
+def pick(exclude=frozenset()) -> Tok | None:
+    """Choose the valid token with the most weekly headroom that isn't cooled."""
+    now = time.time()
+    forced = forced_cooldown_fps()
+    eligible = [
+        t for t in STATE
+        if t.valid and t.fp not in exclude and now >= t.cooldown_until and t.fp not in forced
+    ]
+
+    def rank(t: Tok):
+        return (t.u7 if t.u7 is not None else 0.0, t.u5 if t.u5 is not None else 0.0)
+
+    below = [t for t in eligible if (t.u7 or 0.0) < ROTATE_THRESHOLD]
+    pool = below or eligible
+    if pool:
+        return min(pool, key=rank)
+    # Everything over-threshold/cooled — fall back to the soonest-recovering valid
+    # token, but never one explicitly forced down (a forced token is "dead").
+    fallback = [t for t in STATE if t.valid and t.fp not in exclude and t.fp not in forced]
+    return min(fallback, key=lambda t: t.cooldown_until) if fallback else None
+
+
+def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
+    conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=timeout)
+    h = dict(headers)
+    h["Authorization"] = f"Bearer {token}"
+    h["Host"] = UPSTREAM_HOST
+    conn.request(method, path, body=body, headers=h)
+    return conn, conn.getresponse()
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"  # Connection: close + read-to-EOF streaming.
+
+    def log_message(self, *a):
+        pass
+
+    def _forward_headers(self) -> dict:
+        fwd = {}
+        for k, v in self.headers.items():
+            kl = k.lower()
+            if kl in HOP_BY_HOP or kl in ("host", "authorization", "content-length", "accept-encoding"):
+                continue
+            fwd[k] = v
+        return fwd
+
+    def _proxy(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b""
+        fwd = self._forward_headers()
+        tried: set[str] = set()
+        valid_count = len([t for t in STATE if t.valid])
+        endpoint = self.path.split("?", 1)[0]
+
+        for _ in range(max(1, valid_count + 1)):
+            with LOCK:
+                tok = pick(exclude=tried)
+            if tok is None:
+                self.send_error(503, "no token with quota available")
+                return
+            try:
+                conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
+            except Exception as exc:  # network error -> try next token
+                log(f"{self.command} {endpoint} -> token {tok.fp} ERROR {exc.__class__.__name__}")
+                tried.add(tok.fp)
+                continue
+
+            with LOCK:
+                update_from_headers(tok, resp.headers)
+                tok.last_status = resp.status
+                if resp.status == 429:
+                    ra = resp.headers.get("retry-after")
+                    tok.cooldown_until = time.time() + (float(ra) if ra and ra.isdigit() else 60.0)
+                elif resp.status in (401, 403):
+                    tok.valid = False
+
+            log(f"{self.command} {endpoint} -> token {tok.fp} "
+                f"u7={tok.u7} u5={tok.u5} status {resp.status}"
+                + (" [failover]" if resp.status in FAILOVER_STATUSES else ""))
+
+            if resp.status in FAILOVER_STATUSES and len(tried) < valid_count:
+                tried.add(tok.fp)
+                try:
+                    resp.read()
+                finally:
+                    conn.close()
+                continue
+
+            self._stream(resp)
+            conn.close()
+            return
+
+        self.send_error(502, "all tokens failed/exhausted")
+
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
+
+    def _stream(self, resp):
+        self.send_response(resp.status)
+        for k, v in resp.getheaders():
+            if k.lower() in HOP_BY_HOP or k.lower() == "content-length":
+                continue
+            self.send_header(k, v)
+        self.send_header("Connection", "close")
+        self.end_headers()
+        while True:
+            chunk = resp.read(8192)
+            if not chunk:
+                break
+            try:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                break
+
+
+def seed():
+    payload = json.dumps({"model": "claude-haiku-4-5", "max_tokens": 1,
+                          "messages": [{"role": "user", "content": "."}]}).encode("utf-8")
+    for tok in STATE:
+        try:
+            conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=15)
+            conn.request("POST", "/v1/messages", body=payload, headers={
+                "Authorization": f"Bearer {tok.token}",
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": OAUTH_BETA,
+                "content-type": "application/json",
+                "user-agent": "claude-cli/2.1.75",
+                "x-app": "cli",
+                "anthropic-dangerous-direct-browser-access": "true",
+            })
+            r = conn.getresponse()
+            update_from_headers(tok, r.headers)
+            tok.last_status = r.status
+            if r.status in (401, 403):
+                tok.valid = False
+            r.read()
+            conn.close()
+            log(f"seed {tok.fp}: status {r.status} u7={tok.u7} u5={tok.u5} valid={tok.valid}")
+        except Exception as exc:
+            log(f"seed {tok.fp}: error {exc.__class__.__name__}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("CC_PROXY_PORT", "8788")))
+    ap.add_argument("--token-file", default=os.environ.get("CCTOKEN_FILE", str(Path.home() / "cctoken")))
+    args = ap.parse_args()
+
+    for t in load_tokens(args.token_file):
+        STATE.append(Tok(t))
+    if not STATE:
+        print(f"no sk-ant-oat tokens found in {args.token_file}", file=sys.stderr)
+        return 1
+
+    log(f"loaded {len(STATE)} token(s): {[t.fp for t in STATE]}")
+    if SEED:
+        seed()
+    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    log(f"listening on http://127.0.0.1:{args.port} threshold={ROTATE_THRESHOLD}")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

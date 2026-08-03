@@ -1,0 +1,40 @@
+#!/bin/bash
+# Hyprland session wrapper.
+#
+# Replaces `exec Hyprland` in .zshrc so that:
+#   1. The Hyprland log (written to /run by Hyprland itself) is copied to
+#      ~/.local/share/hyprland/logs/ before /run is cleared on the next boot.
+#   2. The exit code and timestamp are recorded for post-mortem debugging.
+#
+# Usage: exec hyprland-session  (from .zshrc tty1 block)
+
+set -uo pipefail
+
+LOG_DIR="$HOME/.local/share/hyprland/logs"
+mkdir -p "$LOG_DIR"
+
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+Hyprland
+EXIT_CODE=$?
+
+# Hyprland writes its log to /run/user/$UID/hypr/<sig>_<ts>_<pid>/hyprland.log.
+# On clean exit it may remove the dir; on crash it usually doesn't.
+# find -printf '%T@ %p\n' sorts by mtime to pick the most recently modified log.
+HYPR_LOG=$(find "/run/user/$UID/hypr" -name 'hyprland.log' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | head -1 | cut -d' ' -f2-)
+
+DEST="$LOG_DIR/hyprland-${TIMESTAMP}-exit${EXIT_CODE}.log"
+
+if [ -n "$HYPR_LOG" ] && [ -f "$HYPR_LOG" ]; then
+    cp "$HYPR_LOG" "$DEST"
+else
+    # Hyprland cleaned up the dir before we got here — note the absence.
+    echo "[hyprland-session] log not found after exit (exit code $EXIT_CODE)" > "$DEST"
+fi
+
+# Keep the 10 most recent logs.
+find "$LOG_DIR" -name 'hyprland-*.log' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +11 | cut -d' ' -f2- | xargs rm -f 2>/dev/null || true
+
+exit $EXIT_CODE

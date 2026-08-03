@@ -64,6 +64,13 @@ chmod 644 "$BACKUP_FOLDER/pkglist.txt" "$BACKUP_FOLDER/aurlist.txt"
 backup_item "$XDG_CONFIG_HOME/tmuxp" "$BACKUP_FOLDER/tmuxp-sessions"
 backup_item "$ZDOTDIR/.zhistory" "$BACKUP_FOLDER/zhistory" "600"
 
+# Encryption keys — unreadable data without these
+backup_item "$HOME/.config/age" "$BACKUP_FOLDER/age-keys" "600" "700"
+backup_item "$HOME/.age" "$BACKUP_FOLDER/age-keys-alt" "600" "700"
+backup_item "$HOME/.local/share/atuin/key" "$BACKUP_FOLDER/atuin-key" "600"
+backup_item "$HOME/.local/state/syncthing/key.pem" "$BACKUP_FOLDER/syncthing-key" "600"
+backup_item "$HOME/.config/pritunl/profiles" "$BACKUP_FOLDER/pritunl-profiles" "600" "700"
+
 backup_item "/etc/systemd/system" "$BACKUP_FOLDER/systemd-services" "644" "755"
 
 sudo tar -czf "${BACKUP_FOLDER}.tar.gz" -C "$BACKUP_DIR" "$(basename "$BACKUP_FOLDER")" && sudo rm -rf "$BACKUP_FOLDER"

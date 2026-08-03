@@ -1,0 +1,166 @@
+#!/bin/bash
+# book-open — open a book + its literature note side by side on workspace 4
+#
+# Usage:
+#   book-open             wofi picker from all type:book notes in $NOTES
+#   book-open note.md     open a specific note directly
+#
+# On zathura close, current page is synced back to the note's frontmatter.
+
+set -euo pipefail
+
+SYNC="${SYNC:-$HOME/sync}"
+NOTES="${NOTES:-$SYNC/Vault}"
+BOOKS_DIR="$NOTES/PARA/3_RESOURCES/Books"
+ZATHURA_DB="${XDG_DATA_HOME:-$HOME/.local/share}/zathura/bookmarks.sqlite"
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/book-open.log"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" >> "$LOG"; }
+
+yq_field() {
+    local file="$1" field="$2"
+    local val
+    val=$(yq --front-matter=extract ".$field" "$file" 2>/dev/null || true)
+    [[ "$val" == "null" ]] && val=""
+    echo "$val"
+}
+
+yq_write() {
+    local file="$1" expr="$2"
+    yq --front-matter=process -i "$expr" "$file"
+}
+
+# ── Picker ───────────────────────────────────────────────────────────────────
+
+pick_note() {
+    local -a display_lines note_paths
+
+    while IFS= read -r note; do
+        local title author status page total progress entry
+        title=$(yq_field "$note" "title")
+        [[ -z "$title" ]] && continue
+
+        author=$(yq_field "$note" "author")
+        status=$(yq_field "$note" "status")
+        page=$(yq_field "$note" "current_page")
+        total=$(yq_field "$note" "total_pages")
+
+        progress=""
+        [[ -n "$page" && -n "$total" ]] && progress=" (p.$page/$total)"
+
+        entry="${title}  ·  ${author:-unknown}  [${status:-to-read}]${progress}"
+        display_lines+=("$entry")
+        note_paths+=("$note")
+    done < <(grep -rlE "^type: (book|source|article|paper|course)" "$BOOKS_DIR" 2>/dev/null | sort || true)
+
+    [[ ${#display_lines[@]} -eq 0 ]] && { echo "No book notes found in $BOOKS_DIR" >&2; exit 1; }
+
+    local selected
+    if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+        selected=$(printf '%s\n' "${display_lines[@]}" \
+            | wofi -i --show dmenu --prompt="Open book" --cache-file=/dev/null) || true
+    else
+        selected=$(printf '%s\n' "${display_lines[@]}" \
+            | rofi -dmenu -p "Open book" -i) || true
+    fi
+
+    [[ -z "$selected" ]] && exit 0
+
+    for i in "${!display_lines[@]}"; do
+        [[ "${display_lines[$i]}" == "$selected" ]] && echo "${note_paths[$i]}" && return
+    done
+
+    echo "Could not match selection to a note" >&2
+    exit 1
+}
+
+# ── Resolve PDF path ─────────────────────────────────────────────────────────
+
+resolve_pdf() {
+    local note="$1"
+    local file_path abs_path
+    file_path=$(yq_field "$note" "file_path")
+    [[ -z "$file_path" ]] && { echo "No file_path in frontmatter: $note" >&2; exit 1; }
+
+    abs_path="$SYNC/$file_path"
+    [[ -f "$abs_path" ]] && echo "$abs_path" && return
+
+    # Fallback: fd search by title
+    local title found
+    title=$(yq_field "$note" "title")
+    log "'$abs_path' not found — searching for '$title'"
+
+    found=$(fd -e pdf -e epub --ignore-case "" "$SYNC" \
+        | grep -i "$(echo "$title" | tr ' ' '.')" \
+        | head -1 || true)
+
+    if [[ -n "$found" ]]; then
+        local rel="${found#"$SYNC/"}"
+        yq_write "$note" ".file_path = \"$rel\""
+        log "Updated file_path → '$rel'"
+        echo "$found"
+    else
+        echo "Could not find PDF for: $title" >&2
+        exit 1
+    fi
+}
+
+# ── Auto-detect total pages ───────────────────────────────────────────────────
+
+maybe_set_total_pages() {
+    local note="$1" pdf="$2"
+    local existing
+    existing=$(yq_field "$note" "total_pages")
+    [[ -n "$existing" ]] && return  # already set
+
+    local total
+    total=$(pdfinfo "$pdf" 2>/dev/null | awk '/^Pages:/ { print $2 }' || true)
+    [[ -n "$total" ]] && yq_write "$note" ".total_pages = $total" \
+        && log "Set total_pages = $total"
+}
+
+# ── Sync page back to note ────────────────────────────────────────────────────
+
+sync_page() {
+    local note="$1" pdf="$2"
+    [[ ! -f "$ZATHURA_DB" ]] && log "Zathura DB not found" && return
+
+    local page
+    page=$(sqlite3 "$ZATHURA_DB" \
+        "SELECT page+1 FROM fileinfo WHERE file='$pdf';" 2>/dev/null || true)
+
+    if [[ -n "$page" ]]; then
+        yq_write "$note" ".current_page = $page"
+        yq_write "$note" ".last_read = \"$(date +%Y-%m-%d)\""
+        log "Synced → page $page, last_read $(date +%Y-%m-%d)"
+    else
+        log "No Zathura record found for $pdf"
+    fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+NOTE="${1:-}"
+[[ -z "$NOTE" ]] && NOTE=$(pick_note)
+[[ -z "$NOTE" ]] && exit 0
+
+PDF=$(resolve_pdf "$NOTE")
+maybe_set_total_pages "$NOTE" "$PDF"
+
+log "Opening: $PDF"
+log "Note:    $NOTE"
+
+# Switch to workspace 4, open both windows
+hyprctl dispatch workspace 4
+
+zathura "$PDF" &
+ZATHURA_PID=$!
+
+sleep 0.4
+alacritty -e nvim "$NOTE" &
+
+# Block until zathura closes, then sync
+wait "$ZATHURA_PID"
+sync_page "$NOTE" "$PDF"

@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""
+Apply Neovim 0.12 compatibility patches to third-party lazy.nvim plugins.
+Run after :Lazy update to restore patches lost during plugin updates.
+All patches are idempotent — safe to run multiple times.
+"""
+import os
+import sys
+
+LAZY = os.path.expanduser('~/.local/share/nvim/lazy')
+
+
+def patch_file(path, old, new, description):
+    try:
+        with open(path) as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f'  SKIP (not found): {path}')
+        return False
+
+    if old not in content:
+        if new in content:
+            print(f'  already patched: {description}')
+        else:
+            print(f'  WARNING: expected pattern not found: {description}')
+        return False
+
+    with open(path, 'w') as f:
+        f.write(content.replace(old, new, 1))
+    print(f'  patched: {description}')
+    return True
+
+
+# ── git-conflict.nvim ──────────────────────────────────────────────────────
+def patch_git_conflict():
+    print('git-conflict.nvim:')
+    patch_file(
+        f'{LAZY}/git-conflict.nvim/lua/git-conflict/colors.lua',
+        "vim.validate({ rgb_24bit = { rgb_24bit, 'n', true } })",
+        "vim.validate('rgb_24bit', rgb_24bit, 'number', true)",
+        'colors.lua: vim.validate positional form with full type name',
+    )
+
+
+# ── glance.nvim ────────────────────────────────────────────────────────────
+def patch_glance():
+    print('glance.nvim:')
+
+    config = f'{LAZY}/glance.nvim/lua/glance/config.lua'
+    patch_file(
+        config,
+        """\
+  vim.validate({
+    height = { opts.height, 'n', false },
+    preserve_win_context = { opts.preserve_win_context, 'b', false },
+    list = { opts.list, 't', false },
+    position = utils.valid_enum(opts.list.position, { 'left', 'right' }, false),
+    width = { opts.list.width, 'n', false },
+    theme = { opts.theme, 't', false },
+    mode = utils.valid_enum(
+      opts.theme.mode,
+      { 'darken', 'brighten', 'auto' },
+      false
+    ),
+  })""",
+        """\
+  vim.validate('height', opts.height, 'number', false)
+  vim.validate('preserve_win_context', opts.preserve_win_context, 'boolean', false)
+  vim.validate('list', opts.list, 'table', false)
+  local _vp = utils.valid_enum(opts.list.position, { 'left', 'right' }, false)
+  vim.validate('position', _vp[1], _vp[2], _vp[3])
+  vim.validate('width', opts.list.width, 'number', false)
+  vim.validate('theme', opts.theme, 'table', false)
+  local _vm = utils.valid_enum(opts.theme.mode, { 'darken', 'brighten', 'auto' }, false)
+  vim.validate('mode', _vm[1], _vm[2], _vm[3])""",
+        'config.lua: vim.validate table form → positional with full type names',
+    )
+
+    init = f'{LAZY}/glance.nvim/lua/glance/init.lua'
+    patch_file(
+        init,
+        """\
+    vim.validate({
+      win = utils.valid_enum(win, { 'preview', 'list' }, false),
+    })""",
+        """\
+    local _vw = utils.valid_enum(win, { 'preview', 'list' }, false)
+    vim.validate('win', _vw[1], _vw[2], _vw[3])""",
+        'init.lua: enter_win vim.validate',
+    )
+    patch_file(
+        init,
+        """\
+    vim.validate({
+      distance = {
+        distance,
+        function(v)
+          return type(v) == 'number' and v ~= 0
+        end,
+        'valid number',
+      },
+    })""",
+        """\
+    vim.validate('distance', distance, function(v)
+      return type(v) == 'number' and v ~= 0
+    end, 'valid number')""",
+        'init.lua: preview_scroll_win vim.validate',
+    )
+    patch_file(
+        init,
+        """\
+    vim.validate({
+      method = utils.valid_enum(method, commands, false),
+    })""",
+        """\
+    local _vm = utils.valid_enum(method, commands, false)
+    vim.validate('method', _vm[1], _vm[2], _vm[3])""",
+        'init.lua: open vim.validate',
+    )
+    patch_file(
+        init,
+        """\
+  vim.validate({
+    name = { method.name, 'string' },
+    label = { method.label, 'string' },
+    method = { method.method, 'string' },
+  })""",
+        """\
+  vim.validate('name', method.name, 'string')
+  vim.validate('label', method.label, 'string')
+  vim.validate('method', method.method, 'string')""",
+        'init.lua: register_method vim.validate',
+    )
+
+
+# ── nvim-dap-go ────────────────────────────────────────────────────────────
+def patch_nvim_dap_go():
+    print('nvim-dap-go:')
+    f = f'{LAZY}/nvim-dap-go/lua/dap-go-ts.lua'
+
+    patch_file(
+        f,
+        """\
+  for _, match, _ in test_query:iter_matches(root, 0, 0, stop_row, { all = true }) do
+    local test_match = {}
+    for id, nodes in pairs(match) do
+      for _, node in ipairs(nodes) do
+        local capture = test_query.captures[id]
+        if capture == "testname" then
+          local name = vim.treesitter.get_node_text(node, 0)
+          test_match.name = name
+        end
+        if capture == "parent" then
+          test_match.node = node
+        end
+      end
+    end
+    table.insert(test_tree, test_match)
+  end""",
+        """\
+  -- Use -1 (no row limit) because Neovim 0.12 iter_matches with a finite stop_row
+  -- returns 0 results; filter manually by cursor row instead.
+  for _, match, _ in test_query:iter_matches(root, 0, 0, -1, { all = true }) do
+    local test_match = {}
+    for id, nodes in pairs(match) do
+      for _, node in ipairs(nodes) do
+        local capture = test_query.captures[id]
+        if capture == "testname" then
+          local name = vim.treesitter.get_node_text(node, 0)
+          test_match.name = name
+        end
+        if capture == "parent" then
+          local node_row = select(1, node:range())
+          if node_row < stop_row then
+            test_match.node = node
+          end
+        end
+      end
+    end
+    if test_match.node then
+      table.insert(test_tree, test_match)
+    end
+  end""",
+        'dap-go-ts.lua: test_query iter_matches Neovim 0.12 range fix',
+    )
+
+    patch_file(
+        f,
+        """\
+  for _, match, _ in subtest_query:iter_matches(root, 0, 0, stop_row, { all = true }) do
+    local test_match = {}
+    for id, nodes in pairs(match) do
+      for _, node in ipairs(nodes) do
+        local capture = subtest_query.captures[id]
+        if capture == "testname" then
+          local name = vim.treesitter.get_node_text(node, 0)
+          test_match.name = string.gsub(string.gsub(name, " ", "_"), '"', "")
+        end
+        if capture == "parent" then
+          test_match.node = node
+        end
+      end
+    end
+    table.insert(test_tree, test_match)
+  end""",
+        """\
+  for _, match, _ in subtest_query:iter_matches(root, 0, 0, -1, { all = true }) do
+    local test_match = {}
+    for id, nodes in pairs(match) do
+      for _, node in ipairs(nodes) do
+        local capture = subtest_query.captures[id]
+        if capture == "testname" then
+          local name = vim.treesitter.get_node_text(node, 0)
+          test_match.name = string.gsub(string.gsub(name, " ", "_"), '"', "")
+        end
+        if capture == "parent" then
+          local node_row = select(1, node:range())
+          if node_row < stop_row then
+            test_match.node = node
+          end
+        end
+      end
+    end
+    if test_match.node then
+      table.insert(test_tree, test_match)
+    end
+  end""",
+        'dap-go-ts.lua: subtest_query iter_matches Neovim 0.12 range fix',
+    )
+
+
+PLUGINS = {
+    'git-conflict': patch_git_conflict,
+    'glance': patch_glance,
+    'nvim-dap-go': patch_nvim_dap_go,
+}
+
+if __name__ == '__main__':
+    targets = sys.argv[1:] or list(PLUGINS.keys())
+    for name in targets:
+        if name not in PLUGINS:
+            print(f'Unknown plugin: {name}. Known: {", ".join(PLUGINS)}')
+            sys.exit(1)
+        PLUGINS[name]()

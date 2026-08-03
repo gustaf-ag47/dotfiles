@@ -1,0 +1,38 @@
+#!/bin/bash
+# Wrapper around hyprlock that restarts it if the NVIDIA driver crashes it on
+# resume from suspend. Without this, a crash leaves the session unlocked.
+#
+# Exits cleanly (loop breaks) when hyprlock exits with status 0 (user unlocked).
+# Falls back to systemctl suspend after 5 rapid crashes (<10s between crashes)
+# to avoid a spin loop on a broken GPU state.
+
+set -euo pipefail
+
+CRASH_COUNT=0
+LAST_CRASH=0
+
+while true; do
+    hyprlock
+    EXIT=$?
+    NOW=$(date +%s)
+
+    # Clean unlock
+    [[ $EXIT -eq 0 ]] && break
+
+    # Count rapid crashes
+    if (( NOW - LAST_CRASH < 10 )); then
+        (( CRASH_COUNT++ ))
+    else
+        CRASH_COUNT=1
+    fi
+    LAST_CRASH=$NOW
+
+    # Too many crashes — suspend rather than loop forever unlocked
+    if (( CRASH_COUNT >= 5 )); then
+        notify-send -u critical "hyprlock" "Crashed 5 times, suspending for safety" 2>/dev/null || true
+        systemctl suspend
+        break
+    fi
+
+    sleep 0.5
+done

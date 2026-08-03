@@ -1,0 +1,23 @@
+#!/bin/bash
+# Idle and lock manager for Hyprland/Wayland.
+# Uses swayidle for event management and hyprlock as the screen locker.
+#
+# Timeline (all idle times from last input):
+#   4 min  → dim screen to 10%
+#   5 min  → lock screen (via DBus, hyprlock starts)
+#   6 min  → turn off display (DPMS off, 60s after lock so hyprlock
+#             finishes rendering before display goes dark)
+#   30 min → suspend
+#
+# before-sleep: lock happens before suspend so lid-close always locks first.
+# -w flag:      swayidle waits for before-sleep to finish before releasing
+#               the systemd sleep inhibitor, ensuring lock precedes suspend.
+
+exec swayidle -w \
+    timeout 240  'brightnessctl -s set 10%'    resume 'brightnessctl -r' \
+    timeout 300  'loginctl lock-session' \
+    timeout 360  'hyprctl dispatch dpms off'   resume 'hyprctl dispatch dpms on' \
+    timeout 1800 'systemctl suspend' \
+    before-sleep 'loginctl lock-session' \
+    after-resume  'hyprctl dispatch dpms on' \
+    lock          'pidof hyprlock || hyprlock-safe'

@@ -1,12 +1,246 @@
 #!/bin/bash
+# s: Smart tmux session switcher with fzf
+#
+# Features:
+#   - Switch between running tmux sessions
+#   - Load saved sessions from $NOTES/tmux-sessions/
+#   - Load tmuxp configs from ~/.config/tmuxp/
+#   - Create new sessions on the fly
+#
+# Usage:
+#   s                    # Interactive session picker
+#   s <name>             # Direct switch/load session by name
 
-if [ -z "$TMUX" ]; then
-	echo "You are not in a tmux session!" >&2
-	return 1
-fi
+set -euo pipefail
 
-session=$(tmux list-sessions -F "#S" | fzf --height 40% --tmux 40%)
+NOTES_SESSIONS="${NOTES:-$HOME/sync/Vault}/tmux-sessions"
+TMUXP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmuxp"
 
-if [ -n "$session" ]; then
-	tmux switch-client -t "$session"
-fi
+# Colors for fzf display
+COLOR_RUNNING="\033[32m"  # Green
+COLOR_SAVED="\033[33m"    # Yellow
+COLOR_TMUXP="\033[36m"    # Cyan
+COLOR_NEW="\033[35m"      # Magenta
+COLOR_RESET="\033[0m"
+
+get_running_sessions() {
+    tmux list-sessions -F "#S" 2>/dev/null || true
+}
+
+get_saved_sessions() {
+    if [ -d "$NOTES_SESSIONS" ]; then
+        find "$NOTES_SESSIONS" -name "*.yaml" -o -name "*.yml" 2>/dev/null | xargs -I{} basename {} .yaml | sed 's/\.yml$//'
+    fi
+}
+
+get_tmuxp_configs() {
+    if [ -d "$TMUXP_DIR" ]; then
+        find "$TMUXP_DIR" -name "*.yaml" -o -name "*.yml" 2>/dev/null | xargs -I{} basename {} .yaml | sed 's/\.yml$//'
+    fi
+}
+
+build_menu() {
+    local running saved tmuxp_configs
+
+    # Running sessions (green)
+    running=$(get_running_sessions)
+    if [ -n "$running" ]; then
+        while IFS= read -r s; do
+            # Check if attached (any non-zero client count)
+            local attached=""
+            local count
+            count=$(tmux list-sessions -F '#S:#{session_attached}' | grep "^${s}:" | cut -d: -f2)
+            if [ "${count:-0}" -gt 0 ]; then
+                attached=" (attached)"
+            fi
+            echo -e "[running] $s$attached"
+        done <<< "$running"
+    fi
+
+    # Saved sessions from NOTES (yellow) - only if not already running
+    saved=$(get_saved_sessions)
+    if [ -n "$saved" ]; then
+        while IFS= read -r s; do
+            if ! tmux has-session -t "$s" 2>/dev/null; then
+                echo -e "[saved]   $s"
+            fi
+        done <<< "$saved"
+    fi
+
+    # Tmuxp configs (cyan) - only if not already running and not in saved
+    tmuxp_configs=$(get_tmuxp_configs)
+    if [ -n "$tmuxp_configs" ]; then
+        while IFS= read -r s; do
+            if ! tmux has-session -t "$s" 2>/dev/null; then
+                # Check if not already in saved list
+                if ! echo "$saved" | grep -qx "$s"; then
+                    echo -e "[tmuxp]   $s"
+                fi
+            fi
+        done <<< "$tmuxp_configs"
+    fi
+
+    # Option to create new
+    echo -e "[new]     + Create new session..."
+}
+
+# Load a saved tmuxp YAML without killing existing sessions.
+# If the session already exists, just switch; otherwise create detached then switch.
+_load_saved_session() {
+    local config="$1"
+    local yaml_session
+    yaml_session=$(awk '/^session_name:/{print $2; exit}' "$config" | tr -d '"'"'")
+
+    if [ -n "$yaml_session" ] && tmux has-session -t "$yaml_session" 2>/dev/null; then
+        tmux switch-client -t "$yaml_session"
+    else
+        tmuxp load -d "$config"
+        [ -n "$yaml_session" ] && tmux switch-client -t "$yaml_session"
+    fi
+}
+
+load_or_switch() {
+    local selection="$1"
+    local type="${selection%%]*}"
+    type="${type#[}"
+    local name="${selection#*] }"
+    name="${name% (attached)}"
+    name="${name#"${name%%[! ]*}"}"  # Trim all leading spaces
+
+    case "$type" in
+        running)
+            tmux switch-client -t "$name"
+            ;;
+        saved)
+            # Load from NOTES sessions
+            local config="$NOTES_SESSIONS/${name}.yaml"
+            [ ! -f "$config" ] && config="$NOTES_SESSIONS/${name}.yml"
+            if [ -f "$config" ]; then
+                _load_saved_session "$config"
+            else
+                echo "Error: Config not found: $config" >&2
+                exit 1
+            fi
+            ;;
+        tmuxp)
+            # Load from tmuxp config dir — check if already running first
+            if tmux has-session -t "$name" 2>/dev/null; then
+                tmux switch-client -t "$name"
+            else
+                tmuxp load -d "$name"
+                tmux switch-client -t "$name"
+            fi
+            ;;
+        new)
+            # Prompt for new session name
+            read -rp "Session name: " new_name
+            if [ -n "$new_name" ]; then
+                tmux new-session -d -s "$new_name"
+                tmux switch-client -t "$new_name"
+            fi
+            ;;
+        *)
+            echo "Unknown selection type: $type" >&2
+            exit 1
+            ;;
+    esac
+}
+
+main() {
+    # Must be in tmux (unless creating new from outside)
+    if [ -z "${TMUX:-}" ]; then
+        echo "Not in a tmux session. Starting new session..." >&2
+        # If argument provided, try to load it directly
+        if [ $# -gt 0 ]; then
+            local name="$1"
+            if [ -f "$NOTES_SESSIONS/${name}.yaml" ]; then
+                tmuxp load -y "$NOTES_SESSIONS/${name}.yaml"
+            elif [ -f "$NOTES_SESSIONS/${name}.yml" ]; then
+                tmuxp load -y "$NOTES_SESSIONS/${name}.yml"
+            else
+                tmuxp load -y "$name" 2>/dev/null || tmux new-session -s "$name"
+            fi
+        else
+            tmux new-session
+        fi
+        exit 0
+    fi
+
+    # Direct switch if name provided
+    if [ $# -gt 0 ]; then
+        local name="$1"
+        if tmux has-session -t "$name" 2>/dev/null; then
+            tmux switch-client -t "$name"
+        elif [ -f "$NOTES_SESSIONS/${name}.yaml" ] || [ -f "$NOTES_SESSIONS/${name}.yml" ]; then
+            local config="$NOTES_SESSIONS/${name}.yaml"
+            [ ! -f "$config" ] && config="$NOTES_SESSIONS/${name}.yml"
+            tmuxp load -y "$config"
+        else
+            # Try tmuxp load
+            tmuxp load -y "$name" 2>/dev/null || {
+                echo "Session '$name' not found. Create it? [y/N] " >&2
+                read -r confirm
+                if [[ "$confirm" =~ ^[Yy] ]]; then
+                    tmux new-session -d -s "$name"
+                    tmux switch-client -t "$name"
+                fi
+            }
+        fi
+        exit 0
+    fi
+
+    # Interactive selection
+    local menu selection
+    menu=$(build_menu)
+
+    # Detect small terminal (SSH to phone, etc.) - disable preview and tmux popup
+    local fzf_opts=()
+    local cols
+    cols=$(tput cols 2>/dev/null || echo 80)
+
+    if [ "$cols" -lt 60 ]; then
+        # Small terminal: simple mode, no preview
+        fzf_opts=(--height 100% --reverse --no-preview)
+    elif [ -n "${SSH_TTY:-}" ] || [ "$cols" -lt 100 ]; then
+        # SSH or medium terminal: no tmux popup, preview below
+        fzf_opts=(
+            --height 50%
+            --reverse
+            --header "Sessions"
+            --preview 'name=$(echo {} | sed "s/\[.*\] //; s/ (attached)//");
+                if tmux has-session -t "$name" 2>/dev/null; then
+                    tmux list-windows -t "$name" -F "#{window_index}: #{window_name}"
+                elif [ -f "'"$NOTES_SESSIONS"'/${name}.yaml" ]; then
+                    head -10 "'"$NOTES_SESSIONS"'/${name}.yaml"
+                elif [ -f "'"$TMUXP_DIR"'/${name}.yaml" ]; then
+                    head -10 "'"$TMUXP_DIR"'/${name}.yaml"
+                fi'
+            --preview-window down:30%:wrap
+        )
+    else
+        # Large terminal: full experience with tmux popup
+        fzf_opts=(
+            --height 40%
+            --tmux 60%
+            --reverse
+            --header "Switch/Load tmux session"
+            --preview 'name=$(echo {} | sed "s/\[.*\] //; s/ (attached)//");
+                if tmux has-session -t "$name" 2>/dev/null; then
+                    tmux list-windows -t "$name" -F "  #{window_index}: #{window_name} (#{window_panes} panes)"
+                elif [ -f "'"$NOTES_SESSIONS"'/${name}.yaml" ]; then
+                    head -20 "'"$NOTES_SESSIONS"'/${name}.yaml"
+                elif [ -f "'"$TMUXP_DIR"'/${name}.yaml" ]; then
+                    head -20 "'"$TMUXP_DIR"'/${name}.yaml"
+                fi'
+            --preview-window right:50%:wrap
+        )
+    fi
+
+    selection=$(echo -e "$menu" | fzf "${fzf_opts[@]}") || exit 0
+
+    [ -z "$selection" ] && exit 0
+
+    load_or_switch "$selection"
+}
+
+main "$@"

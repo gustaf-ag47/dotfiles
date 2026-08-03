@@ -1,41 +1,31 @@
 #!/bin/bash
-
-copy_to_wayland() {
-	if command -v wl-copy &>/dev/null; then
-		wl-copy
-	else
-		echo "Error: wl-copy is not installed." >&2
-		exit 1
-	fi
-}
-
-copy_to_xorg() {
-	if command -v xclip &>/dev/null; then
-		xclip -selection clipboard
-	else
-		echo "Error: xclip is not installed." >&2
-		exit 1
-	fi
-}
+# Copy text to clipboard. Works locally (wl-copy/xclip) and over SSH/nested
+# tmux by always sending OSC 52 via DCS passthrough to the outer terminal.
 
 if [ -t 0 ]; then
-
-	input="$1"
+  input="$1"
 else
-
-	input=$(cat)
+  input=$(cat)
 fi
 
 if [ -z "$input" ]; then
-	echo "Error: No input provided to copy." >&2
-	exit 1
+  echo "Error: No input provided to copy." >&2
+  exit 1
 fi
 
-if [ -n "$WAYLAND_DISPLAY" ]; then
-	echo "$input" | copy_to_wayland
-elif [ -n "$DISPLAY" ]; then
-	echo "$input" | copy_to_xorg
+# Try local clipboard tools (best-effort; may be wrong machine over SSH)
+if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy &>/dev/null; then
+  printf '%s' "$input" | wl-copy 2>/dev/null || true
+elif [ -n "$DISPLAY" ] && command -v xclip &>/dev/null; then
+  printf '%s' "$input" | xclip -selection clipboard 2>/dev/null || true
+fi
+
+# Always send OSC 52 so text reaches the terminal's system clipboard.
+# When inside tmux, wrap in DCS passthrough so allow-passthrough forwards
+# raw OSC 52 to the outer terminal (SSH chain: inner tmux → outer tmux → Alacritty).
+encoded=$(printf '%s' "$input" | base64 -w 0)
+if [ -n "$TMUX" ]; then
+  printf '\033Ptmux;\033\033]52;c;%s\a\033\\' "$encoded" >/dev/tty 2>/dev/null || true
 else
-	echo "Error: Unable to detect display server (Wayland or Xorg)." >&2
-	exit 1
+  printf '\033]52;c;%s\a' "$encoded" >/dev/tty 2>/dev/null || true
 fi

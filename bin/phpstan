@@ -1,0 +1,53 @@
+#!/bin/bash
+# Wrapper for phpstan that runs inside Docker when available
+# Docker is preferred because vendor/bin tools target the container's PHP version
+
+set -euo pipefail
+
+# Find the project root (nearest composer.json)
+find_project_root() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        [[ -f "$dir/composer.json" ]] && echo "$dir" && return 0
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+PROJECT_ROOT="$(find_project_root 2>/dev/null || true)"
+
+# Try Docker first: vendor/bin tools target the container's PHP version, not the host's
+if [[ -n "$PROJECT_ROOT" && -f "$PROJECT_ROOT/docker-compose.yml" ]]; then
+    CONTAINER="$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" ps -q php 2>/dev/null | head -1)"
+    if [[ -z "$CONTAINER" ]]; then
+        PROJECT_NAME="$(basename "$PROJECT_ROOT")"
+        CONTAINER="$(docker ps --filter "name=${PROJECT_NAME}.*php" --format '{{.Names}}' 2>/dev/null | head -1)"
+    fi
+
+    if [[ -n "$CONTAINER" ]]; then
+        # Translate file paths from host to container
+        ARGS=()
+        for arg in "$@"; do
+            if [[ "$arg" == "$PROJECT_ROOT"* ]]; then
+                arg="/srv${arg#$PROJECT_ROOT}"
+            fi
+            ARGS+=("$arg")
+        done
+
+        exec docker exec -w /srv "$CONTAINER" \
+            bash -c "XDEBUG_MODE=off php vendor/bin/phpstan ${ARGS[*]}"
+    fi
+fi
+
+# Fallback: local vendor/bin
+if [[ -n "$PROJECT_ROOT" && -x "$PROJECT_ROOT/vendor/bin/phpstan" ]]; then
+    exec "$PROJECT_ROOT/vendor/bin/phpstan" "$@"
+fi
+
+# Fallback: global install
+if command -v phpstan.phar &>/dev/null; then
+    exec phpstan.phar "$@"
+fi
+
+echo "Error: phpstan not found (no Docker container, no local vendor/bin, no global install)" >&2
+exit 1
