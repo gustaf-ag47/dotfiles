@@ -15,17 +15,17 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Lua 5.1 matches the luajit std used by Neovim / .luacheckrc, provides
       # `luac` for the syntax check, and avoids the luacheck-on-Lua-5.5 breakage.
       - name: Setup Lua 5.1
-        uses: leafo/gh-actions-lua@v11
+        uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: "5.1"
 
       - name: Setup LuaRocks
-        uses: leafo/gh-actions-luarocks@v5
+        uses: leafo/gh-actions-luarocks@v6
 
       - name: Check Lua syntax (luac)
         run: |
@@ -34,7 +34,7 @@ jobs:
           echo "✓ All Lua files parse cleanly"
 
       - name: Check formatting (StyLua)
-        uses: JohnnyMorganz/stylua-action@v4
+        uses: JohnnyMorganz/stylua-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
@@ -49,7 +49,7 @@ jobs:
     name: Headless load test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Neovim
         uses: rhysd/action-setup-vim@v1
@@ -58,7 +58,7 @@ jobs:
           version: stable
 
       - name: Cache lazy.nvim plugins
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/nvim-ci-data
           key: ${{ runner.os }}-nvim-lazy-${{ hashFiles('config/nvim/lazy-lock.json') }}
@@ -78,7 +78,7 @@ jobs:
 
       - name: Upload load log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nvim-load-log
           path: /tmp/nvim-load.log
