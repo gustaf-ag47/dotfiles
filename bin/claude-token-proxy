@@ -14,13 +14,23 @@ long-lived `claude` session rolls over to a fresh token mid-stream with no resta
 — the same idea as KarpelesLab/teamclaude, reusing the selection logic from
 claude-token-refresh, dependency-free (Python stdlib only).
 
-Tokens are read from ~/cctoken (lines containing sk-ant-oat... tokens).
+Tokens are read from ~/cctoken (lines containing sk-ant-oat... tokens); the file is
+re-read when its mtime changes, so adding or replacing a token needs no restart.
+A token that authenticates badly (401/403) is parked, then re-probed periodically,
+so a re-login heals the pool on its own. Comment lines are ignored, so you can
+label each token with its account email.
+
 Token values are never logged; rows are identified by a short SHA-256 fingerprint.
 
+`GET /_status` returns the live pool as JSON (fingerprints, utilization, validity)
+without touching upstream.
+
 Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
-CC_PROXY_SEED (1/0). A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may
-list fingerprints (whitespace-separated) to treat as cooled-down — used for
-testing rollover without burning real quota.
+CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
+CC_PROXY_WATCH_INTERVAL (default 30s), CC_PROXY_REVALIDATE_INTERVAL (default 600s).
+A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may list fingerprints
+(whitespace-separated) to treat as cooled-down — used for testing rollover without
+burning real quota.
 """
 
 from __future__ import annotations
@@ -42,6 +52,9 @@ TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
 UPSTREAM_HOST = "api.anthropic.com"
 ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
 SEED = os.environ.get("CC_PROXY_SEED", "1") != "0"
+MIN_VALID = int(os.environ.get("CC_PROXY_MIN_VALID", "2"))
+WATCH_INTERVAL = float(os.environ.get("CC_PROXY_WATCH_INTERVAL", "30"))
+REVALIDATE_INTERVAL = float(os.environ.get("CC_PROXY_REVALIDATE_INTERVAL", "600"))
 CONTROL_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-proxy"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
@@ -58,12 +71,40 @@ def log(msg: str) -> None:
 
 
 def load_tokens(path: str) -> list[str]:
+    """Extract tokens from the file, ignoring comment lines so rows can be labelled."""
     text = Path(path).read_text(encoding="utf-8")
     out: list[str] = []
-    for m in TOKEN_RE.finditer(text):
-        if m.group(0) not in out:
-            out.append(m.group(0))
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for m in TOKEN_RE.finditer(line):
+            if m.group(0) not in out:
+                out.append(m.group(0))
     return out
+
+
+def load_labels(path: str) -> dict[str, str]:
+    """Map fingerprint -> trailing comment on the token's line, or the preceding one."""
+    labels: dict[str, str] = {}
+    pending = ""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return labels
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            pending = stripped.lstrip("#").strip()
+            continue
+        m = TOKEN_RE.search(line)
+        if not m:
+            pending = ""
+            continue
+        after = line[m.end():]
+        inline = after.split("#", 1)[1].strip() if "#" in after else ""
+        labels[fp(m.group(0))] = inline or pending
+        pending = ""
+    return labels
 
 
 class Tok:
@@ -75,10 +116,31 @@ class Tok:
         self.cooldown_until = 0.0
         self.valid = True
         self.last_status: int | None = None
+        self.label = ""
+        self.invalid_since = 0.0
+        self.last_revalidate = 0.0
+
+    def name(self) -> str:
+        return f"{self.fp} ({self.label})" if self.label else self.fp
+
+    def snapshot(self) -> dict:
+        now = time.time()
+        return {
+            "fp": self.fp,
+            "label": self.label,
+            "valid": self.valid,
+            "u5": self.u5,
+            "u7": self.u7,
+            "last_status": self.last_status,
+            "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
+            "forced_down": self.fp in forced_cooldown_fps(),
+        }
 
 
 STATE: list[Tok] = []
 LOCK = threading.Lock()
+TOKEN_FILE = ""
+FILE_MTIME = 0.0
 
 
 def _hdr_float(headers, name: str) -> float | None:
@@ -87,6 +149,25 @@ def _hdr_float(headers, name: str) -> float | None:
         return float(val) if val is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def retry_after_seconds(headers, default: float = 60.0) -> float:
+    """Parse Retry-After as delta-seconds or HTTP-date; never trust it to be an int."""
+    raw = headers.get("retry-after")
+    if not raw:
+        return default
+    try:
+        return max(1.0, float(raw.strip()))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        when = parsedate_to_datetime(raw)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max(1.0, (when - datetime.now(timezone.utc)).total_seconds())
+    except Exception:
+        return default
 
 
 def update_from_headers(tok: Tok, headers) -> None:
@@ -103,6 +184,81 @@ def forced_cooldown_fps() -> set[str]:
         return set((CONTROL_DIR / "force_cooldown").read_text(encoding="utf-8").split())
     except OSError:
         return set()
+
+
+def health_warn(reason: str) -> None:
+    """Loudly surface a degraded pool — the failure mode that otherwise hides for days."""
+    usable = [t for t in STATE if t.valid]
+    dead = [t for t in STATE if not t.valid]
+    log(f"WARNING: {reason}: {len(usable)}/{len(STATE)} token(s) usable"
+        + (f"; parked: {[t.name() for t in dead]}" if dead else "")
+        + ". Rotation has no headroom — refresh ~/cctoken.")
+
+
+def check_health(reason: str = "pool degraded") -> None:
+    if len([t for t in STATE if t.valid]) < MIN_VALID:
+        health_warn(reason)
+
+
+def sync_tokens(path: str) -> bool:
+    """Re-read the token file, preserving live state for tokens that are still present."""
+    try:
+        tokens = load_tokens(path)
+    except OSError as exc:
+        log(f"token file unreadable ({exc.__class__.__name__}); keeping current pool")
+        return False
+    if not tokens:
+        log("token file has no sk-ant-oat tokens; keeping current pool")
+        return False
+
+    labels = load_labels(path)
+    existing = {t.token: t for t in STATE}
+    added, kept = [], []
+    new_state = []
+    for tok in tokens:
+        cur = existing.get(tok)
+        if cur is None:
+            cur = Tok(tok)
+            added.append(cur)
+        else:
+            kept.append(cur)
+        cur.label = labels.get(cur.fp, "")
+        new_state.append(cur)
+
+    removed = [t for t in STATE if t.token not in set(tokens)]
+    STATE[:] = new_state
+    if added or removed:
+        log(f"reloaded {path}: +{[t.name() for t in added]} -{[t.fp for t in removed]} "
+            f"(kept {len(kept)})")
+    return bool(added)
+
+
+def watchdog(path: str) -> None:
+    """Hot-reload the token file on change and re-probe parked tokens periodically."""
+    global FILE_MTIME
+    while True:
+        time.sleep(WATCH_INTERVAL)
+        try:
+            mtime = Path(path).stat().st_mtime
+        except OSError:
+            mtime = FILE_MTIME
+        if mtime != FILE_MTIME:
+            FILE_MTIME = mtime
+            with LOCK:
+                added = sync_tokens(path)
+            if added:
+                seed(only_new=True)
+            with LOCK:
+                check_health("after token-file reload")
+
+        now = time.time()
+        with LOCK:
+            stale = [t for t in STATE
+                     if not t.valid and now - t.last_revalidate >= REVALIDATE_INTERVAL]
+        for tok in stale:
+            probe(tok, note="revalidate")
+            if tok.valid:
+                log(f"token {tok.name()} recovered — back in rotation")
 
 
 def pick(exclude=frozenset()) -> Tok | None:
@@ -142,6 +298,36 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _send_json(self, status: int, obj: dict) -> None:
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_api_error(self, status: int, message: str, err_type: str = "api_error") -> None:
+        """Anthropic-shaped error so clients render it instead of dumping HTML."""
+        self._send_json(status, {"type": "error", "error": {"type": err_type, "message": message}})
+
+    def _status_page(self) -> None:
+        with LOCK:
+            toks = [t.snapshot() for t in STATE]
+            usable = len([t for t in STATE if t.valid])
+        self._send_json(200, {
+            "tokens": toks,
+            "usable": usable,
+            "total": len(toks),
+            "min_valid": MIN_VALID,
+            "degraded": usable < MIN_VALID,
+            "threshold": ROTATE_THRESHOLD,
+            "token_file": TOKEN_FILE,
+        })
+
     def _forward_headers(self) -> dict:
         fwd = {}
         for k, v in self.headers.items():
@@ -163,7 +349,17 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 tok = pick(exclude=tried)
             if tok is None:
-                self.send_error(503, "no token with quota available")
+                with LOCK:
+                    detail = ", ".join(
+                        f"{t.name()}[{'parked' if not t.valid else 'forced' if t.fp in forced_cooldown_fps() else 'cooling'}"
+                        f" u7={t.u7}]" for t in STATE)
+                    log(f"WARNING: request rejected — no token pickable: {detail}")
+                self._send_api_error(
+                    503,
+                    "claude-token-proxy: no token with quota available (all parked, "
+                    "cooled down, or over threshold). Check `curl localhost:8788/_status`.",
+                    "overloaded_error",
+                )
                 return
             try:
                 conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
@@ -176,12 +372,16 @@ class Handler(BaseHTTPRequestHandler):
                 update_from_headers(tok, resp.headers)
                 tok.last_status = resp.status
                 if resp.status == 429:
-                    ra = resp.headers.get("retry-after")
-                    tok.cooldown_until = time.time() + (float(ra) if ra and ra.isdigit() else 60.0)
+                    tok.cooldown_until = time.time() + retry_after_seconds(resp.headers)
                 elif resp.status in (401, 403):
+                    if tok.valid:
+                        tok.invalid_since = time.time()
+                        log(f"token {tok.name()} parked: upstream {resp.status}")
                     tok.valid = False
+                    tok.last_revalidate = time.time()
+                    check_health("token rejected upstream")
 
-            log(f"{self.command} {endpoint} -> token {tok.fp} "
+            log(f"{self.command} {endpoint} -> token {tok.name()} "
                 f"u7={tok.u7} u5={tok.u5} status {resp.status}"
                 + (" [failover]" if resp.status in FAILOVER_STATUSES else ""))
 
@@ -197,9 +397,15 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
             return
 
-        self.send_error(502, "all tokens failed/exhausted")
+        self._send_api_error(502, "claude-token-proxy: all tokens failed or exhausted")
 
-    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
+    def do_GET(self):
+        if self.path.split("?", 1)[0] in ("/_status", "/_health"):
+            self._status_page()
+            return
+        self._proxy()
+
+    do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
 
     def _stream(self, resp):
         self.send_response(resp.status)
@@ -220,31 +426,45 @@ class Handler(BaseHTTPRequestHandler):
                 break
 
 
-def seed():
+def probe(tok: Tok, note: str = "seed") -> None:
+    """One cheap upstream call to learn a token's validity and utilization."""
     payload = json.dumps({"model": "claude-haiku-4-5", "max_tokens": 1,
                           "messages": [{"role": "user", "content": "."}]}).encode("utf-8")
-    for tok in STATE:
-        try:
-            conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=15)
-            conn.request("POST", "/v1/messages", body=payload, headers={
-                "Authorization": f"Bearer {tok.token}",
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": OAUTH_BETA,
-                "content-type": "application/json",
-                "user-agent": "claude-cli/2.1.75",
-                "x-app": "cli",
-                "anthropic-dangerous-direct-browser-access": "true",
-            })
-            r = conn.getresponse()
+    tok.last_revalidate = time.time()
+    try:
+        conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=15)
+        conn.request("POST", "/v1/messages", body=payload, headers={
+            "Authorization": f"Bearer {tok.token}",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": OAUTH_BETA,
+            "content-type": "application/json",
+            "user-agent": "claude-cli/2.1.75",
+            "x-app": "cli",
+            "anthropic-dangerous-direct-browser-access": "true",
+        })
+        r = conn.getresponse()
+        with LOCK:
             update_from_headers(tok, r.headers)
             tok.last_status = r.status
             if r.status in (401, 403):
+                if tok.valid:
+                    tok.invalid_since = time.time()
                 tok.valid = False
-            r.read()
-            conn.close()
-            log(f"seed {tok.fp}: status {r.status} u7={tok.u7} u5={tok.u5} valid={tok.valid}")
-        except Exception as exc:
-            log(f"seed {tok.fp}: error {exc.__class__.__name__}")
+            else:
+                tok.valid = True
+                tok.invalid_since = 0.0
+        r.read()
+        conn.close()
+        log(f"{note} {tok.name()}: status {r.status} u7={tok.u7} u5={tok.u5} valid={tok.valid}")
+    except Exception as exc:
+        log(f"{note} {tok.name()}: error {exc.__class__.__name__}")
+
+
+def seed(only_new: bool = False):
+    for tok in list(STATE):
+        if only_new and tok.last_status is not None:
+            continue
+        probe(tok)
 
 
 def main() -> int:
@@ -253,17 +473,33 @@ def main() -> int:
     ap.add_argument("--token-file", default=os.environ.get("CCTOKEN_FILE", str(Path.home() / "cctoken")))
     args = ap.parse_args()
 
-    for t in load_tokens(args.token_file):
-        STATE.append(Tok(t))
+    global TOKEN_FILE, FILE_MTIME
+    TOKEN_FILE = args.token_file
+    try:
+        FILE_MTIME = Path(TOKEN_FILE).stat().st_mtime
+    except OSError:
+        FILE_MTIME = 0.0
+
+    labels = load_labels(TOKEN_FILE)
+    for t in load_tokens(TOKEN_FILE):
+        tok = Tok(t)
+        tok.label = labels.get(tok.fp, "")
+        STATE.append(tok)
     if not STATE:
-        print(f"no sk-ant-oat tokens found in {args.token_file}", file=sys.stderr)
+        print(f"no sk-ant-oat tokens found in {TOKEN_FILE}", file=sys.stderr)
         return 1
 
-    log(f"loaded {len(STATE)} token(s): {[t.fp for t in STATE]}")
+    log(f"loaded {len(STATE)} token(s): {[t.name() for t in STATE]}")
     if SEED:
         seed()
+        check_health("after startup probe")
+    elif len(STATE) < MIN_VALID:
+        health_warn("too few tokens configured")
+
+    threading.Thread(target=watchdog, args=(TOKEN_FILE,), daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    log(f"listening on http://127.0.0.1:{args.port} threshold={ROTATE_THRESHOLD}")
+    log(f"listening on http://127.0.0.1:{args.port} threshold={ROTATE_THRESHOLD} "
+        f"watch={WATCH_INTERVAL}s revalidate={REVALIDATE_INTERVAL}s status=/_status")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -1,32 +1,74 @@
 #!/bin/bash
+# Run pi against an Anthropic subscription (OAuth) token.
+#
+# Routing (PI_CLAUDE_SUB_PROXY: auto|1|0, default auto):
+#   auto  use claude-token-proxy if it is listening, else talk to the API directly
+#   1     require the proxy; fail if it is not reachable
+#   0     never use the proxy
+#
+# Via the proxy, every request is authenticated with the ~/cctoken token that has
+# the most weekly headroom, and a 429/401/403/529 transparently fails over to the
+# next token mid-session. The --api-key we pass is a placeholder: the proxy drops
+# the inbound Authorization header and injects its own.
 set -euo pipefail
 
 DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
 EXT="${PI_CLAUDE_SUB_EXTENSION:-$DOTFILES/config/pi/anthropic-oauth-claude-code-identity.ts}"
+PROXY_EXT="${PI_CLAUDE_SUB_PROXY_EXTENSION:-$DOTFILES/config/pi/anthropic-token-proxy.ts}"
+PROXY_URL="${PI_ANTHROPIC_PROXY_URL:-http://127.0.0.1:8788}"
 PI_BIN="${PI_CLAUDE_SUB_PI_BIN:-$(command -v pi || true)}"
 TOKEN_REFRESH_BIN="${PI_CLAUDE_SUB_TOKEN_REFRESH_BIN:-$(command -v claude-token-refresh || true)}"
 DEFAULT_MODEL="${PI_CLAUDE_SUB_MODEL:-claude-opus-4-8}"
+PROXY_MODE="${PI_CLAUDE_SUB_PROXY:-auto}"
 
-if [ -z "$PI_BIN" ]; then
-	echo "error: pi not found in PATH; install pi or set PI_CLAUDE_SUB_PI_BIN" >&2
+die() {
+	echo "error: $*" >&2
 	exit 1
-fi
+}
 
-if [ ! -f "$EXT" ]; then
-	echo "error: extension not found at $EXT; set PI_CLAUDE_SUB_EXTENSION" >&2
-	exit 1
-fi
+[ -n "$PI_BIN" ] || die "pi not found in PATH; install pi or set PI_CLAUDE_SUB_PI_BIN"
+[ -f "$EXT" ] || die "extension not found at $EXT; set PI_CLAUDE_SUB_EXTENSION"
 
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ] && [ -n "$TOKEN_REFRESH_BIN" ]; then
-	eval "$($TOKEN_REFRESH_BIN --print --quiet)"
-fi
+proxy_listening() {
+	local hostport host port
+	hostport="${PROXY_URL#*://}"
+	hostport="${hostport%%/*}"
+	host="${hostport%%:*}"
+	port="${hostport##*:}"
+	[ "$host" = "$port" ] && port=80
+	timeout 1 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null
+}
 
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ]; then
-	echo "error: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_OAUTH_TOKEN, or configure claude-token-refresh" >&2
-	exit 1
-fi
+use_proxy=false
+case "$PROXY_MODE" in
+0 | off | no | false) ;;
+1 | on | yes | true | force)
+	[ -f "$PROXY_EXT" ] || die "proxy extension not found at $PROXY_EXT"
+	proxy_listening || die "PI_CLAUDE_SUB_PROXY=$PROXY_MODE but nothing is listening on $PROXY_URL
+try: systemctl --user status claude-token-proxy"
+	use_proxy=true
+	;;
+auto)
+	if [ -f "$PROXY_EXT" ] && proxy_listening; then
+		use_proxy=true
+	fi
+	;;
+*) die "PI_CLAUDE_SUB_PROXY must be auto, 1, or 0 (got: $PROXY_MODE)" ;;
+esac
 
-TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_OAUTH_TOKEN:-}}"
+ext_args=(-e "$EXT")
+
+if [ "$use_proxy" = true ]; then
+	ext_args+=(-e "$PROXY_EXT")
+	# Placeholder only; the proxy drops this and injects a live credential.
+	cred="sk-ant-oat01-proxy-injects-the-real-credential"
+else
+	if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ] && [ -n "$TOKEN_REFRESH_BIN" ]; then
+		eval "$($TOKEN_REFRESH_BIN --print --quiet)"
+	fi
+	cred="${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_OAUTH_TOKEN:-}}"
+	[ -n "$cred" ] || die "set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_OAUTH_TOKEN, configure claude-token-refresh, or start claude-token-proxy"
+fi
 
 has_model_flag=false
 for arg in "$@"; do
@@ -37,7 +79,7 @@ for arg in "$@"; do
 done
 
 if [ "$has_model_flag" = true ]; then
-	exec "$PI_BIN" -e "$EXT" --api-key "$TOKEN" "$@"
+	exec "$PI_BIN" "${ext_args[@]}" --api-key "$cred" "$@"
 fi
 
-exec "$PI_BIN" -e "$EXT" --api-key "$TOKEN" --provider anthropic --model "$DEFAULT_MODEL" "$@"
+exec "$PI_BIN" "${ext_args[@]}" --api-key "$cred" --provider anthropic --model "$DEFAULT_MODEL" "$@"
