@@ -48,8 +48,10 @@ if [ $subject_length -gt 50 ]; then
     exit 1
 fi
 
-# Check for capitalized subject
-if [[ $first_line =~ ^[a-z]+(\([a-z0-9-]+\))?: [[:upper:]] ]]; then
+# Check for capitalized subject. The regex lives in a variable because an inline
+# POSIX class inside [[ =~ ]] is parsed as a nested test and aborts the hook.
+capitalized_subject_regex='^[a-z]+(\([a-z0-9-]+\))?: [[:upper:]]'
+if [[ $first_line =~ $capitalized_subject_regex ]]; then
     echo "❌ Commit subject should not start with capital letter"
     echo "Subject: $first_line"
     exit 1

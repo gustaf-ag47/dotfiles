@@ -103,16 +103,24 @@ declare -a secret_patterns=(
     # Slack
     "xox[baprs]-[0-9a-zA-Z-]+"                  # Slack token
 
+    # Anthropic (real keys are ~100+ chars; the length floor skips placeholders)
+    "sk-ant-api[0-9]{2}-[0-9A-Za-z_-]{80,}"     # Anthropic API key
+    "sk-ant-oat[0-9]{2}-[0-9A-Za-z._-]{80,}"    # Claude Code OAuth token
+
     # Private keys
     "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
 )
 
-# Check each pattern
+# Check each pattern against ADDED lines only. Scanning the whole diff also
+# matches '-' deletions, which makes an already-flagged line impossible to ever
+# remove; the diff header ('+++ b/file') is dropped for the same reason.
+added_lines="$(git diff --cached | grep '^+' | grep -v '^+++')"
+
 for pattern in "${secret_patterns[@]}"; do
-    if git diff --cached | grep -iE "$pattern" >/dev/null 2>&1; then
+    if printf '%s\n' "$added_lines" | grep -iE "$pattern" >/dev/null 2>&1; then
         echo "❌ Potential secret detected matching pattern: $pattern"
         echo "Matched content:"
-        git diff --cached | grep -iE "$pattern" | head -3
+        printf '%s\n' "$added_lines" | grep -iE "$pattern" | head -3
         echo ""
         echo "Please remove sensitive data before committing"
         echo "Use environment variables or secret management tools instead"
