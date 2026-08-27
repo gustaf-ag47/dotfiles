@@ -1,6 +1,27 @@
 # Testing
 
-This directory contains end-to-end tests for the dotfiles system.
+This directory contains tests for the dotfiles system.
+
+```
+tests/
+├── e2e/    # Hurl HTTP tests (require running services)
+└── unit/   # Python unit tests for bin/ utilities
+```
+
+## Unit Tests
+
+Python `unittest` tests covering scripts in `bin/`. No services or network required.
+
+```bash
+make test-unit
+
+# Or a single file
+python3 -m unittest discover -s tests/unit -t tests/unit -v
+```
+
+Naming: `tests/unit/test_<script-name-with-underscores>.py`.
+Scripts in `bin/` have no `.py` extension, so load them with `SourceFileLoader`
+(see `test_claude_token_proxy.py` for the pattern).
 
 ## E2E Tests
 

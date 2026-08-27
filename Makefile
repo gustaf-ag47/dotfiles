@@ -1,4 +1,4 @@
-.PHONY: help install test lint lint-shell lint-lua lint-yaml lint-build
+.PHONY: help install test test-unit lint lint-shell lint-lua lint-yaml lint-build
 
 # Default target - show help
 help:
@@ -7,6 +7,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make install       - Install dotfiles and create symlinks"
 	@echo "  make test          - Run E2E tests (requires docker compose)"
+	@echo "  make test-unit     - Run Python unit tests (tests/unit/)"
 	@echo "  make lint          - Run all linters (Docker-based)"
 	@echo "  make lint-shell    - Run shellcheck on shell scripts"
 	@echo "  make lint-lua      - Run luacheck on Lua files"
@@ -21,6 +22,9 @@ install:
 
 test:
 	@sh ./scripts/test.sh
+
+test-unit:
+	@python3 -m unittest discover -s tests/unit -t tests/unit -v
 
 lint:
 	@bin/lint --all
