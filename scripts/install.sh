@@ -157,6 +157,15 @@ if [ -d "$DOTFILES/local/applications" ]; then
 	done
 fi
 
+# Copy local/personal autostart entries (if they exist)
+if [ -d "$DOTFILES/local/autostart" ]; then
+	echo "Installing personal autostart entries..."
+	mkdir -p "$XDG_CONFIG_HOME/autostart"
+	for file in "$DOTFILES/local/autostart"/*.desktop; do
+		[ -f "$file" ] && cp "$file" "$XDG_CONFIG_HOME/autostart/" && echo "  - $(basename "$file")"
+	done
+fi
+
 link_config "$DOTFILES/config/mimeapps/mimeapps.list" "$XDG_CONFIG_HOME/mimeapps.list"
 
 # Link Wayland environment configuration
@@ -179,6 +188,15 @@ for script in "$DOTFILES/bin/"*; do
         ln -sf "$script" "$HOME/.local/bin/$(basename "$script")"
     fi
 done
+
+# Link private/personal utility scripts (if they exist)
+if [ -d "$DOTFILES/local/bin" ]; then
+    for script in "$DOTFILES/local/bin/"*; do
+        if [ -f "$script" ]; then
+            ln -sf "$script" "$HOME/.local/bin/$(basename "$script")"
+        fi
+    done
+fi
 
 # Link Claude Code user configuration
 mkdir -p "$HOME/.claude"

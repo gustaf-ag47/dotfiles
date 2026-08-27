@@ -148,12 +148,10 @@ if [ -d "$DOTFILES/local/bin" ]; then
 	export PATH="$DOTFILES/local/bin:$PATH"
 fi
 
+# tty1 is the persistent local desktop. Start Hyprland automatically so the
+# physical session is also available to WayVNC after unattended boots.
 if [ "$(tty)" = "/dev/tty1" ]; then
-    choice=$(echo -e "Wayland\nXorg" | fzf)
-    case $choice in
-        Wayland) exec hyprland-session ;;
-        Xorg) startx ;;
-    esac
+    exec hyprland-session
 fi
 
 # Show interactive tmux session picker on terminal open (not on tty1, not if already in tmux)

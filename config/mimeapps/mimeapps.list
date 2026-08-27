@@ -18,14 +18,17 @@ x-scheme-handler/https=firefox.desktop
 x-scheme-handler/jetbrains=jetbrains-toolbox.desktop
 x-scheme-handler/lbry=lbry.desktop
 x-scheme-handler/magnet=torrent.desktop;
-x-scheme-handler/mailto=userapp-Thunderbird-Q0ZGQ3.desktop
+x-scheme-handler/mailto=userapp-Thunderbird-JT05T3.desktop
 x-scheme-handler/obsidian=obsidian.desktop
 x-scheme-handler/postman=Postman.desktop
 x-scheme-handler/discord=vesktop.desktop
 x-scheme-handler/claude-cli=claude-code-url-handler.desktop
-message/rfc822=userapp-Thunderbird-Q0ZGQ3.desktop
-x-scheme-handler/mid=userapp-Thunderbird-Q0ZGQ3.desktop
+message/rfc822=userapp-Thunderbird-JT05T3.desktop
+x-scheme-handler/mid=userapp-Thunderbird-JT05T3.desktop
+x-scheme-handler/net.thunderbird=userapp-Thunderbird-5U4AU3.desktop
 
 [Added Associations]
-x-scheme-handler/mailto=userapp-Thunderbird-Q0ZGQ3.desktop;
-x-scheme-handler/mid=userapp-Thunderbird-Q0ZGQ3.desktop;
+x-scheme-handler/mailto=userapp-Thunderbird-JT05T3.desktop;userapp-Thunderbird-Q0ZGQ3.desktop;
+x-scheme-handler/mid=userapp-Thunderbird-JT05T3.desktop;userapp-Thunderbird-Q0ZGQ3.desktop;
+message/rfc822=userapp-Thunderbird-JT05T3.desktop;
+x-scheme-handler/net.thunderbird=userapp-Thunderbird-5U4AU3.desktop;
