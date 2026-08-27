@@ -161,7 +161,7 @@
     "return-type": "json",
     "interval": 300,
     "tooltip": true,
-    "on-click": "kitty -e sh -c 'npx ccusage weekly; echo; read -p \"Press enter to close\"'"
+    "on-click": "kitty -e sh -c 'claude-usage; echo; read -p \"Press enter to close\"'"
   },
 
   "custom/power": {

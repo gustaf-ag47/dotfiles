@@ -1,0 +1,4 @@
+#!/bin/bash
+# Human-readable multi-account Claude subscription usage.
+set -euo pipefail
+waybar-claude-usage | jq -r .tooltip

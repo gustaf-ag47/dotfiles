@@ -3,22 +3,27 @@ Description=Claude Code quota-aware OAuth token hot-swap proxy
 Documentation=https://github.com/KarpelesLab/teamclaude
 After=network-online.target
 Wants=network-online.target
+# Do not enter a restart storm when the encrypted source tree is unavailable.
+# The symlink itself may exist while its encrypted-tree target is absent;
+# ExecCondition follows it and skips cleanly in that case.
 
 [Service]
 Type=simple
 # Bind localhost only; selects the ~/cctoken token with the most weekly headroom
 # and fails over on 429/401/403/529 so a running `claude` rotates without restart.
+ExecCondition=/usr/bin/test -x %h/.local/bin/claude-token-proxy
 ExecStart=%h/.local/bin/claude-token-proxy --port 8788
-Restart=always
-RestartSec=2
+Restart=on-failure
+RestartSec=30
 # Hardening: the proxy reads ~/cctoken and holds tokens in memory only.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
 ReadOnlyPaths=%h/cctoken
-# force_cooldown control file lives here.
-ReadWritePaths=%h/.cache/cc-proxy
+# Creates $XDG_CACHE_HOME/cc-proxy before mount hardening is applied and keeps
+# usage counters plus the force_cooldown control file writable.
+CacheDirectory=cc-proxy
 
 [Install]
 WantedBy=default.target

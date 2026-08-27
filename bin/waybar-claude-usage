@@ -1,67 +1,167 @@
 #!/bin/bash
-# Waybar widget: Claude Code subscription usage (live from Anthropic API)
+# Waybar widget: multi-account Claude Code subscription usage.
 #
-# Fetches real utilization % from the same endpoint /usage reads.
-# Credentials read from ~/.claude/.credentials.json (no extra setup needed).
+# Reads the local claude-token-proxy, which knows every token in ~/cctoken.
+# Detailed quota comes from /api/oauth/usage when the token has the required
+# OAuth scope; response-header utilization and local response counters remain
+# available as a fallback. Never render an unavailable value as 0%.
 #
-# Shows: 5h window % and weekly (all-models) %, with reset countdowns in tooltip.
-#
-# Dependencies: jq, curl
+# Dependencies: curl, jq, awk, date
 
 set -euo pipefail
 
-CREDS="$HOME/.claude/.credentials.json"
+PROXY_URL="${PI_ANTHROPIC_PROXY_URL:-http://127.0.0.1:${CC_PROXY_PORT:-8788}}"
 
 error_output() {
-    jq -cn --arg msg "$1" '{"text":"󱙺 --","tooltip":$msg,"class":"error","percentage":0}'
+    jq -cn --arg msg "$1" '{text:"CC ?",tooltip:$msg,class:"error",percentage:0}'
     exit 0
 }
 
-[ -f "$CREDS" ] || error_output "No credentials ($CREDS)"
+DATA=$(curl -fsS --max-time 5 "$PROXY_URL/_usage" 2>/dev/null) \
+    || error_output "Claude proxy unavailable at $PROXY_URL\nStart claude-token-proxy to see all OAuth accounts."
 
-TOKEN=$(jq -r '.claudeAiOauth.accessToken // empty' "$CREDS")
-[ -n "$TOKEN" ] || error_output "No OAuth token in credentials"
+echo "$DATA" | jq -e '.tokens | type == "array"' >/dev/null 2>&1 \
+    || error_output "Claude proxy returned an invalid usage document"
 
-DATA=$(/usr/bin/curl -s --max-time 8 "https://api.anthropic.com/api/oauth/usage" \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "anthropic-beta: oauth-2025-04-20" \
-    -H "User-Agent: claude-code/2.1.83" \
-    -H "Content-Type: application/json")
-echo "$DATA" | jq -e . >/dev/null 2>&1 || error_output "Bad response: ${DATA:0:80}"
-
-# Parse fields
-weekly_pct=$(echo "$DATA"    | jq -r '.seven_day.utilization // 0 | floor')
-weekly_reset=$(echo "$DATA"  | jq -r '.seven_day.resets_at // ""')
-fiveh_pct=$(echo "$DATA"     | jq -r '.five_hour.utilization // 0 | floor')
-fiveh_reset=$(echo "$DATA"   | jq -r '.five_hour.resets_at // ""')
-sonnet_pct=$(echo "$DATA"    | jq -r '.seven_day_sonnet.utilization // empty')
-opus_pct=$(echo "$DATA"      | jq -r '.seven_day_opus.utilization // empty')
-
-# Format reset time as local time (HH:MM)
-format_reset() {
-    [ -n "$1" ] && date -d "$1" '+%a %H:%M' 2>/dev/null || echo "?"
+pct() {
+    awk -v value="${1:-}" 'BEGIN {
+        if (value == "" || value == "null") print "?";
+        else printf "%.0f", value;
+    }'
 }
 
-weekly_reset_fmt=$(format_reset "$weekly_reset")
-fiveh_reset_fmt=$(format_reset "$fiveh_reset")
+reset_text() {
+    local iso="${1:-}"
+    [ -n "$iso" ] || { printf '?'; return; }
+    date -d "$iso" '+%a %H:%M' 2>/dev/null || printf '?'
+}
 
-# CSS class based on weekly usage
-if   [ "$weekly_pct" -ge 90 ]; then CLASS="critical"
-elif [ "$weekly_pct" -ge 60 ]; then CLASS="warning"
-else                                 CLASS="normal"
+human_count() {
+    awk -v value="${1:-0}" 'BEGIN {
+        if (value >= 1000000000) printf "%.1fB", value/1000000000;
+        else if (value >= 1000000) printf "%.1fM", value/1000000;
+        else if (value >= 1000) printf "%.1fK", value/1000;
+        else printf "%d", value+0;
+    }'
+}
+
+max_weekly=""
+tooltip="Claude subscription usage"
+token_count=$(echo "$DATA" | jq '.tokens | length')
+tooltip+=$'\nAccounts: '"$token_count"
+
+while IFS=$'\t' read -r fp label valid u5 u7 u5_reset u7_reset u7_oi u7_oi_reset cooldown_until quota_status quota_error quota_retry_until quota_scope_denied quota counters; do
+    [ -n "$fp" ] || continue
+    if [ -z "$label" ] || [ "$label" = "-" ]; then label="$fp"; fi
+    [ "$u5" = "-" ] && u5=""
+    [ "$u7" = "-" ] && u7=""
+    [ "$u5_reset" = "-" ] && u5_reset=""
+    [ "$u7_reset" = "-" ] && u7_reset=""
+    [ "$u7_oi" = "-" ] && u7_oi=""
+    [ "$u7_oi_reset" = "-" ] && u7_oi_reset=""
+    [ "$cooldown_until" = "-" ] && cooldown_until=""
+    [ "$quota_status" = "-" ] && quota_status=""
+    [ "$quota_error" = "-" ] && quota_error=""
+    [ "$quota_retry_until" = "-" ] && quota_retry_until=""
+    [ "$quota_scope_denied" = "-" ] && quota_scope_denied=""
+    tooltip+=$'\n\n'
+    tooltip+="$label [$fp]"
+
+    direct_weekly=$(jq -r '.seven_day.utilization // empty' <<<"$quota")
+    direct_weekly_reset=$(jq -r '.seven_day.resets_at // .seven_day.reset_at // empty' <<<"$quota")
+    direct_five=$(jq -r '.five_hour.utilization // empty' <<<"$quota")
+    direct_five_reset=$(jq -r '.five_hour.resets_at // .five_hour.reset_at // empty' <<<"$quota")
+
+    if [ -n "$direct_weekly" ]; then
+        weekly_pct=$(pct "$direct_weekly")
+        weekly_line="Weekly: ${weekly_pct}% used ($((100 - weekly_pct))% left), resets $(reset_text "$direct_weekly_reset")"
+    elif [ -n "$u7" ] && [ "$u7" != "null" ]; then
+        weekly_pct=$(pct "$(awk -v value="$u7" 'BEGIN{print value*100}')")
+        weekly_line="Weekly: ${weekly_pct}% used (header observation), resets $(reset_text "$u7_reset")"
+    else
+        weekly_pct=""
+        weekly_line="Weekly: unavailable"
+    fi
+
+    if [ -n "$direct_five" ]; then
+        five_pct=$(pct "$direct_five")
+        five_line="5-hour: ${five_pct}% used ($((100 - five_pct))% left), resets $(reset_text "$direct_five_reset")"
+    elif [ -n "$u5" ] && [ "$u5" != "null" ]; then
+        five_pct=$(pct "$(awk -v value="$u5" 'BEGIN{print value*100}')")
+        five_line="5-hour: ${five_pct}% used (header observation), resets $(reset_text "$u5_reset")"
+    else
+        five_pct=""
+        five_line="5-hour: unavailable"
+    fi
+
+    tooltip+=$'\n  '"$weekly_line"
+    tooltip+=$'\n  '"$five_line"
+    if [ -n "$u7_oi" ]; then
+        tooltip+=$'\n  '"Fable/overage weekly: $(pct "$(awk -v value="$u7_oi" 'BEGIN{print value*100}')")% used, resets $(reset_text "$u7_oi_reset")"
+    fi
+
+    while IFS=$'\t' read -r model model_pct model_reset; do
+        [ -n "$model" ] || continue
+        tooltip+=$'\n  '"${model}: $(pct "$model_pct")% used, resets $(reset_text "$model_reset")"
+    done < <(jq -r '
+        ((.seven_day_sonnet // {}) | select(.utilization != null) | ["Sonnet", .utilization, (.resets_at // .reset_at // "")] | @tsv),
+        ((.seven_day_opus // {}) | select(.utilization != null) | ["Opus", .utilization, (.resets_at // .reset_at // "")] | @tsv),
+        (.limits[]? | select(.percent != null) | [(.scope.model.display_name // .name // "model limit"), .percent, (.resets_at // "")] | @tsv)
+    ' <<<"$quota")
+
+    requests=$(jq -r '.requests // 0' <<<"$counters")
+    input=$(jq -r '.input_tokens // 0' <<<"$counters")
+    output=$(jq -r '.output_tokens // 0' <<<"$counters")
+    tooltip+=$'\n  '"Observed: $requests requests, $(human_count "$input") input + $(human_count "$output") output tokens"
+
+    if [ "$quota_status" != "200" ]; then
+        if [ "$quota_scope_denied" = "true" ]; then
+            tooltip+=$'\n  '"Detailed quota: unavailable — token lacks user:profile scope"
+            tooltip+=$'\n  '"Fix: re-authenticate this account with Claude Code, then replace its ~/cctoken entry"
+        elif [ -n "$quota_retry_until" ]; then
+            tooltip+=$'\n  '"Detailed quota API: rate-limited until $(reset_text "$quota_retry_until")"
+        else
+            reason="${quota_error:-no detailed quota response}"
+            tooltip+=$'\n  '"Detailed quota API: HTTP ${quota_status:-unknown} — $reason"
+        fi
+    fi
+    [ "$valid" = "true" ] || tooltip+=$'\n  '"Proxy state: parked/unusable"
+    [ -n "$cooldown_until" ] && tooltip+=$'\n  '"Retry cooldown until: $(reset_text "$cooldown_until")"
+
+    if [ -n "$weekly_pct" ]; then
+        if [ -z "$max_weekly" ] || [ "$weekly_pct" -gt "$max_weekly" ]; then
+            max_weekly="$weekly_pct"
+        fi
+    fi
+done < <(echo "$DATA" | jq -r '.tokens[] | [
+    (.fp // "-"), (.label // "-"), (.valid|tostring),
+    ((.u5 // "-")|tostring), ((.u7 // "-")|tostring),
+    (.u5_reset // "-"), (.u7_reset // "-"),
+    ((.u7_oi // "-")|tostring), (.u7_oi_reset // "-"),
+    (.cooldown_until // "-"), ((.quota_status // "-")|tostring),
+    (if (.quota_error // "") == "" then "-" else .quota_error end),
+    (.quota_retry_until // "-"), ((.quota_scope_denied // "-")|tostring),
+    ((.quota // {})|tojson), ((.counters // {})|tojson)
+] | @tsv')
+
+if [ -z "$max_weekly" ]; then
+    class="error"
+    text="CC ?"
+    percentage=0
+elif [ "$max_weekly" -ge 90 ]; then
+    class="critical"
+    text="CC ${max_weekly}%"
+    percentage="$max_weekly"
+elif [ "$max_weekly" -ge 60 ]; then
+    class="warning"
+    text="CC ${max_weekly}%"
+    percentage="$max_weekly"
+else
+    class="normal"
+    text="CC ${max_weekly}%"
+    percentage="$max_weekly"
 fi
 
-# Build tooltip lines
-T1="Weekly (all models): ${weekly_pct}%  — resets ${weekly_reset_fmt}"
-T2="5-hour window:       ${fiveh_pct}%  — resets ${fiveh_reset_fmt}"
-T3=""
-[ -n "$sonnet_pct" ] && T3="${T3}Weekly Sonnet:       ${sonnet_pct}%"$'\n'
-[ -n "$opus_pct"   ] && T3="${T3}Weekly Opus:         ${opus_pct}%"$'\n'
-TOOLTIP="${T1}"$'\n'"${T2}"$'\n'"${T3%$'\n'}"
-
-jq -cn \
-    --arg text "󱙺 ${weekly_pct}%" \
-    --arg tooltip "$TOOLTIP" \
-    --arg class "$CLASS" \
-    --argjson pct "$weekly_pct" \
-    '{"text":$text,"tooltip":$tooltip,"class":$class,"percentage":$pct}'
+jq -cn --arg text "$text" --arg tooltip "$tooltip" --arg class "$class" \
+    --argjson percentage "$percentage" \
+    '{text:$text,tooltip:$tooltip,class:$class,percentage:$percentage}'

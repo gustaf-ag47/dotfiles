@@ -22,8 +22,11 @@ label each token with its account email.
 
 Token values are never logged; rows are identified by a short SHA-256 fingerprint.
 
-`GET /_status` returns the live pool as JSON (fingerprints, utilization, validity)
-without touching upstream.
+`GET /_status` returns the live pool as JSON (fingerprints, utilization, validity,
+retry cooldowns, quota status, and local response counters) without touching upstream.
+`GET /_usage` is the same redacted per-token view intended for Waybar and scripts.
+The proxy refreshes the read-only `/api/oauth/usage` endpoint every five minutes;
+OAuth scope failures are reported per token and never invalidate inference.
 
 Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
 CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
@@ -55,7 +58,9 @@ SEED = os.environ.get("CC_PROXY_SEED", "1") != "0"
 MIN_VALID = int(os.environ.get("CC_PROXY_MIN_VALID", "2"))
 WATCH_INTERVAL = float(os.environ.get("CC_PROXY_WATCH_INTERVAL", "30"))
 REVALIDATE_INTERVAL = float(os.environ.get("CC_PROXY_REVALIDATE_INTERVAL", "600"))
+USAGE_INTERVAL = float(os.environ.get("CC_PROXY_USAGE_INTERVAL", "300"))
 CONTROL_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-proxy"
+USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
 FAILOVER_STATUSES = {401, 403, 429, 529}
@@ -113,12 +118,30 @@ class Tok:
         self.fp = fp(token)
         self.u5: float | None = None
         self.u7: float | None = None
+        self.u7_oi: float | None = None
+        self.u5_reset: str | None = None
+        self.u7_reset: str | None = None
+        self.u7_oi_reset: str | None = None
+        self.unified_status: str | None = None
         self.cooldown_until = 0.0
         self.valid = True
         self.last_status: int | None = None
         self.label = ""
         self.invalid_since = 0.0
         self.last_revalidate = 0.0
+        self.quota: dict | None = None
+        self.quota_status: int | None = None
+        self.quota_error = ""
+        self.quota_checked_at = 0.0
+        self.quota_retry_until = 0.0
+        self.quota_scope_denied = False
+        self.requests = 0
+        self.responses = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+        self.by_model: dict[str, dict[str, int]] = {}
 
     def name(self) -> str:
         return f"{self.fp} ({self.label})" if self.label else self.fp
@@ -131,9 +154,33 @@ class Tok:
             "valid": self.valid,
             "u5": self.u5,
             "u7": self.u7,
+            "u7_oi": self.u7_oi,
+            "u5_reset": self.u5_reset,
+            "u7_reset": self.u7_reset,
+            "u7_oi_reset": self.u7_oi_reset,
+            "unified_status": self.unified_status,
             "last_status": self.last_status,
             "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
+            "cooldown_until": datetime.fromtimestamp(self.cooldown_until, timezone.utc).isoformat()
+            if self.cooldown_until > now else None,
             "forced_down": self.fp in forced_cooldown_fps(),
+            "quota": self.quota,
+            "quota_status": self.quota_status,
+            "quota_error": self.quota_error,
+            "quota_checked_at": datetime.fromtimestamp(self.quota_checked_at, timezone.utc).isoformat()
+            if self.quota_checked_at else None,
+            "quota_retry_until": datetime.fromtimestamp(self.quota_retry_until, timezone.utc).isoformat()
+            if self.quota_retry_until > now else None,
+            "quota_scope_denied": self.quota_scope_denied,
+            "counters": {
+                "requests": self.requests,
+                "responses": self.responses,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "cache_read_input_tokens": self.cache_read_input_tokens,
+                "cache_creation_input_tokens": self.cache_creation_input_tokens,
+                "by_model": self.by_model,
+            },
         }
 
 
@@ -141,6 +188,55 @@ STATE: list[Tok] = []
 LOCK = threading.Lock()
 TOKEN_FILE = ""
 FILE_MTIME = 0.0
+PERSISTENCE_ERROR: str | None = None
+
+
+def load_usage_state() -> dict:
+    try:
+        data = json.loads(USAGE_STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_usage_state() -> bool:
+    """Persist counters best-effort; telemetry must never break inference."""
+    global PERSISTENCE_ERROR
+    try:
+        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        data = {t.fp: {
+            "requests": t.requests,
+            "responses": t.responses,
+            "input_tokens": t.input_tokens,
+            "output_tokens": t.output_tokens,
+            "cache_read_input_tokens": t.cache_read_input_tokens,
+            "cache_creation_input_tokens": t.cache_creation_input_tokens,
+            "by_model": t.by_model,
+        } for t in STATE}
+        tmp = USAGE_STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        tmp.replace(USAGE_STATE_FILE)
+    except OSError as exc:
+        error = f"{exc.__class__.__name__}: {exc}"
+        if error != PERSISTENCE_ERROR:
+            log(f"WARNING: usage counters could not be persisted ({error}); continuing without persistence")
+            PERSISTENCE_ERROR = error
+        return False
+    if PERSISTENCE_ERROR is not None:
+        log("usage counter persistence recovered")
+        PERSISTENCE_ERROR = None
+    return True
+
+
+def restore_usage_state() -> None:
+    data = load_usage_state()
+    for tok in STATE:
+        saved = data.get(tok.fp, {})
+        for key in ("requests", "responses", "input_tokens", "output_tokens",
+                    "cache_read_input_tokens", "cache_creation_input_tokens"):
+            setattr(tok, key, int(saved.get(key, 0) or 0))
+        models = saved.get("by_model", {})
+        tok.by_model = models if isinstance(models, dict) else {}
 
 
 def _hdr_float(headers, name: str) -> float | None:
@@ -148,6 +244,19 @@ def _hdr_float(headers, name: str) -> float | None:
     try:
         return float(val) if val is not None else None
     except (TypeError, ValueError):
+        return None
+
+
+def _hdr_epoch(headers, name: str) -> str | None:
+    val = headers.get(name)
+    try:
+        epoch = float(val) if val is not None else 0
+        if epoch <= 0:
+            return None
+        if epoch < 1e12:
+            epoch *= 1000
+        return datetime.fromtimestamp(epoch / 1000, timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -173,10 +282,139 @@ def retry_after_seconds(headers, default: float = 60.0) -> float:
 def update_from_headers(tok: Tok, headers) -> None:
     u5 = _hdr_float(headers, "anthropic-ratelimit-unified-5h-utilization")
     u7 = _hdr_float(headers, "anthropic-ratelimit-unified-7d-utilization")
+    u7_oi = _hdr_float(headers, "anthropic-ratelimit-unified-7d_oi-utilization")
     if u5 is not None:
         tok.u5 = u5
     if u7 is not None:
         tok.u7 = u7
+    if u7_oi is not None:
+        tok.u7_oi = u7_oi
+    tok.u5_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-5h-reset") or tok.u5_reset
+    tok.u7_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-7d-reset") or tok.u7_reset
+    tok.u7_oi_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-7d_oi-reset") or tok.u7_oi_reset
+    status = headers.get("anthropic-ratelimit-unified-7d-status")
+    if status:
+        tok.unified_status = status
+
+
+def request_model(body: bytes) -> str:
+    try:
+        model = json.loads(body).get("model")
+        return str(model) if model else "unknown"
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
+def record_request(tok: Tok, model: str) -> None:
+    tok.requests += 1
+    bucket = tok.by_model.setdefault(model, {
+        "requests": 0, "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    })
+    bucket["requests"] += 1
+    with LOCK:
+        save_usage_state()
+
+
+def add_usage(tok: Tok, model: str, usage: dict) -> None:
+    """Record usage reported by a JSON or SSE response, if present."""
+    if not isinstance(usage, dict):
+        return
+    values = {
+        key: int(usage.get(key, 0) or 0)
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                    "cache_creation_input_tokens")
+    }
+    if not any(values.values()):
+        return
+    for key, value in values.items():
+        setattr(tok, key, getattr(tok, key) + value)
+    bucket = tok.by_model.setdefault(model, {
+        "requests": 0, "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    })
+    for key, value in values.items():
+        bucket[key] += value
+    with LOCK:
+        save_usage_state()
+
+
+def usage_from_json(body: bytes) -> dict | None:
+    try:
+        data = json.loads(body)
+        return data.get("usage") if isinstance(data, dict) else None
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def usage_from_sse_line(line: bytes) -> dict | None:
+    if not line.startswith(b"data:"):
+        return None
+    raw = line[5:].strip()
+    if not raw or raw == b"[DONE]":
+        return None
+    try:
+        event = json.loads(raw)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+    if event.get("type") == "message_start":
+        return event.get("message", {}).get("usage")
+    if event.get("type") == "message_delta":
+        return event.get("usage")
+    return None
+
+
+def fetch_oauth_usage(tok: Tok) -> None:
+    """Read subscription quota without spending message quota.
+
+    This endpoint can legitimately return 403 for narrowly-scoped OAuth tokens;
+    that must never park the token for normal /v1/messages traffic. Scope-denied
+    tokens are not retried until the token file changes; 429s honor Retry-After.
+    """
+    if tok.quota_scope_denied or time.time() < tok.quota_retry_until:
+        return
+    try:
+        conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=15)
+        conn.request("GET", "/api/oauth/usage", headers={
+            "Authorization": f"Bearer {tok.token}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "accept": "application/json",
+            "content-type": "application/json",
+            "anthropic-dangerous-direct-browser-access": "true",
+            "x-app": "cli",
+            "user-agent": "claude-code/2.1.83",
+        })
+        response = conn.getresponse()
+        body = response.read(2 * 1024 * 1024)
+        conn.close()
+        with LOCK:
+            tok.quota_status = response.status
+            tok.quota_checked_at = time.time()
+            if response.status == 200:
+                try:
+                    parsed = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    parsed = None
+                tok.quota = parsed if isinstance(parsed, dict) else None
+                tok.quota_error = "" if tok.quota is not None else "invalid JSON"
+            else:
+                tok.quota = None
+                try:
+                    error = json.loads(body)
+                    tok.quota_error = error.get("error", {}).get("message", "")
+                except (ValueError, UnicodeDecodeError):
+                    tok.quota_error = body.decode("utf-8", "replace")[:200]
+                if response.status == 403 and "scope" in tok.quota_error.lower():
+                    tok.quota_scope_denied = True
+                if response.status == 429:
+                    tok.quota_retry_until = time.time() + retry_after_seconds(response.headers, 1800)
+        log(f"usage {tok.name()}: HTTP {response.status}")
+    except Exception as exc:
+        with LOCK:
+            tok.quota_status = None
+            tok.quota_checked_at = time.time()
+            tok.quota_error = exc.__class__.__name__
+        log(f"usage {tok.name()}: error {exc.__class__.__name__}")
 
 
 def forced_cooldown_fps() -> set[str]:
@@ -184,6 +422,55 @@ def forced_cooldown_fps() -> set[str]:
         return set((CONTROL_DIR / "force_cooldown").read_text(encoding="utf-8").split())
     except OSError:
         return set()
+
+
+def percent(value) -> str:
+    try:
+        return f"{float(value):.0f}%"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def quota_bucket_text(quota: dict | None, key: str) -> str:
+    bucket = quota.get(key) if isinstance(quota, dict) else None
+    if not isinstance(bucket, dict):
+        return "unknown"
+    used = bucket.get("utilization", bucket.get("used_percentage"))
+    reset = bucket.get("resets_at", bucket.get("reset_at"))
+    suffix = f", reset {reset}" if reset else ""
+    return f"{percent(used)} used{suffix}"
+
+
+def unavailable_message() -> str:
+    """Explain every account when a request cannot be routed."""
+    now = time.time()
+    forced = forced_cooldown_fps()
+    lines = [
+        "Claude subscription request unavailable: no OAuth account can serve it right now.",
+        "Account status:",
+    ]
+    for tok in STATE:
+        if tok.fp in forced:
+            state = "forced offline"
+        elif not tok.valid:
+            state = f"parked (last HTTP {tok.last_status or 'unknown'})"
+        elif now < tok.cooldown_until:
+            until = datetime.fromtimestamp(tok.cooldown_until, timezone.utc).isoformat()
+            state = f"cooldown until {until}"
+        else:
+            state = "available"
+        quota = tok.quota
+        if quota is not None:
+            usage = f"weekly {quota_bucket_text(quota, 'seven_day')}; 5-hour {quota_bucket_text(quota, 'five_hour')}"
+        else:
+            weekly = percent(tok.u7 * 100) if tok.u7 is not None else "unknown"
+            five_hour = percent(tok.u5 * 100) if tok.u5 is not None else "unknown"
+            usage = f"weekly {weekly} (header); 5-hour {five_hour} (header)"
+        lines.append(f"- {tok.name()}: {state}; {usage}")
+        if tok.quota_error:
+            lines.append(f"  detailed quota unavailable: {tok.quota_error}")
+    lines.append("Run `claude-usage` for the full account report and reset times.")
+    return "\n".join(lines)
 
 
 def health_warn(reason: str) -> None:
@@ -234,8 +521,9 @@ def sync_tokens(path: str) -> bool:
 
 
 def watchdog(path: str) -> None:
-    """Hot-reload the token file on change and re-probe parked tokens periodically."""
+    """Reload tokens, refresh passive quota, and re-probe parked tokens."""
     global FILE_MTIME
+    next_usage = 0.0
     while True:
         time.sleep(WATCH_INTERVAL)
         try:
@@ -248,10 +536,17 @@ def watchdog(path: str) -> None:
                 added = sync_tokens(path)
             if added:
                 seed(only_new=True)
+                for tok in list(STATE):
+                    if tok.quota_checked_at == 0:
+                        fetch_oauth_usage(tok)
             with LOCK:
                 check_health("after token-file reload")
 
         now = time.time()
+        if now >= next_usage:
+            for tok in list(STATE):
+                fetch_oauth_usage(tok)
+            next_usage = now + USAGE_INTERVAL
         with LOCK:
             stale = [t for t in STATE
                      if not t.valid and now - t.last_revalidate >= REVALIDATE_INTERVAL]
@@ -318,14 +613,31 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             toks = [t.snapshot() for t in STATE]
             usable = len([t for t in STATE if t.valid])
+            now = time.time()
+            forced = forced_cooldown_fps()
+            available = len([t for t in STATE if t.valid
+                             and t.fp not in forced and now >= t.cooldown_until])
         self._send_json(200, {
             "tokens": toks,
             "usable": usable,
+            "available": available,
             "total": len(toks),
             "min_valid": MIN_VALID,
             "degraded": usable < MIN_VALID,
             "threshold": ROTATE_THRESHOLD,
+            "usage_interval": USAGE_INTERVAL,
+            "usage_state_file": str(USAGE_STATE_FILE),
             "token_file": TOKEN_FILE,
+        })
+
+    def _usage_page(self) -> None:
+        with LOCK:
+            toks = [t.snapshot() for t in STATE]
+        self._send_json(200, {
+            "schema": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "tokens": toks,
+            "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses",
         })
 
     def _forward_headers(self) -> dict:
@@ -344,6 +656,7 @@ class Handler(BaseHTTPRequestHandler):
         tried: set[str] = set()
         valid_count = len([t for t in STATE if t.valid])
         endpoint = self.path.split("?", 1)[0]
+        model = request_model(body)
 
         for _ in range(max(1, valid_count + 1)):
             with LOCK:
@@ -354,15 +667,11 @@ class Handler(BaseHTTPRequestHandler):
                         f"{t.name()}[{'parked' if not t.valid else 'forced' if t.fp in forced_cooldown_fps() else 'cooling'}"
                         f" u7={t.u7}]" for t in STATE)
                     log(f"WARNING: request rejected — no token pickable: {detail}")
-                self._send_api_error(
-                    503,
-                    "claude-token-proxy: no token with quota available (all parked, "
-                    "cooled down, or over threshold). Check `curl localhost:8788/_status`.",
-                    "overloaded_error",
-                )
+                self._send_api_error(503, unavailable_message(), "overloaded_error")
                 return
             try:
                 conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
+                record_request(tok, model)
             except Exception as exc:  # network error -> try next token
                 log(f"{self.command} {endpoint} -> token {tok.fp} ERROR {exc.__class__.__name__}")
                 tried.add(tok.fp)
@@ -371,9 +680,13 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 update_from_headers(tok, resp.headers)
                 tok.last_status = resp.status
+                tok.responses += 1
+                save_usage_state()
                 if resp.status == 429:
                     tok.cooldown_until = time.time() + retry_after_seconds(resp.headers)
-                elif resp.status in (401, 403):
+                else:
+                    tok.cooldown_until = 0.0
+                if resp.status in (401, 403):
                     if tok.valid:
                         tok.invalid_since = time.time()
                         log(f"token {tok.name()} parked: upstream {resp.status}")
@@ -393,21 +706,29 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                 continue
 
-            self._stream(resp)
+            self._stream(resp, tok, model)
             conn.close()
             return
 
         self._send_api_error(502, "claude-token-proxy: all tokens failed or exhausted")
 
     def do_GET(self):
-        if self.path.split("?", 1)[0] in ("/_status", "/_health"):
+        endpoint = self.path.split("?", 1)[0]
+        if endpoint in ("/_status", "/_health"):
             self._status_page()
+            return
+        if endpoint == "/_usage":
+            self._usage_page()
             return
         self._proxy()
 
     do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
 
-    def _stream(self, resp):
+    def _stream(self, resp, tok: Tok, model: str):
+        content_type = resp.getheader("content-type", "")
+        is_json = "text/event-stream" not in content_type.lower()
+        captured = bytearray()
+        sse_remainder = b""
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() in HOP_BY_HOP or k.lower() == "content-length":
@@ -419,11 +740,25 @@ class Handler(BaseHTTPRequestHandler):
             chunk = resp.read(8192)
             if not chunk:
                 break
+            if is_json:
+                if len(captured) < 4 * 1024 * 1024:
+                    captured.extend(chunk[:4 * 1024 * 1024 - len(captured)])
+            else:
+                sse_remainder += chunk
+                while b"\n" in sse_remainder:
+                    line, sse_remainder = sse_remainder.split(b"\n", 1)
+                    usage = usage_from_sse_line(line.rstrip(b"\r"))
+                    if usage:
+                        add_usage(tok, model, usage)
             try:
                 self.wfile.write(chunk)
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 break
+        if is_json:
+            usage = usage_from_json(bytes(captured))
+            if usage:
+                add_usage(tok, model, usage)
 
 
 def probe(tok: Tok, note: str = "seed") -> None:
@@ -446,6 +781,10 @@ def probe(tok: Tok, note: str = "seed") -> None:
         with LOCK:
             update_from_headers(tok, r.headers)
             tok.last_status = r.status
+            if r.status == 429:
+                tok.cooldown_until = time.time() + retry_after_seconds(r.headers)
+            else:
+                tok.cooldown_until = 0.0
             if r.status in (401, 403):
                 if tok.valid:
                     tok.invalid_since = time.time()
@@ -489,7 +828,13 @@ def main() -> int:
         print(f"no sk-ant-oat tokens found in {TOKEN_FILE}", file=sys.stderr)
         return 1
 
+    restore_usage_state()
     log(f"loaded {len(STATE)} token(s): {[t.name() for t in STATE]}")
+    # This is read-only and supplies reset/model-specific buckets when the
+    # OAuth token has the required scope. Scope failures are recorded in /_usage
+    # but do not invalidate the token for normal inference.
+    for tok in list(STATE):
+        fetch_oauth_usage(tok)
     if SEED:
         seed()
         check_health("after startup probe")
@@ -499,7 +844,8 @@ def main() -> int:
     threading.Thread(target=watchdog, args=(TOKEN_FILE,), daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     log(f"listening on http://127.0.0.1:{args.port} threshold={ROTATE_THRESHOLD} "
-        f"watch={WATCH_INTERVAL}s revalidate={REVALIDATE_INTERVAL}s status=/_status")
+        f"watch={WATCH_INTERVAL}s usage={USAGE_INTERVAL}s revalidate={REVALIDATE_INTERVAL}s "
+        "status=/_status usage=/_usage")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

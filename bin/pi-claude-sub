@@ -39,6 +39,13 @@ proxy_listening() {
 	timeout 1 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null
 }
 
+proxy_available() {
+	local available
+	available=$(curl -fsS --max-time 2 "$PROXY_URL/_status" 2>/dev/null \
+		| jq -r '.available // 0' 2>/dev/null || printf '0')
+	[ "$available" -gt 0 ] 2>/dev/null
+}
+
 use_proxy=false
 case "$PROXY_MODE" in
 0 | off | no | false) ;;
@@ -59,6 +66,15 @@ esac
 ext_args=(-e "$EXT")
 
 if [ "$use_proxy" = true ]; then
+	show_help=false
+	for arg in "$@"; do
+		case "$arg" in
+			-h|--help|--version|-v) show_help=true ;;
+		esac
+	done
+	if [ "$show_help" != true ]; then
+		proxy_available || die "claude-token-proxy is running but no OAuth token is currently available; run claude-usage for per-account reset times"
+	fi
 	ext_args+=(-e "$PROXY_EXT")
 	# Placeholder only; the proxy drops this and injects a live credential.
 	cred="sk-ant-oat01-proxy-injects-the-real-credential"
