@@ -17,18 +17,27 @@ if [ -n "$missing" ]; then
 	exit 1
 fi
 
-source "config/zsh/.zshenv"
+# Resolve relative to this script, not $PWD: `bash ~/dotfiles/scripts/install.sh`
+# from any other directory used to die with "config/zsh/.zshenv: No such file".
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091  # sourced at runtime; path is resolved from $REPO_ROOT
+source "$REPO_ROOT/config/zsh/.zshenv"
 
 if [ -d "$DOTFILES/bin" ] && [ -d "$DOTFILES/config" ] && [ -f "$DOTFILES/Makefile" ]; then
 	echo "Dotfiles are correctly located at $DOTFILES."
 else
 	mkdir -p "$DOTFILES"
 	echo "Dotfiles not found or incomplete at $DOTFILES."
-	ORIGINAL="$(pwd)"
-	rsync -av . "$DOTFILES"
+	ORIGINAL="$REPO_ROOT"
+	rsync -av "$ORIGINAL/" "$DOTFILES"
 	echo "Dotfiles installed at $DOTFILES."
 	cd "$DOTFILES"
-	rm -rf "$ORIGINAL"
+	# Only remove the staging clone, and only if it is genuinely somewhere else.
+	# Without this guard an incomplete tree already at $DOTFILES rsyncs onto
+	# itself and then deletes itself.
+	if [ -n "${ORIGINAL:-}" ] && [ "$ORIGINAL" != "$DOTFILES" ]; then
+		rm -rf "$ORIGINAL"
+	fi
 fi
 
 mkdir -p "$XDG_CONFIG_HOME"
@@ -50,13 +59,39 @@ if [ ! -L "$DOTFILES/local" ]; then
 	echo "✅ Local configurations will be stored in $SYNC/dotfiles-local"
 fi
 
+# Idempotent and non-destructive.
+#
+#   - an already-correct symlink is a no-op (so re-running touches nothing)
+#   - a real file/dir in the way is BACKED UP, never deleted. The old
+#     `rm -rf "$dst"` was the ShellCheck SC2115 shape that wiped home
+#     directories in the Steam incident, and it silently destroyed any real
+#     directory a user had at the target.
+#   - `ln -sfn`, not `ln -sf`: without -n, pointing a directory link at an
+#     existing symlink-to-directory creates the link INSIDE the target
+#     (~/.config/nvim/nvim) instead of replacing it.
 link_config() {
 	local src=$1 dst=$2
-	rm -rf "$dst"
-	ln -sf "$src" "$dst"
+	if [ ! -e "$src" ]; then
+		echo "  warning: missing source $src, skipping" >&2
+		return 0
+	fi
+	if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
+		return 0
+	fi
+	if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+		local backup
+		backup="$dst.bak.$(date +%Y%m%d%H%M%S)"
+		echo "  backing up existing $dst -> $backup"
+		mv "$dst" "$backup"
+	fi
+	mkdir -p "$(dirname "$dst")"
+	ln -sfn "$src" "$dst"
 }
 
-rm -rf "$ZDOTDIR"
+# NOTE: do NOT `rm -rf "$ZDOTDIR"` here. HISTFILE is $ZDOTDIR/.zhistory, so
+# that wiped the entire zsh history on every `make install`, along with
+# .zcompdump and the cloned plugins (forcing a re-clone, and making the
+# install pointlessly depend on the network).
 mkdir -p "$ZDOTDIR"
 link_config "$DOTFILES/config/zsh/.zshenv" "$HOME/.zshenv"
 # Also link into $ZDOTDIR: a login shell reads $HOME/.zshenv (ZDOTDIR unset),
@@ -112,8 +147,10 @@ if command -v systemctl >/dev/null 2>&1; then
 	systemctl --user enable --now claude-token-proxy.service 2>/dev/null || true
 fi
 
-rm -rf "$XDG_CONFIG_HOME/transmission-daemon"
-mkdir "$XDG_CONFIG_HOME/transmission-daemon"
+# mkdir -p, not rm -rf + mkdir: transmission keeps its runtime state (stats,
+# resume files, torrent list) in this directory and wiping it every install
+# loses all of it.
+mkdir -p "$XDG_CONFIG_HOME/transmission-daemon"
 link_config "$DOTFILES/config/transmission/settings.json" "$XDG_CONFIG_HOME/transmission-daemon/settings.json"
 link_config "$DOTFILES/config/newsboat" "$XDG_CONFIG_HOME/newsboat"
 link_config "$DOTFILES/config/pulsemixer" "$XDG_CONFIG_HOME/pulsemixer"
