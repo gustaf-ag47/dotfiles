@@ -1,0 +1,118 @@
+name: dotfiles
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly drift canary. Deliberately NOT on the hour: GitHub delays and can
+    # silently drop scheduled runs during the high-load window at :00.
+    # NOTE: on a public repo, scheduled workflows are auto-disabled after 60
+    # days with no repository activity. If this repo goes quiet, re-enable it
+    # under Actions -> dotfiles -> Enable workflow.
+    - cron: "23 5 * * 1"
+
+concurrency:
+  group: dotfiles-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: shellcheck + bash -n
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: bash -n on every shell script
+        run: |
+          rc=0
+          while IFS= read -r f; do
+            head -1 "$f" | grep -qE '^#!.*(bash|sh)' || continue
+            if bash -n "$f"; then echo "ok   $f"; else echo "FAIL $f"; rc=1; fi
+          done < <(find bin scripts tests config/git/hooks -type f 2>/dev/null)
+          exit $rc
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --version
+          # -x follows sourced files. Installer-critical rules are errors:
+          # SC2115 (rm -rf on a maybe-empty var), SC2086/SC2046 (unquoted
+          # expansion feeding rm/ln), SC2164 (unguarded cd).
+          shellcheck -x -S warning scripts/*.sh tests/*.sh
+
+  unit:
+    name: python unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - run: make test-unit
+
+  install:
+    name: make install on archlinux (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # `latest` is the drift canary: it is meant to break when upstream
+        # moves, which is the entire point of the weekly run.
+        image: ["archlinux:latest"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run the real installer on a fresh Arch container
+        run: |
+          # --pull=always defeats any stale local image so the weekly run
+          # genuinely tests today's Arch.
+          docker run --rm --pull=always -v "$PWD:/src:ro" ${{ matrix.image }} bash -c '
+            set -e
+            pacman -Syu --noconfirm --needed \
+              base-devel git rsync zsh tmux neovim curl fzf sudo python jq >/dev/null
+            useradd -m -G wheel tester
+            install -d -o tester -g tester /home/tester/sync/src
+            rsync -a --exclude .git --exclude local /src/ /home/tester/sync/src/dotfiles/
+            chown -R tester:tester /home/tester/sync
+            su - tester -c "cd ~/sync/src/dotfiles && make install"
+            su - tester -c "cd ~/sync/src/dotfiles && bash tests/install-assertions.sh"
+            su - tester -c "cd ~/sync/src/dotfiles && bash tests/idempotency.sh"
+          '
+
+  # Opens/updates a single tracking issue when the weekly canary breaks, so a
+  # scheduled failure is not just a red dot nobody sees.
+  notify:
+    name: report weekly failure
+    if: failure() && github.event_name == 'schedule'
+    needs: [lint, unit, install]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const title = 'Weekly dotfiles install canary is failing';
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `The scheduled \`dotfiles\` workflow failed.\n\nRun: ${url}\n\nThis usually means upstream Arch moved: a package was renamed or dropped, or a new dependency is needed.`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'ci-canary',
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['ci-canary'],
+              });
+            }
