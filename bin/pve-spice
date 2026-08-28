@@ -1,0 +1,41 @@
+#!/bin/bash
+# Open a Proxmox VM's SPICE console in remote-viewer.
+#
+# Proxmox mints a ONE-TIME, short-lived SPICE ticket, so the .vv file must be
+# regenerated for every connection -- you cannot save and reuse it.
+#
+# It also emits `proxy=http://<node-hostname>:3128`. That hostname usually only
+# resolves on the Proxmox host's own network (here: pve.home.arpa), so we
+# rewrite it to the address we actually reached the API on.
+#
+# Usage: pve-spice <vmid> [pve-host] [node-name]
+set -euo pipefail
+
+VMID="${1:?usage: pve-spice <vmid> [pve-host] [node-name]}"
+PVE_HOST="${2:-${PVE_HOST:-192.168.1.122}}"
+NODE="${3:-${PVE_NODE:-pve}}"
+SSH="ssh -F /dev/null -o BatchMode=yes"
+
+command -v remote-viewer >/dev/null 2>&1 || {
+	echo "error: remote-viewer not found (pacman -S virt-viewer)" >&2
+	exit 1
+}
+
+vv="$(mktemp -t "spice-${VMID}-XXXXXX.vv")"
+trap 'rm -f "$vv"' EXIT
+
+$SSH "root@$PVE_HOST" \
+	"pvesh create /nodes/$NODE/qemu/$VMID/spiceproxy --output-format json" |
+	PVE_HOST="$PVE_HOST" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+host = os.environ["PVE_HOST"]
+# Point the proxy at the address we can actually resolve/reach.
+d["proxy"] = f"http://{host}:3128"
+print("[virt-viewer]")
+for k, v in d.items():
+    print(f"{k}={v}")
+' >"$vv"
+
+echo "connecting to VM $VMID on $PVE_HOST ..."
+exec remote-viewer "$vv"
