@@ -4,6 +4,19 @@ echo "Bootstrap script"
 
 set -euo pipefail
 
+# Fail loudly and early on missing tools. Without this, a fresh machine gets a
+# bare "rsync: command not found" from line 15 after the repo is already cloned,
+# and `make install` dies with an opaque exit 127.
+missing=""
+for dep in git rsync; do
+	command -v "$dep" >/dev/null 2>&1 || missing="$missing $dep"
+done
+if [ -n "$missing" ]; then
+	echo "error: missing required tools:$missing" >&2
+	echo "install them first, e.g.: sudo pacman -S --needed$missing" >&2
+	exit 1
+fi
+
 source "config/zsh/.zshenv"
 
 if [ -d "$DOTFILES/bin" ] && [ -d "$DOTFILES/config" ] && [ -f "$DOTFILES/Makefile" ]; then
