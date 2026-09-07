@@ -1,0 +1,222 @@
+#!/bin/bash
+# bootstrap-kit -- build and unlock the tier-0 bootstrap kit.
+#
+# The kit is a tar archive, age-encrypted to SEVERAL recipients, safe to commit
+# to a public repo (ciphertext only). It carries the minimum a blank machine
+# needs to become a member of the fleet: Syncthing identity, SSH keys, tokens.
+# Everything else arrives afterwards via Syncthing/restic.
+#
+# PORTS AND ADAPTERS
+# ------------------
+# "Unlock" is a port with interchangeable adapters. age's multi-recipient
+# encryption means the SAME ciphertext opens with any enrolled identity, so an
+# adapter is just "which identity do I hand to age -d". No abstraction layer,
+# no re-encryption when swapping.
+#
+#   file        a plain age identity file        <- FAKE, for tests and CI
+#   yubikey     age-plugin-yubikey (PIV)         <- PRODUCTION
+#   passphrase  age -p scrypt recipient          <- RECOVERY / break-glass
+#
+# Select with BOOTSTRAP_ADAPTER=file|yubikey|passphrase, or leave unset to
+# auto-detect (yubikey if one is present, else file if an identity exists).
+#
+# Usage:
+#   bootstrap-kit build   [-o kit.age]     build kit from the manifest
+#   bootstrap-kit unlock  <kit.age> <dest> decrypt and extract, preserving modes
+#   bootstrap-kit verify  <kit.age>        prove the current adapter can decrypt
+#   bootstrap-kit adapters                 show adapters and what is available
+set -euo pipefail
+
+DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
+SECRETS_DIR="${BOOTSTRAP_SECRETS_DIR:-$DOTFILES/secrets}"
+RECIPIENTS_FILE="${BOOTSTRAP_RECIPIENTS:-$SECRETS_DIR/recipients.txt}"
+MANIFEST_FILE="${BOOTSTRAP_MANIFEST:-$SECRETS_DIR/kit-manifest.txt}"
+# Adapter-specific identity locations.
+FILE_IDENTITY="${BOOTSTRAP_FILE_IDENTITY:-$SECRETS_DIR/test-identity.txt}"
+YUBIKEY_IDENTITY="${BOOTSTRAP_YUBIKEY_IDENTITY:-$SECRETS_DIR/yubikey-identity.txt}"
+
+die() {
+	echo "bootstrap-kit: $*" >&2
+	exit 1
+}
+info() { echo "  $*" >&2; }
+
+need() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; }
+
+# --- the port -------------------------------------------------------------
+
+# A YubiKey counts as present only if a PIV-capable device answers. pcscd must
+# be running; a dead pcscd looks identical to "no key" otherwise.
+yubikey_present() {
+	command -v age-plugin-yubikey >/dev/null 2>&1 || return 1
+	age-plugin-yubikey --list >/dev/null 2>&1
+}
+
+detect_adapter() {
+	if [ -n "${BOOTSTRAP_ADAPTER:-}" ]; then
+		echo "$BOOTSTRAP_ADAPTER"
+		return
+	fi
+	if yubikey_present && [ -s "$YUBIKEY_IDENTITY" ]; then
+		echo yubikey
+	elif [ -s "$FILE_IDENTITY" ]; then
+		echo file
+	else
+		echo none
+	fi
+}
+
+# Emit the `age -d` identity arguments for the selected adapter.
+# Kept as a single seam so swapping fake -> YubiKey touches nothing else.
+adapter_decrypt_args() {
+	local adapter=$1
+	case "$adapter" in
+	file)
+		[ -s "$FILE_IDENTITY" ] || die "file adapter: no identity at $FILE_IDENTITY"
+		printf '%s\n%s\n' -i "$FILE_IDENTITY"
+		;;
+	yubikey)
+		yubikey_present || die "yubikey adapter: no PIV device (is pcscd running?)"
+		[ -s "$YUBIKEY_IDENTITY" ] || die "yubikey adapter: no identity at $YUBIKEY_IDENTITY
+run: age-plugin-yubikey --generate --pin-policy once --touch-policy always"
+		printf '%s\n%s\n' -i "$YUBIKEY_IDENTITY"
+		;;
+	passphrase)
+		# age prompts for the passphrase; no identity file involved.
+		;;
+	none) die "no adapter available: no YubiKey identity and no file identity
+set BOOTSTRAP_ADAPTER, or create one (see: bootstrap-kit adapters)" ;;
+	*) die "unknown adapter: $adapter (want: file|yubikey|passphrase)" ;;
+	esac
+}
+
+# --- commands -------------------------------------------------------------
+
+cmd_adapters() {
+	local cur
+	cur=$(detect_adapter)
+	echo "selected: $cur"
+	echo
+	printf '  %-12s %-10s %s\n' ADAPTER AVAILABLE DETAIL
+	printf '  %-12s %-10s %s\n' file \
+		"$([ -s "$FILE_IDENTITY" ] && echo yes || echo no)" "$FILE_IDENTITY"
+	printf '  %-12s %-10s %s\n' yubikey \
+		"$(yubikey_present && [ -s "$YUBIKEY_IDENTITY" ] && echo yes || echo no)" "$YUBIKEY_IDENTITY"
+	printf '  %-12s %-10s %s\n' passphrase yes "prompts interactively"
+	echo
+	echo "recipients ($RECIPIENTS_FILE):"
+	if [ -f "$RECIPIENTS_FILE" ]; then
+		grep -vE '^\s*(#|$)' "$RECIPIENTS_FILE" | sed 's/^/    /'
+	else
+		echo "    (none)"
+	fi
+}
+
+cmd_build() {
+	local out="$SECRETS_DIR/bootstrap.tar.age"
+	[ "${1:-}" = "-o" ] && {
+		out="$2"
+		shift 2
+	}
+	need age
+	need tar
+	[ -f "$MANIFEST_FILE" ] || die "no manifest at $MANIFEST_FILE"
+	[ -f "$RECIPIENTS_FILE" ] || die "no recipients at $RECIPIENTS_FILE"
+
+	local -a rargs=()
+	local nrec=0
+	while read -r r; do
+		[ -n "$r" ] || continue
+		rargs+=(-r "$r")
+		nrec=$((nrec + 1)) # count recipients, not array slots: each adds TWO elements
+	done < <(grep -vE '^\s*(#|$)' "$RECIPIENTS_FILE" | awk '{print $1}')
+	[ "$nrec" -gt 0 ] || die "recipients file has no recipients"
+	# Research is unanimous: never a single recipient. One lost key must not be fatal.
+	[ "$nrec" -ge 2 ] || die "refusing to build with a single recipient.
+Add a backup (second YubiKey, or an offline paper key) to $RECIPIENTS_FILE"
+
+	local staging
+	staging=$(mktemp -d)
+	# shellcheck disable=SC2064  # expand now: $staging must be captured at trap time
+	trap "rm -rf '$staging'" EXIT
+
+	local n=0 missing=0
+	while read -r src dst; do
+		[ -n "$src" ] || continue
+		local expanded
+		expanded=$(eval echo "$src")
+		if [ ! -e "$expanded" ]; then
+			info "skip (absent): $src"
+			missing=$((missing + 1))
+			continue
+		fi
+		mkdir -p "$staging/$(dirname "$dst")"
+		cp -a "$expanded" "$staging/$dst"
+		info "add: $src -> $dst"
+		n=$((n + 1))
+	done < <(grep -vE '^\s*(#|$)' "$MANIFEST_FILE")
+
+	[ "$n" -gt 0 ] || die "manifest produced no files"
+	mkdir -p "$(dirname "$out")"
+	tar -C "$staging" -cf - . | age "${rargs[@]}" -o "$out"
+	chmod 644 "$out" # ciphertext; safe to commit
+	info "built $out ($n entries, $missing skipped, $nrec recipients)"
+}
+
+cmd_unlock() {
+	local kit=${1:?usage: bootstrap-kit unlock <kit.age> <dest>}
+	local dest=${2:?usage: bootstrap-kit unlock <kit.age> <dest>}
+	need age
+	need tar
+	[ -f "$kit" ] || die "no such kit: $kit"
+
+	local adapter
+	adapter=$(detect_adapter)
+	info "adapter: $adapter"
+	local -a dargs=()
+	mapfile -t dargs < <(adapter_decrypt_args "$adapter")
+
+	mkdir -p "$dest"
+	# -p preserves modes: ssh keys must land 0600 or ssh refuses them.
+	age -d "${dargs[@]}" "$kit" | tar -C "$dest" -xpf -
+	info "unlocked into $dest"
+}
+
+cmd_verify() {
+	local kit=${1:?usage: bootstrap-kit verify <kit.age>}
+	need age
+	[ -f "$kit" ] || die "no such kit: $kit"
+	local adapter
+	adapter=$(detect_adapter)
+	local -a dargs=()
+	mapfile -t dargs < <(adapter_decrypt_args "$adapter")
+	if age -d "${dargs[@]}" "$kit" >/dev/null 2>&1; then
+		echo "OK   adapter '$adapter' can decrypt $(basename "$kit")"
+	else
+		echo "FAIL adapter '$adapter' cannot decrypt $(basename "$kit")" >&2
+		return 1
+	fi
+}
+
+case "${1:-}" in
+build)
+	shift
+	cmd_build "$@"
+	;;
+unlock)
+	shift
+	cmd_unlock "$@"
+	;;
+verify)
+	shift
+	cmd_verify "$@"
+	;;
+adapters)
+	shift
+	cmd_adapters "$@"
+	;;
+*)
+	sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+	exit 1
+	;;
+esac

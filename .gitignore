@@ -32,3 +32,12 @@ claude-code-token.env
 config/nvim/lua/dbui_private.lua
 .claude/CLAUDE.md
 .claude/skills/
+
+# The global ignore file has a broad `*secret*` rule, which excluded this
+# repo's secrets/ directory wholesale. That rule is what created the bootstrap
+# paradox: the encrypted Syncthing config a new machine needs could never be
+# committed, so it only existed inside $SYNC -- which Syncthing had not set up
+# yet. Re-include the directory here; secrets/.gitignore then excludes only the
+# private key material, so ciphertext and public recipients CAN be committed.
+!secrets/
+!secrets/**

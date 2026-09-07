@@ -85,12 +85,23 @@ jobs:
             su - tester -c "cd ~/sync/src/dotfiles && bash tests/idempotency.sh"
           '
 
+  bootstrap-kit:
+    name: bootstrap kit round trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: install age
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+      - name: round trip with the fake (file) adapter
+        run: bash tests/bootstrap-kit.sh
+
   # Opens/updates a single tracking issue when the weekly canary breaks, so a
   # scheduled failure is not just a red dot nobody sees.
   notify:
     name: report weekly failure
     if: failure() && github.event_name == 'schedule'
-    needs: [lint, unit, install]
+    needs: [lint, unit, install, bootstrap-kit]
     runs-on: ubuntu-latest
     permissions:
       issues: write

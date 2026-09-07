@@ -67,12 +67,35 @@ fi
 # Check for secrets/sensitive data
 echo "🔐 Checking for secrets..."
 
-# Check for sensitive filenames
-sensitive_files=$(git diff --cached --name-only | grep -iE '\.(env|pem|key|cert|crt|p12|pfx|asc|gpg)$|id_rsa|id_dsa|id_ecdsa|credentials|secret|password|apikey' || true)
+# Check for sensitive filenames.
+#
+# The bare `secret` substring used to match secrets/ wholesale, which blocked
+# the very things that are SAFE and intended to be public: age recipients
+# (public keys), the kit manifest, and .age ciphertext. Blocking those is what
+# forced the encrypted bootstrap config to live only inside $SYNC and created
+# the bootstrap paradox. Allow the known-public artifacts; the content scan
+# below is what actually catches private key material.
+safe_public='^secrets/(recipients\.txt|kit-manifest\.txt|yubikey-identity\.txt|known-devices\.txt|\.gitignore)$|^secrets/.*\.age$'
+sensitive_files=$(git diff --cached --name-only \
+    | grep -iE '\.(env|pem|key|cert|crt|p12|pfx|asc|gpg)$|id_rsa|id_dsa|id_ecdsa|credentials|secret|password|apikey' \
+    | grep -vE "$safe_public" || true)
 if [ -n "$sensitive_files" ]; then
     echo "❌ Sensitive files detected:"
     echo "$sensitive_files"
     echo "These file types should not be committed. Add them to .gitignore"
+    exit 1
+fi
+
+# Private key MATERIAL must never be committed, whatever the filename. This is
+# the real control -- filenames are a hint, contents are the truth.
+# The hooks themselves necessarily contain these pattern strings, so exclude
+# them or the scanner blocks its own source.
+private_material=$(git diff --cached -U0 -- . ':(exclude)config/git/hooks/*' | grep -E '^\+' \
+    | grep -E 'AGE-SECRET-KEY-1|BEGIN (OPENSSH|RSA|EC|DSA|PGP) PRIVATE KEY|BEGIN PRIVATE KEY' || true)
+if [ -n "$private_material" ]; then
+    echo "❌ Private key material in staged contents:"
+    echo "$private_material" | sed 's/^/   /' | cut -c1-100
+    echo "Never commit private keys. Public age recipients (age1...) are fine."
     exit 1
 fi
 
@@ -153,7 +176,11 @@ fi
 #   - lazy-lock.json (contains git commit SHAs)
 #   - Lines containing file paths (/sys/, /proc/, /dev/, /etc/, /usr/, /var/, /home/, /tmp/)
 #   - Lines containing URLs (http://, https://)
-suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
+#   - Public age recipients (age1..., age1yubikey1...). These are PUBLIC keys;
+#     publishing them is the intended design, and they are long base32 so they
+#     trip the entropy heuristic. The private half is AGE-SECRET-KEY-1..., which
+#     the private-material check above catches by content.
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE '^\+[[:space:]]*#?[[:space:]]*age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3
