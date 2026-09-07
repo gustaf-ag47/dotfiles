@@ -23,6 +23,7 @@
 # Usage:
 #   bootstrap-kit build   [-o kit.age]     build kit from the manifest
 #   bootstrap-kit unlock  <kit.age> <dest> decrypt and extract, preserving modes
+#   bootstrap-kit restore <kit.age>        decrypt and place onto this machine
 #   bootstrap-kit verify  <kit.age>        prove the current adapter can decrypt
 #   bootstrap-kit adapters                 show adapters and what is available
 set -euo pipefail
@@ -182,6 +183,53 @@ cmd_unlock() {
 	info "unlocked into $dest"
 }
 
+# Place kit contents back onto a live machine. The manifest is the single
+# source of truth in BOTH directions: column 1 is where a file lives on a real
+# machine, column 2 is where it sits inside the kit. build reads left-to-right,
+# restore reads right-to-left.
+cmd_restore() {
+	local kit=${1:?usage: bootstrap-kit restore <kit.age>}
+	need age
+	need tar
+	[ -f "$kit" ] || die "no such kit: $kit"
+	[ -f "$MANIFEST_FILE" ] || die "no manifest at $MANIFEST_FILE"
+
+	local staging
+	staging=$(mktemp -d)
+	# shellcheck disable=SC2064  # expand now, not at trap time
+	trap "rm -rf '$staging'" EXIT
+	chmod 700 "$staging"
+
+	cmd_unlock "$kit" "$staging" >/dev/null
+
+	local placed=0 skipped=0
+	while read -r dst src; do
+		[ -n "$dst" ] || continue
+		local target
+		target=$(eval echo "$dst")
+		if [ ! -e "$staging/$src" ]; then
+			info "skip (not in kit): $src"
+			skipped=$((skipped + 1))
+			continue
+		fi
+		mkdir -p "$(dirname "$target")"
+		if [ -e "$target" ]; then
+			# Never clobber existing identity silently -- that is how you end up
+			# with two machines claiming one Syncthing device ID.
+			local backup
+			backup="$target.pre-restore.$(date +%Y%m%d%H%M%S)"
+			info "existing $target -> $backup"
+			mv "$target" "$backup"
+		fi
+		cp -a "$staging/$src" "$target"
+		info "restored: $src -> $dst"
+		placed=$((placed + 1))
+	done < <(grep -vE '^\s*(#|$)' "$MANIFEST_FILE")
+
+	info "restored $placed entries ($skipped skipped)"
+	[ "$placed" -gt 0 ] || die "nothing restored"
+}
+
 cmd_verify() {
 	local kit=${1:?usage: bootstrap-kit verify <kit.age>}
 	need age
@@ -206,6 +254,10 @@ build)
 unlock)
 	shift
 	cmd_unlock "$@"
+	;;
+restore)
+	shift
+	cmd_restore "$@"
 	;;
 verify)
 	shift

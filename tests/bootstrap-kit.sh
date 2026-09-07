@@ -6,7 +6,7 @@
 #
 # Proves the ports-and-adapters property that matters: the SAME ciphertext
 # opens with either enrolled identity, so swapping the fake adapter for a
-# YubiKey later requires no re-encryption and no code change.
+# YubiKey later needs no re-encryption and no code change.
 set -uo pipefail
 
 KIT="${KIT_BIN:-$(cd "$(dirname "$0")/.." && pwd)/bin/bootstrap-kit}"
@@ -23,11 +23,11 @@ no() {
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 export DOTFILES="$WORK"
-mkdir -p "$WORK/secrets" "$WORK/src"
+mkdir -p "$WORK/secrets" "$WORK/src" "$WORK/live"
 
 echo "== bootstrap-kit round trip (synthetic secrets) =="
 
-# --- two independent identities: "primary" and "backup" -------------------
+# --- three identities: primary, backup, and an unenrolled stranger --------
 umask 077
 age-keygen -o "$WORK/secrets/test-identity.txt" 2>"$WORK/p1"
 age-keygen -o "$WORK/secrets/test-backup-identity.txt" 2>"$WORK/p2"
@@ -45,9 +45,9 @@ chmod 600 "$WORK/src/cctoken"
 echo "<configuration><device id=synthetic/></configuration>" >"$WORK/src/config.xml"
 
 cat >"$WORK/secrets/kit-manifest.txt" <<EOF
-$WORK/src/ssh        ssh
-$WORK/src/cctoken    cctoken
-$WORK/src/config.xml syncthing/config.xml
+$WORK/src/ssh         ssh
+$WORK/src/cctoken     cctoken
+$WORK/src/config.xml  syncthing/config.xml
 $WORK/src/nonexistent absent/file
 EOF
 
@@ -56,20 +56,21 @@ if "$KIT" build -o "$WORK/kit.age" >"$WORK/build.log" 2>&1; then
 	ok "build succeeds"
 else
 	no "build failed"
-	cat "$WORK/build.log"
+	sed 's/^/       /' "$WORK/build.log"
 fi
+
 if [ -s "$WORK/kit.age" ]; then
 	ok "kit is non-empty"
 else
-	no "kit missing/empty"
+	no "kit missing or empty"
 fi
+
 if grep -q "skip (absent)" "$WORK/build.log"; then
 	ok "absent manifest entry skipped, not fatal"
 else
 	no "absent entry not handled"
 fi
 
-# ciphertext must not contain the plaintext
 if grep -qa "SYNTHETIC-NOT-A-REAL-TOKEN" "$WORK/kit.age"; then
 	no "SECRET LEAKED IN CIPHERTEXT"
 else
@@ -83,18 +84,20 @@ if [ -f "$WORK/out1/cctoken" ] && grep -q SYNTHETIC "$WORK/out1/cctoken"; then
 else
 	no "primary adapter unlock failed"
 fi
+
 if [ -f "$WORK/out1/ssh/id_ed25519" ]; then
 	ok "nested directory restored"
 else
-	no "nested dir missing"
+	no "nested directory missing"
 fi
+
 if [ -f "$WORK/out1/syncthing/config.xml" ]; then
 	ok "renamed path restored"
 else
 	no "renamed path missing"
 fi
 
-# permissions are load-bearing: ssh refuses a world-readable key
+# Permissions are load-bearing: ssh refuses a world-readable private key.
 mode=$(stat -c %a "$WORK/out1/ssh/id_ed25519" 2>/dev/null)
 if [ "$mode" = "600" ]; then
 	ok "file mode preserved (0600)"
@@ -104,18 +107,18 @@ fi
 
 # --- THE ports-and-adapters property --------------------------------------
 # Same ciphertext, different identity. This is what makes swapping the fake
-# adapter for a YubiKey a no-op: no re-encryption, no code change.
-BOOTSTRAP_FILE_IDENTITY="$WORK/secrets/test-backup-identity.txt" \
-	env BOOTSTRAP_ADAPTER=file "$KIT" unlock "$WORK/kit.age" "$WORK/out2" >/dev/null 2>&1
+# adapter for a YubiKey a no-op.
+env BOOTSTRAP_FILE_IDENTITY="$WORK/secrets/test-backup-identity.txt" \
+	BOOTSTRAP_ADAPTER=file "$KIT" unlock "$WORK/kit.age" "$WORK/out2" >/dev/null 2>&1
 if [ -f "$WORK/out2/cctoken" ]; then
 	ok "BACKUP identity opens the same ciphertext (key loss survivable)"
 else
 	no "backup identity could not decrypt -- multi-recipient broken"
 fi
 
-# --- negative test: an unenrolled identity must NOT decrypt ---------------
-if BOOTSTRAP_FILE_IDENTITY="$WORK/secrets/stranger.txt" \
-	env BOOTSTRAP_ADAPTER=file "$KIT" verify "$WORK/kit.age" >/dev/null 2>&1; then
+# --- negative: an unenrolled identity must NOT decrypt --------------------
+if env BOOTSTRAP_FILE_IDENTITY="$WORK/secrets/stranger.txt" \
+	BOOTSTRAP_ADAPTER=file "$KIT" verify "$WORK/kit.age" >/dev/null 2>&1; then
 	no "SECURITY: an unenrolled identity decrypted the kit"
 else
 	ok "unenrolled identity correctly refused"
@@ -126,6 +129,44 @@ if env BOOTSTRAP_ADAPTER=file "$KIT" verify "$WORK/kit.age" >/dev/null 2>&1; the
 	ok "verify reports success for an enrolled adapter"
 else
 	no "verify failed for an enrolled adapter"
+fi
+
+# --- restore: place kit contents back onto a machine ----------------------
+# Same manifest, read right-to-left. Point the live paths at the sandbox.
+cat >"$WORK/secrets/kit-manifest.txt" <<EOF
+$WORK/live/ssh        ssh
+$WORK/live/cctoken    cctoken
+$WORK/live/config.xml syncthing/config.xml
+EOF
+
+if env BOOTSTRAP_ADAPTER=file "$KIT" restore "$WORK/kit.age" >"$WORK/restore.log" 2>&1; then
+	ok "restore succeeds"
+else
+	no "restore failed"
+	sed 's/^/       /' "$WORK/restore.log"
+fi
+
+if [ -f "$WORK/live/cctoken" ] && grep -q SYNTHETIC "$WORK/live/cctoken"; then
+	ok "restore placed file at its live path"
+else
+	no "restore did not place file"
+fi
+
+rmode=$(stat -c %a "$WORK/live/ssh/id_ed25519" 2>/dev/null)
+if [ "$rmode" = "600" ]; then
+	ok "restore preserved mode 0600"
+else
+	no "restore lost mode (got ${rmode:-none})"
+fi
+
+# Re-restoring must not clobber: two machines claiming one Syncthing device ID
+# is exactly the failure we are trying to avoid.
+echo "MODIFIED" >"$WORK/live/cctoken"
+env BOOTSTRAP_ADAPTER=file "$KIT" restore "$WORK/kit.age" >/dev/null 2>&1
+if compgen -G "$WORK/live/cctoken.pre-restore.*" >/dev/null; then
+	ok "existing file backed up, not clobbered"
+else
+	no "existing file clobbered without backup"
 fi
 
 # --- guard: refuse a single recipient -------------------------------------
