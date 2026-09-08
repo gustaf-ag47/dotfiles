@@ -212,13 +212,32 @@ trap cleanup_tmpfs EXIT
 # serials are recorded in recipients.txt. Otherwise you cannot later tell which
 # physical key holds which identity.
 
-yk_serials() { ykman list 2>/dev/null | grep -oE 'Serial: [0-9]+' | awk '{print $2}'; }
+# --serials prints bare integers; parsing the human-readable listing is fragile.
+yk_serials() { ykman list --serials 2>/dev/null; }
 yk_count()   { yk_serials | grep -c . ; }
 
 # Recipient for one specific key. Never `tail -1` across keys: with two
 # attached that silently returns the wrong one.
 yk_recipient_for() {
   age-plugin-yubikey --list 2>/dev/null | grep -oE 'age1yubikey1[a-z0-9]+' | tail -1
+}
+
+# age-plugin-yubikey 0.5.x can panic on a DER "Overlength" while generating the
+# random certificate serial -- reported at roughly half of all runs (upstream
+# issue #220). Retry rather than aborting a ceremony that is not resumable.
+# Slot is pinned explicitly: without --slot the plugin picks the first free
+# retired slot, which makes the result depend on what was there before.
+generate_identity() {
+  local serial=$1 name=$2 attempt
+  for attempt in 1 2 3 4 5; do
+    if age-plugin-yubikey --generate --serial "$serial" --slot 1 \
+         --pin-policy once --touch-policy always --name "$name"; then
+      return 0
+    fi
+    warn "generate attempt $attempt failed (upstream #220 panics intermittently) - retrying"
+    sleep 2
+  done
+  return 1
 }
 
 # Block until EXACTLY one key is present, then echo its serial. Refusing to
@@ -311,10 +330,10 @@ say ""
 say "You will now be asked for a PIN, and the key will blink for a touch."
 say "Policy: --pin-policy once --touch-policy always (archival use, rare taps)."
 pause "Press Enter, then follow the plugin's prompts"
-age-plugin-yubikey --generate --serial "$YKA_SERIAL" \
-  --pin-policy once --touch-policy always --name "bootstrap-A" || {
-  warn "generation failed — if the slot is filled, re-run with --force"; exit 1; }
+generate_identity "$YKA_SERIAL" "bootstrap-A" || {
+  warn "generation failed after retries — if slot 1 is filled, re-run with --force"; exit 1; }
 YKA_PUB="$(yk_recipient_for)"
+[[ "$YKA_PUB" =~ ^age1yubikey1[a-z0-9]+$ ]] || { warn "unexpected recipient: $YKA_PUB"; exit 1; }
 [[ -n "$YKA_PUB" ]] || { warn "could not read a recipient from the key"; exit 1; }
 step "YubiKey A ($YKA_SERIAL) recipient: $YKA_PUB"
 pause "Recorded. Continue?"
@@ -335,10 +354,10 @@ if [[ "$YKB_SERIAL" == "$YKA_SERIAL" ]]; then
 fi
 step "detected YubiKey serial $YKB_SERIAL"
 pause "Press Enter, then follow the plugin's prompts (PIN + touch)"
-age-plugin-yubikey --generate --serial "$YKB_SERIAL" \
-  --pin-policy once --touch-policy always --name "bootstrap-B" || {
-  warn "generation failed"; exit 1; }
+generate_identity "$YKB_SERIAL" "bootstrap-B" || {
+  warn "generation failed after retries"; exit 1; }
 YKB_PUB="$(yk_recipient_for)"
+[[ "$YKB_PUB" =~ ^age1yubikey1[a-z0-9]+$ ]] || { warn "unexpected recipient: $YKB_PUB"; exit 1; }
 [[ -n "$YKB_PUB" ]] || { warn "could not read a recipient from the key"; exit 1; }
 [[ "$YKB_PUB" != "$YKA_PUB" ]] || { warn "same recipient as key A — is this the same key?"; exit 1; }
 step "YubiKey B ($YKB_SERIAL) recipient: $YKB_PUB"
@@ -404,6 +423,7 @@ cat > "$RECIPIENTS" <<EOF
 # kit, so losing a single factor is survivable.
 #
 # Enrolled $(date -Is) by scripts/enroll-yubikeys.sh
+# Plugin: $(age-plugin-yubikey --version 2>/dev/null)
 
 $YKA_PUB   yubikey-A  serial $YKA_SERIAL
 $YKB_PUB   yubikey-B  serial $YKB_SERIAL
