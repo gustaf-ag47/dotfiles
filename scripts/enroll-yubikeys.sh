@@ -194,6 +194,8 @@ WORKDIR=""   # tmpfs, set in the paper-key stage
 PAPER_PUB=""
 YKA_PUB=""
 YKB_PUB=""
+YKA_SERIAL=""
+YKB_SERIAL=""
 
 cleanup_tmpfs() {
   if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
@@ -205,21 +207,45 @@ cleanup_tmpfs() {
 }
 trap cleanup_tmpfs EXIT
 
-# Print the age recipient for the currently-inserted YubiKey.
-yk_recipient() { age-plugin-yubikey --list 2>/dev/null | grep -oE 'age1yubikey1[a-z0-9]+' | tail -1; }
-yk_serial()    { ykman list 2>/dev/null | grep -oE 'Serial: [0-9]+' | head -1 | awk '{print $2}'; }
-wait_for_yubikey() {
-  local want_absent="${1:-}"
+# The two keys are physically identical -- same model, same firmware. Only the
+# SERIAL distinguishes them, so every operation is targeted by serial and the
+# serials are recorded in recipients.txt. Otherwise you cannot later tell which
+# physical key holds which identity.
+
+yk_serials() { ykman list 2>/dev/null | grep -oE 'Serial: [0-9]+' | awk '{print $2}'; }
+yk_count()   { yk_serials | grep -c . ; }
+
+# Recipient for one specific key. Never `tail -1` across keys: with two
+# attached that silently returns the wrong one.
+yk_recipient_for() {
+  age-plugin-yubikey --list 2>/dev/null | grep -oE 'age1yubikey1[a-z0-9]+' | tail -1
+}
+
+# Block until EXACTLY one key is present, then echo its serial. Refusing to
+# proceed with two attached is deliberate: --generate would be ambiguous, and
+# you would not know which key you just touched.
+wait_for_exactly_one() {
+  local n
   while true; do
-    if [[ "$want_absent" == "absent" ]]; then
-      ykman list 2>/dev/null | grep -q . || return 0
-      printf '  %swaiting for the key to be REMOVED...%s\r' "$DIM" "$RESET"
-    else
-      ykman list 2>/dev/null | grep -q . && return 0
+    n=$(yk_count)
+    if [[ "$n" == "1" ]]; then printf '\r\033[K'; yk_serials; return 0; fi
+    if [[ "$n" == "0" ]]; then
       printf '  %swaiting for a YubiKey to be INSERTED...%s\r' "$DIM" "$RESET"
+    else
+      printf '  %s%s keys attached - leave only ONE plugged in...%s\r' "$YELLOW" "$n" "$RESET"
     fi
     sleep 1
   done
+}
+
+# Block until a SPECIFIC serial is gone (others may remain).
+wait_for_serial_gone() {
+  local want=$1
+  while yk_serials | grep -qx "$want"; do
+    printf '  %swaiting for key %s to be REMOVED...%s\r' "$DIM" "$want" "$RESET"
+    sleep 1
+  done
+  printf '\r\033[K'
 }
 
 # Deliberately NOT using the library's banner(): its stock text describes a
@@ -269,36 +295,41 @@ pause "Ready to begin?"
 stage "Insert YubiKey A"
 say "This generates an age identity on the key itself. The private key never"
 say "leaves the hardware — only a public recipient comes back out."
-warn "INSERT YUBIKEY A NOW (and remove any other YubiKey)."
-wait_for_yubikey; printf '\n'
-step "detected YubiKey serial $(yk_serial)"
+warn "Leave ONLY YubiKey A plugged in (unplug the other one)."
+YKA_SERIAL="$(wait_for_exactly_one)"
+step "detected YubiKey serial $YKA_SERIAL"
 say ""
 say "You will now be asked for a PIN, and the key will blink for a touch."
 say "Policy: --pin-policy once --touch-policy always (archival use, rare taps)."
 pause "Press Enter, then follow the plugin's prompts"
-age-plugin-yubikey --generate --pin-policy once --touch-policy always --name "bootstrap-A" || {
+age-plugin-yubikey --generate --serial "$YKA_SERIAL" \
+  --pin-policy once --touch-policy always --name "bootstrap-A" || {
   warn "generation failed — if the slot is filled, re-run with --force"; exit 1; }
-YKA_PUB="$(yk_recipient)"
+YKA_PUB="$(yk_recipient_for)"
 [[ -n "$YKA_PUB" ]] || { warn "could not read a recipient from the key"; exit 1; }
-step "YubiKey A recipient: $YKA_PUB"
+step "YubiKey A ($YKA_SERIAL) recipient: $YKA_PUB"
 pause "Recorded. Continue?"
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
 stage "Swap to YubiKey B"
 say "A second key means losing one is an inconvenience, not a lockout."
-warn "REMOVE YUBIKEY A NOW."
-wait_for_yubikey absent; printf '\n'
+warn "REMOVE YubiKey A ($YKA_SERIAL) NOW."
+wait_for_serial_gone "$YKA_SERIAL"
 step "YubiKey A removed"
-warn "INSERT YUBIKEY B NOW."
-wait_for_yubikey; printf '\n'
-step "detected YubiKey serial $(yk_serial)"
+warn "INSERT YubiKey B NOW."
+YKB_SERIAL="$(wait_for_exactly_one)"
+if [[ "$YKB_SERIAL" == "$YKA_SERIAL" ]]; then
+  warn "that is the same key ($YKA_SERIAL) — insert the OTHER one"; exit 1
+fi
+step "detected YubiKey serial $YKB_SERIAL"
 pause "Press Enter, then follow the plugin's prompts (PIN + touch)"
-age-plugin-yubikey --generate --pin-policy once --touch-policy always --name "bootstrap-B" || {
+age-plugin-yubikey --generate --serial "$YKB_SERIAL" \
+  --pin-policy once --touch-policy always --name "bootstrap-B" || {
   warn "generation failed"; exit 1; }
-YKB_PUB="$(yk_recipient)"
+YKB_PUB="$(yk_recipient_for)"
 [[ -n "$YKB_PUB" ]] || { warn "could not read a recipient from the key"; exit 1; }
 [[ "$YKB_PUB" != "$YKA_PUB" ]] || { warn "same recipient as key A — is this the same key?"; exit 1; }
-step "YubiKey B recipient: $YKB_PUB"
+step "YubiKey B ($YKB_SERIAL) recipient: $YKB_PUB"
 pause "Recorded. Continue?"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
@@ -362,8 +393,8 @@ cat > "$RECIPIENTS" <<EOF
 #
 # Enrolled $(date -Is) by scripts/enroll-yubikeys.sh
 
-$YKA_PUB   yubikey-A
-$YKB_PUB   yubikey-B
+$YKA_PUB   yubikey-A  serial $YKA_SERIAL
+$YKB_PUB   yubikey-B  serial $YKB_SERIAL
 $PAPER_PUB   paper recovery (offline; generated on tmpfs with swap off)
 EOF
 step "wrote 3 recipients to $RECIPIENTS"
@@ -384,15 +415,15 @@ pause "Continue to the canary drill?"
 stage "Canary drill — prove every factor works"
 say "Each factor must open the kit independently. If one cannot, you find out"
 say "now rather than during a real recovery."
-warn "INSERT YUBIKEY A (remove B)."
-wait_for_yubikey; printf '\n'
+warn "Leave ONLY YubiKey A ($YKA_SERIAL) plugged in."
+wait_for_exactly_one >/dev/null
 say "Touch the key when it blinks."
 if BOOTSTRAP_ADAPTER=yubikey "$KITBIN" verify "$KIT"; then step "YubiKey A opens the kit"; else
   warn "YubiKey A FAILED"; fi
-warn "REMOVE YUBIKEY A."
-wait_for_yubikey absent; printf '\n'
-warn "INSERT YUBIKEY B."
-wait_for_yubikey; printf '\n'
+warn "REMOVE YubiKey A ($YKA_SERIAL)."
+wait_for_serial_gone "$YKA_SERIAL"
+warn "INSERT YubiKey B ($YKB_SERIAL)."
+wait_for_exactly_one >/dev/null
 say "Touch the key when it blinks."
 if BOOTSTRAP_ADAPTER=yubikey "$KITBIN" verify "$KIT"; then step "YubiKey B opens the kit"; else
   warn "YubiKey B FAILED"; fi
