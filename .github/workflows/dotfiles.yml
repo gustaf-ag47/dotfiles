@@ -95,6 +95,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq age
       - name: round trip with the fake (file) adapter
         run: bash tests/bootstrap-kit.sh
+      - name: preflight / terminal detection
+        run: bash tests/bootstrap-preflight.sh
 
   # Opens/updates a single tracking issue when the weekly canary breaks, so a
   # scheduled failure is not just a red dot nobody sees.

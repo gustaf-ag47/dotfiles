@@ -24,6 +24,7 @@
 #   bootstrap-kit build   [-o kit.age]     build kit from the manifest
 #   bootstrap-kit unlock  <kit.age> <dest> decrypt and extract, preserving modes
 #   bootstrap-kit restore <kit.age>        decrypt and place onto this machine
+#   bootstrap-kit preflight [kit.age]      can we unlock, and what will it cost?
 #   bootstrap-kit verify  <kit.age>        prove the current adapter can decrypt
 #   bootstrap-kit adapters                 show adapters and what is available
 set -euo pipefail
@@ -230,6 +231,82 @@ cmd_restore() {
 	[ "$placed" -gt 0 ] || die "nothing restored"
 }
 
+# Is this adapter going to ask the human for something?
+adapter_is_interactive() {
+	case "$1" in
+	yubikey | passphrase) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Can we unlock right now, and what will it cost the human?
+#
+# Deliberately does NOT decrypt. A decrypting pre-check costs a PIN prompt and
+# a touch, and buys nothing: cmd_restore already unlocks into a staging dir and
+# only places files afterwards, so a failed decrypt cannot leave a half-restored
+# identity. Keeping this non-decrypting means one touch per restore instead of
+# two, and means the whole check is testable with no hardware.
+#
+# Exit 0: unlock is possible. Non-zero: prints why not.
+cmd_preflight() {
+	local kit=${1:-$SECRETS_DIR/bootstrap.tar.age}
+	local adapter interactive=no terminal=n/a
+
+	if [ ! -f "$kit" ]; then
+		echo "preflight: no kit at $kit" >&2
+		return 1
+	fi
+	command -v age >/dev/null 2>&1 || {
+		echo "preflight: age is not installed" >&2
+		return 1
+	}
+
+	adapter=$(detect_adapter)
+	if [ "$adapter" = none ]; then
+		echo "preflight: no unlock adapter available" >&2
+		echo "  no YubiKey identity at $YUBIKEY_IDENTITY" >&2
+		echo "  no file identity at $FILE_IDENTITY" >&2
+		return 1
+	fi
+
+	# Validate the adapter can be *used*, without using it.
+	if ! adapter_decrypt_args "$adapter" >/dev/null 2>&1; then
+		echo "preflight: adapter '$adapter' is selected but not usable" >&2
+		adapter_decrypt_args "$adapter" >/dev/null || true
+		return 1
+	fi
+
+	if adapter_is_interactive "$adapter"; then
+		interactive=yes
+		# An interactive adapter reads the secret from the terminal. /dev/tty
+		# exists as a device node even with no controlling terminal, so it has to
+		# be OPENED -- that fails with ENXIO, which is what distinguishes them.
+		if [ -t 0 ] || { : </dev/tty; } 2>/dev/null; then
+			terminal=available
+		else
+			terminal=MISSING
+		fi
+	fi
+
+	echo "  kit:         $kit ($(stat -c%s "$kit") bytes)"
+	echo "  adapter:     $adapter"
+	echo "  interactive: $interactive"
+	[ "$interactive" = yes ] && echo "  terminal:    $terminal"
+
+	if [ "$terminal" = MISSING ]; then
+		echo "preflight: adapter '$adapter' needs to prompt, but there is no terminal" >&2
+		echo "  run this from a console, or use a non-interactive adapter" >&2
+		return 1
+	fi
+
+	case "$adapter" in
+	yubikey) echo "  expect:      one PIN prompt and one touch" ;;
+	passphrase) echo "  expect:      one passphrase prompt" ;;
+	file) echo "  expect:      no prompts" ;;
+	esac
+	return 0
+}
+
 cmd_verify() {
 	local kit=${1:?usage: bootstrap-kit verify <kit.age>}
 	need age
@@ -262,6 +339,10 @@ restore)
 verify)
 	shift
 	cmd_verify "$@"
+	;;
+preflight)
+	shift
+	cmd_preflight "$@"
 	;;
 adapters)
 	shift
