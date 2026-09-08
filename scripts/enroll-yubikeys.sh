@@ -224,15 +224,19 @@ yk_recipient_for() {
 # Block until EXACTLY one key is present, then echo its serial. Refusing to
 # proceed with two attached is deliberate: --generate would be ambiguous, and
 # you would not know which key you just touched.
+# NOTE: this function RETURNS the serial on stdout, so every byte of progress
+# output must go to stderr. Writing the spinner to stdout meant the caller
+# captured "\r\033[K23610307" and passed that to --serial, which failed with
+# "invalid digit found in string".
 wait_for_exactly_one() {
   local n
   while true; do
     n=$(yk_count)
-    if [[ "$n" == "1" ]]; then printf '\r\033[K'; yk_serials; return 0; fi
+    if [[ "$n" == "1" ]]; then printf '\r\033[K' >&2; yk_serials; return 0; fi
     if [[ "$n" == "0" ]]; then
-      printf '  %swaiting for a YubiKey to be INSERTED...%s\r' "$DIM" "$RESET"
+      printf '  %swaiting for a YubiKey to be INSERTED...%s\r' "$DIM" "$RESET" >&2
     else
-      printf '  %s%s keys attached - leave only ONE plugged in...%s\r' "$YELLOW" "$n" "$RESET"
+      printf '  %s%s keys attached - leave only ONE plugged in...%s\r' "$YELLOW" "$n" "$RESET" >&2
     fi
     sleep 1
   done
@@ -242,10 +246,10 @@ wait_for_exactly_one() {
 wait_for_serial_gone() {
   local want=$1
   while yk_serials | grep -qx "$want"; do
-    printf '  %swaiting for key %s to be REMOVED...%s\r' "$DIM" "$want" "$RESET"
+    printf '  %swaiting for key %s to be REMOVED...%s\r' "$DIM" "$want" "$RESET" >&2
     sleep 1
   done
-  printf '\r\033[K'
+  printf '\r\033[K' >&2
 }
 
 # Deliberately NOT using the library's banner(): its stock text describes a
@@ -297,6 +301,11 @@ say "This generates an age identity on the key itself. The private key never"
 say "leaves the hardware — only a public recipient comes back out."
 warn "Leave ONLY YubiKey A plugged in (unplug the other one)."
 YKA_SERIAL="$(wait_for_exactly_one)"
+if [[ ! "$YKA_SERIAL" =~ ^[0-9]+$ ]]; then
+  warn "got a non-numeric serial: $(printf '%q' "$YKA_SERIAL")"
+  warn "this usually means progress output leaked into the captured value"
+  exit 1
+fi
 step "detected YubiKey serial $YKA_SERIAL"
 say ""
 say "You will now be asked for a PIN, and the key will blink for a touch."
@@ -318,6 +327,9 @@ wait_for_serial_gone "$YKA_SERIAL"
 step "YubiKey A removed"
 warn "INSERT YubiKey B NOW."
 YKB_SERIAL="$(wait_for_exactly_one)"
+if [[ ! "$YKB_SERIAL" =~ ^[0-9]+$ ]]; then
+  warn "got a non-numeric serial: $(printf '%q' "$YKB_SERIAL")"; exit 1
+fi
 if [[ "$YKB_SERIAL" == "$YKA_SERIAL" ]]; then
   warn "that is the same key ($YKA_SERIAL) — insert the OTHER one"; exit 1
 fi
