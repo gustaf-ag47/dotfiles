@@ -222,6 +222,64 @@ yk_recipient_for() {
   age-plugin-yubikey --list 2>/dev/null | grep -oE 'age1yubikey1[a-z0-9]+' | tail -1
 }
 
+# Read-only inventory of everything on a key, so the human can see the blast
+# radius rather than take it on trust. Every command here is read-only and none
+# consumes a PIN/PUK retry.
+#
+# Enrolment writes ONLY to PIV (retired slot 82) and sets ONLY the PIV
+# PIN/PUK/management key. Applets keep independent credential stores, so OATH
+# codes, the OTP slot, OpenPGP and FIDO2 are untouched.
+key_inventory() {
+  local serial=$1 n
+  printf '  %sInventory of key %s%s\n' "$BOLD" "$serial" "$RESET"
+
+  # OATH -- the applet most likely to hold real data (TOTP codes).
+  local oath_pw
+  oath_pw=$(timeout 15 ykman --device "$serial" oath info 2>/dev/null | grep -i 'Password protection' | awk -F': *' '{print $2}')
+  local oath_list
+  if oath_list=$(timeout 20 ykman --device "$serial" oath accounts list 2>/dev/null); then
+    n=$(printf '%s' "$oath_list" | grep -c . || true)
+    printf '    OATH/TOTP    %s credential(s), password protection: %s\n' "$n" "${oath_pw:-unknown}"
+    [ "${n:-0}" -gt 0 ] && printf '%s\n' "$oath_list" | sed 's/^/                 - /'
+  else
+    n=0
+    printf '    OATH/TOTP    could not read (password protected?)\n'
+  fi
+  [ "$oath_pw" = "disabled" ] && [ "${n:-0}" -gt 0 ] &&
+    warn "OATH has no password: anyone holding this key can read those TOTP secrets"
+
+  # Yubico OTP
+  printf '    Yubico OTP   %s\n' "$(timeout 15 ykman --device "$serial" otp info 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')"
+
+  # OpenPGP
+  # ykman exits non-zero for an empty slot, and `set -o pipefail` would make
+  # `ykman ... | grep -q` fail even when grep matched -- which reported every
+  # empty slot as occupied. Capture the output, then test it.
+  local pgp="" out
+  for k in SIG DEC AUT; do
+    out=$(timeout 12 ykman --device "$serial" openpgp keys info "$k" 2>&1 || true)
+    case "$out" in *"No key stored"*) ;; *) pgp="$pgp $k" ;; esac
+  done
+  printf '    OpenPGP      %s\n' "${pgp:-empty}"
+
+  # FIDO2
+  printf '    FIDO2        PIN %s\n' "$(timeout 15 ykman --device "$serial" fido info 2>/dev/null | awk -F': *' '/^PIN/{print $2}')"
+
+  # PIV -- the only applet enrolment touches.
+  local occupied=""
+  for sl in 9a 9c 9d 9e 82 83 84 85; do
+    timeout 10 ykman --device "$serial" piv certificates export "$sl" - >/dev/null 2>&1 && occupied="$occupied $sl"
+  done
+  printf '    PIV          slots occupied:%s\n' "${occupied:- none}"
+  timeout 15 ykman --device "$serial" piv info 2>/dev/null | grep -E 'PIN tries|PUK tries' | sed 's/^/                 /'
+  if [ -n "$occupied" ]; then
+    warn "PIV slots are NOT empty -- enrolling will overwrite slot 82 (plugin slot 1)"
+  fi
+  printf '\n'
+  say "Enrolment writes ONLY to PIV slot 82 and sets ONLY the PIV PIN/PUK."
+  say "OATH codes, the OTP slot, OpenPGP and FIDO2 are left alone."
+}
+
 # age-plugin-yubikey 0.5.x can panic on a DER "Overlength" while generating the
 # random certificate serial -- reported at roughly half of all runs (upstream
 # issue #220). Retry rather than aborting a ceremony that is not resumable.
@@ -310,6 +368,15 @@ if [[ -f "$KIT" ]]; then
   warn "A kit already exists at $KIT"
   confirm "Overwrite it at the end of this ceremony?" || { say "Nothing changed."; exit 0; }
 fi
+say ""
+say "Blast radius: this ceremony writes ONLY to the PIV applet (retired slot 82)"
+say "and sets ONLY the PIV PIN/PUK/management key. Applets have separate"
+say "credential stores, so OATH/TOTP codes, the Yubico OTP slot, OpenPGP and"
+say "FIDO2 are NOT touched. You will see a full inventory of each key before"
+say "anything is written to it."
+note "A full device reset (ykman config reset) WOULD destroy all of that -- this"
+note "ceremony never does that."
+say ""
 note "PUK = PIN with this plugin: if you forget a key's PIN, that key is gone."
 note "That is exactly why we enrol TWO keys plus a paper recovery key."
 pause "Ready to begin?"
@@ -326,6 +393,9 @@ if [[ ! "$YKA_SERIAL" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 step "detected YubiKey serial $YKA_SERIAL"
+say ""
+key_inventory "$YKA_SERIAL"
+confirm "Enrol THIS key (PIV slot 82 only)?" || { say "Nothing written."; exit 0; }
 say ""
 say "You will now be asked for a PIN, and the key will blink for a touch."
 say "Policy: --pin-policy once --touch-policy always (archival use, rare taps)."
@@ -353,6 +423,9 @@ if [[ "$YKB_SERIAL" == "$YKA_SERIAL" ]]; then
   warn "that is the same key ($YKA_SERIAL) — insert the OTHER one"; exit 1
 fi
 step "detected YubiKey serial $YKB_SERIAL"
+say ""
+key_inventory "$YKB_SERIAL"
+confirm "Enrol THIS key (PIV slot 82 only)?" || { say "Nothing written to key B."; exit 0; }
 pause "Press Enter, then follow the plugin's prompts (PIN + touch)"
 generate_identity "$YKB_SERIAL" "bootstrap-B" || {
   warn "generation failed after retries"; exit 1; }
