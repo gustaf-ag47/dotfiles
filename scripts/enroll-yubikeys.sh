@@ -291,6 +291,46 @@ pin_tries() {
     awk -F': *' '/PIN tries/{print $2}' | cut -d/ -f1 | tr -d ' '
 }
 
+# The plugin asks for THREE different things in sequence, and conflating them
+# is what burns PIN attempts:
+#   1. the PIN currently ON the key   (factory: 123456)
+#   2. the PUK currently ON the key   (factory: 12345678)
+#   3. a NEW PIN you choose           (6-8 chars; the PUK is set equal to it)
+# This warning lives in one place because putting it only in stage 2 meant
+# stage 3 silently lost it, and the same mistake happened twice.
+# Reuse an identity already present rather than forcing a restart. The ceremony
+# is not resumable by design (generating overwrites a slot), but a FAILED stage
+# should not strand a key that was already enrolled successfully.
+existing_recipient() {
+  local serial=$1
+  # The reset on a non-matching Serial line matters: without it, a later key's
+  # recipient is attributed to the first serial that matched.
+  age-plugin-yubikey --list 2>/dev/null | awk -v s="$serial" '
+    /^#/ {
+      if ($0 ~ "Serial: " s) found=1
+      else if ($0 ~ /Serial:/) found=0
+      next
+    }
+    /^age1yubikey1/ { if (found) { print; exit } }
+  '
+}
+
+pin_prompt_warning() {
+  local serial=$1
+  warn "READ THIS: you will be asked for THREE things, in this order:"
+  say "  1. the PIN already ON this key      -> factory default: 123456"
+  say "  2. the PUK already ON this key      -> factory default: 12345678"
+  say "  3. a NEW PIN of your choosing       -> 6-8 characters"
+  say ""
+  say "The PUK is set EQUAL to your new PIN, so forgetting it loses the key."
+  warn "Three wrong answers to (1) blocks the key. Get it right first time."
+  say ""
+  say "To pre-set your own PIN instead, quit now (Ctrl-C) and run:"
+  say "  ykman --device $serial piv access change-pin"
+  say ""
+  say "After the PINs, the key blinks for a touch."
+}
+
 generate_identity() {
   local serial=$1 name=$2 attempt before after
   for attempt in 1 2 3; do
@@ -430,20 +470,17 @@ say ""
 key_inventory "$YKA_SERIAL"
 confirm "Enrol THIS key (PIV slot 82 only)?" || { say "Nothing written."; exit 0; }
 say ""
-warn "READ THIS: the prompt asks for the PIN ALREADY ON THE KEY."
-say "It is NOT asking you to choose a new one."
-say "  factory default: 123456"
-say "  you get THREE attempts before the key blocks"
-say ""
-say "To use a PIN of your own, quit now (Ctrl-C) and set it first:"
-say "  ykman --device $YKA_SERIAL piv access change-pin"
-say ""
-say "After the PIN, the key blinks for a touch."
+pin_prompt_warning "$YKA_SERIAL"
 say "Policy: --pin-policy once --touch-policy always (archival use, rare taps)."
 pause "Press Enter, then follow the plugin's prompts"
+YKA_PUB="$(existing_recipient "$YKA_SERIAL")"
+if [ -n "$YKA_PUB" ]; then
+  step "key A already has an identity - reusing it"
+else
 generate_identity "$YKA_SERIAL" "bootstrap-A" || {
   warn "generation failed after retries — if slot 1 is filled, re-run with --force"; exit 1; }
 YKA_PUB="$(yk_recipient_for)"
+fi
 [[ "$YKA_PUB" =~ ^age1yubikey1[a-z0-9]+$ ]] || { warn "unexpected recipient: $YKA_PUB"; exit 1; }
 [[ -n "$YKA_PUB" ]] || { warn "could not read a recipient from the key"; exit 1; }
 step "YubiKey A ($YKA_SERIAL) recipient: $YKA_PUB"
@@ -467,10 +504,16 @@ step "detected YubiKey serial $YKB_SERIAL"
 say ""
 key_inventory "$YKB_SERIAL"
 confirm "Enrol THIS key (PIV slot 82 only)?" || { say "Nothing written to key B."; exit 0; }
-pause "Press Enter, then follow the plugin's prompts (PIN + touch)"
+pin_prompt_warning "$YKB_SERIAL"
+pause "Press Enter, then follow the plugin's prompts"
+YKB_PUB="$(existing_recipient "$YKB_SERIAL")"
+if [ -n "$YKB_PUB" ]; then
+  step "key B already has an identity - reusing it"
+else
 generate_identity "$YKB_SERIAL" "bootstrap-B" || {
   warn "generation failed after retries"; exit 1; }
 YKB_PUB="$(yk_recipient_for)"
+fi
 [[ "$YKB_PUB" =~ ^age1yubikey1[a-z0-9]+$ ]] || { warn "unexpected recipient: $YKB_PUB"; exit 1; }
 [[ -n "$YKB_PUB" ]] || { warn "could not read a recipient from the key"; exit 1; }
 [[ "$YKB_PUB" != "$YKA_PUB" ]] || { warn "same recipient as key A — is this the same key?"; exit 1; }
