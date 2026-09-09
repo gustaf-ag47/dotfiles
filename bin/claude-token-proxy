@@ -31,6 +31,11 @@ OAuth scope failures are reported per token and never invalidate inference.
 Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
 CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
 CC_PROXY_WATCH_INTERVAL (default 30s), CC_PROXY_REVALIDATE_INTERVAL (default 600s).
+Token selection (see docs/research/claude-token-rotation-oss.md): CC_PROXY_PICK
+(`pressure` default — spend perishable weekly quota first, model-aware bucket;
+`headroom` — legacy lowest-7d-utilization) and CC_PROXY_PICK_TOLERANCE (default
+1.5 — stickiness band that keeps the previous token, and its prompt cache,
+unless another token's pressure is this many times better).
 A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may list fingerprints
 (whitespace-separated) to treat as cooled-down — used for testing rollover without
 burning real quota.
@@ -54,6 +59,12 @@ from pathlib import Path
 TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
 UPSTREAM_HOST = "api.anthropic.com"
 ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
+PICK_MODE = os.environ.get("CC_PROXY_PICK", "pressure")  # pressure | headroom (legacy)
+PICK_TOLERANCE = float(os.environ.get("CC_PROXY_PICK_TOLERANCE", "1.5"))
+# Fable models are metered on their own weekly bucket (7d_oi =
+# seven_day_overage_included), separate from the shared 7d bucket — see
+# docs/research/anthropic-ratelimit-buckets.md.
+FABLE_MODEL_RE = re.compile(r"claude-fable", re.IGNORECASE)
 SEED = os.environ.get("CC_PROXY_SEED", "1") != "0"
 MIN_VALID = int(os.environ.get("CC_PROXY_MIN_VALID", "2"))
 WATCH_INTERVAL = float(os.environ.get("CC_PROXY_WATCH_INTERVAL", "30"))
@@ -556,8 +567,60 @@ def watchdog(path: str) -> None:
                 log(f"token {tok.name()} recovered — back in rotation")
 
 
-def pick(exclude=frozenset()) -> Tok | None:
-    """Choose the valid token with the most weekly headroom that isn't cooled."""
+# Sticky pick per bucket: re-picking a different token for a continuing
+# conversation discards the upstream prompt cache, so we only move when the
+# pressure gap is worth it.
+LAST_PICK: dict[str, str] = {}
+
+
+def _iso_epoch(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
+
+
+def bucket_key(model: str) -> str:
+    """Which weekly bucket a request for this model debits."""
+    return "oi" if FABLE_MODEL_RE.search(model or "") else "base"
+
+
+def bucket_util(t: Tok, key: str) -> float | None:
+    return t.u7_oi if key == "oi" else t.u7
+
+
+def bucket_reset(t: Tok, key: str) -> float | None:
+    return _iso_epoch(t.u7_oi_reset if key == "oi" else t.u7_reset)
+
+
+def pressure(t: Tok, key: str, now: float) -> float:
+    """Perishable-quota score: weekly headroom per second until it expires.
+
+    Quota that is about to reset is free to spend (it vanishes either way),
+    while a distant reset makes the same headroom precious. Highest pressure
+    wins — EDF weighted by headroom, so a soon reset alone does not favour a
+    nearly-drained token (same formula as teamclaude's expiryRouting).
+    Unknown utilization counts as full headroom and an unknown reset as a full
+    week out, matching the legacy convention of trying unknown tokens early
+    and letting the failover path correct us.
+    """
+    headroom = 1.0 - (bucket_util(t, key) or 0.0)
+    reset = bucket_reset(t, key)
+    seconds = max(60.0, reset - now) if reset is not None and reset > now else 7 * 86400.0
+    return headroom / seconds
+
+
+def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
+    """Choose a token for the weekly bucket this request's model debits.
+
+    Eligibility (valid, not cooling, not forced down) and the over-threshold
+    fallback are policy-independent. Among tokens under ROTATE_THRESHOLD in
+    the governing bucket, CC_PROXY_PICK selects:
+      pressure  spend the most perishable quota first (default; see pressure())
+      headroom  legacy lowest shared-7d utilization, bucket-blind
+    """
     now = time.time()
     forced = forced_cooldown_fps()
     eligible = [
@@ -565,13 +628,24 @@ def pick(exclude=frozenset()) -> Tok | None:
         if t.valid and t.fp not in exclude and now >= t.cooldown_until and t.fp not in forced
     ]
 
-    def rank(t: Tok):
-        return (t.u7 if t.u7 is not None else 0.0, t.u5 if t.u5 is not None else 0.0)
-
-    below = [t for t in eligible if (t.u7 or 0.0) < ROTATE_THRESHOLD]
-    pool = below or eligible
-    if pool:
-        return min(pool, key=rank)
+    if PICK_MODE == "headroom":  # legacy rollback path: exact pre-pressure behavior
+        below = [t for t in eligible if (t.u7 or 0.0) < ROTATE_THRESHOLD]
+        pool = below or eligible
+        if pool:
+            return min(pool, key=lambda t: (t.u7 if t.u7 is not None else 0.0,
+                                            t.u5 if t.u5 is not None else 0.0))
+    else:
+        key = bucket_key(model)
+        below = [t for t in eligible if (bucket_util(t, key) or 0.0) < ROTATE_THRESHOLD]
+        pool = below or eligible
+        if pool:
+            best = max(pool, key=lambda t: pressure(t, key, now))
+            prev_fp = LAST_PICK.get(key)
+            prev = next((t for t in pool if t.fp == prev_fp), None)
+            if prev is not None and pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now):
+                best = prev
+            LAST_PICK[key] = best.fp
+            return best
     # Everything over-threshold/cooled — fall back to the soonest-recovering valid
     # token, but never one explicitly forced down (a forced token is "dead").
     fallback = [t for t in STATE if t.valid and t.fp not in exclude and t.fp not in forced]
@@ -660,7 +734,7 @@ class Handler(BaseHTTPRequestHandler):
 
         for _ in range(max(1, valid_count + 1)):
             with LOCK:
-                tok = pick(exclude=tried)
+                tok = pick(exclude=tried, model=model)
             if tok is None:
                 with LOCK:
                     detail = ", ".join(
@@ -695,7 +769,7 @@ class Handler(BaseHTTPRequestHandler):
                     check_health("token rejected upstream")
 
             log(f"{self.command} {endpoint} -> token {tok.name()} "
-                f"u7={tok.u7} u5={tok.u5} status {resp.status}"
+                f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
                 + (" [failover]" if resp.status in FAILOVER_STATUSES else ""))
 
             if resp.status in FAILOVER_STATUSES and len(tried) < valid_count:
