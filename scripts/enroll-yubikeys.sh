@@ -285,35 +285,49 @@ key_inventory() {
 # issue #220). Retry rather than aborting a ceremony that is not resumable.
 # Slot is pinned explicitly: without --slot the plugin picks the first free
 # retired slot, which makes the result depend on what was there before.
-generate_identity() {
-  local serial=$1 name=$2 attempt out rc
-  for attempt in 1 2 3; do
-    out=$(age-plugin-yubikey --generate --serial "$serial" --slot 1 \
-            --pin-policy once --touch-policy always --name "$name" 2>&1 | tee /dev/tty)
-    rc=${PIPESTATUS[0]}
-    [ "$rc" -eq 0 ] && return 0
+# PIN attempts remaining for a key, as a bare integer.
+pin_tries() {
+  ykman --device "$1" piv info 2>/dev/null |
+    awk -F': *' '/PIN tries/{print $2}' | cut -d/ -f1 | tr -d ' '
+}
 
-    # ONLY the #220 DER panic is safe to retry. Retrying anything else is
-    # actively harmful: a wrong PIN decrements a 3-attempt counter, so a blind
-    # retry loop blocks the key. That is exactly what happened here once.
-    if printf '%s' "$out" | grep -qiE 'invalid pin|tries remaining|blocked'; then
-      warn "wrong PIN -- NOT retrying (each attempt burns one of three tries)"
-      printf '%s' "$out" | grep -oiE '[0-9]+ (try|tries) remaining' | tail -1 | sed 's/^/    /'
+generate_identity() {
+  local serial=$1 name=$2 attempt before after
+  for attempt in 1 2 3; do
+    before=$(pin_tries "$serial")
+
+    # Run with stdout/stderr attached to the real terminal. Capturing output
+    # with $(...) makes stdout a pipe, and the plugin then refuses with
+    # "Failed to get input from user: IO error: not a terminal" -- it needs a
+    # tty to prompt for the PIN and to signal the touch.
+    if age-plugin-yubikey --generate --serial "$serial" --slot 1 \
+         --pin-policy once --touch-policy always --name "$name"; then
+      return 0
+    fi
+
+    after=$(pin_tries "$serial")
+
+    # Ground truth instead of parsing error strings: if a PIN attempt was
+    # consumed, the PIN was wrong. NEVER retry that -- there are only three,
+    # and a blind retry loop blocks the key (it did, once).
+    if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -lt "$before" ]; then
+      warn "wrong PIN -- NOT retrying ($after of 3 attempts left)"
       say ""
       say "The prompt asks for the PIN ALREADY ON THE KEY, not a new one."
       say "On a factory key that is the default: 123456"
-      say "If it is now blocked, unblock it with:"
-      say "  ykman --device $serial piv access unblock-pin"
+      if [ "$after" -eq 0 ]; then
+        warn "this key is now BLOCKED. Unblock it with:"
+        say "  ykman --device $serial piv access unblock-pin"
+      fi
       return 1
     fi
-    if printf '%s' "$out" | grep -qiE 'overlength|panic'; then
-      warn "hit the known #220 generation panic on attempt $attempt - retrying"
-      sleep 2
-      continue
-    fi
-    warn "generation failed for an unrecognised reason - not retrying"
-    return 1
+
+    # No PIN consumed: the failure happened before authentication (the known
+    # #220 generation panic, a card glitch). Safe to retry.
+    warn "generation failed without using a PIN attempt (attempt $attempt) - retrying"
+    sleep 2
   done
+  warn "still failing after 3 attempts"
   return 1
 }
 
