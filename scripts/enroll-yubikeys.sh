@@ -286,14 +286,33 @@ key_inventory() {
 # Slot is pinned explicitly: without --slot the plugin picks the first free
 # retired slot, which makes the result depend on what was there before.
 generate_identity() {
-  local serial=$1 name=$2 attempt
-  for attempt in 1 2 3 4 5; do
-    if age-plugin-yubikey --generate --serial "$serial" --slot 1 \
-         --pin-policy once --touch-policy always --name "$name"; then
-      return 0
+  local serial=$1 name=$2 attempt out rc
+  for attempt in 1 2 3; do
+    out=$(age-plugin-yubikey --generate --serial "$serial" --slot 1 \
+            --pin-policy once --touch-policy always --name "$name" 2>&1 | tee /dev/tty)
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] && return 0
+
+    # ONLY the #220 DER panic is safe to retry. Retrying anything else is
+    # actively harmful: a wrong PIN decrements a 3-attempt counter, so a blind
+    # retry loop blocks the key. That is exactly what happened here once.
+    if printf '%s' "$out" | grep -qiE 'invalid pin|tries remaining|blocked'; then
+      warn "wrong PIN -- NOT retrying (each attempt burns one of three tries)"
+      printf '%s' "$out" | grep -oiE '[0-9]+ (try|tries) remaining' | tail -1 | sed 's/^/    /'
+      say ""
+      say "The prompt asks for the PIN ALREADY ON THE KEY, not a new one."
+      say "On a factory key that is the default: 123456"
+      say "If it is now blocked, unblock it with:"
+      say "  ykman --device $serial piv access unblock-pin"
+      return 1
     fi
-    warn "generate attempt $attempt failed (upstream #220 panics intermittently) - retrying"
-    sleep 2
+    if printf '%s' "$out" | grep -qiE 'overlength|panic'; then
+      warn "hit the known #220 generation panic on attempt $attempt - retrying"
+      sleep 2
+      continue
+    fi
+    warn "generation failed for an unrecognised reason - not retrying"
+    return 1
   done
   return 1
 }
@@ -397,7 +416,15 @@ say ""
 key_inventory "$YKA_SERIAL"
 confirm "Enrol THIS key (PIV slot 82 only)?" || { say "Nothing written."; exit 0; }
 say ""
-say "You will now be asked for a PIN, and the key will blink for a touch."
+warn "READ THIS: the prompt asks for the PIN ALREADY ON THE KEY."
+say "It is NOT asking you to choose a new one."
+say "  factory default: 123456"
+say "  you get THREE attempts before the key blocks"
+say ""
+say "To use a PIN of your own, quit now (Ctrl-C) and set it first:"
+say "  ykman --device $YKA_SERIAL piv access change-pin"
+say ""
+say "After the PIN, the key blinks for a touch."
 say "Policy: --pin-policy once --touch-policy always (archival use, rare taps)."
 pause "Press Enter, then follow the plugin's prompts"
 generate_identity "$YKA_SERIAL" "bootstrap-A" || {
