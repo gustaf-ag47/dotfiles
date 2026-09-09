@@ -346,3 +346,57 @@ change needed — read-only observation):
 This requires no new tokens, no cooldown risk beyond one throwaway `max_tokens: 1`
 request per model, and directly answers the one thing the public record left
 open.
+
+## Empirical experiment (2026-09-08)
+
+Run through the live proxy (post pressure-pick activation, commit `4c800c9`)
+against token `82a293204226` (`gs@gustafsilver.se`), which the picker selected
+for both probes below (the token predicted for Fable, `a5de118c98c0`, was
+in `7d`-cooldown at probe time — see the handover report for that anomaly).
+
+**Fable probe** (`claude-fable-5`, `max_tokens: 1`):
+
+- Immediately before (from proxy log, prior request on the same token):
+  `u7=0.03 u7_oi=None u5=0.17`
+- Response headers (`anthropic-ratelimit-unified-*`) on the Fable request
+  itself:
+  - `7d-utilization: 0.03`, `7d-reset: 1789538400`, `7d-status: allowed`
+  - `5h-utilization: 0.17`, `5h-reset: 1788957000`, `5h-status: allowed`
+  - `7d_oi-utilization: 0.07`, `7d_oi-reset: 1789538400` (same reset epoch
+    as base `7d`), `7d_oi-status: allowed`
+  - `representative-claim: five_hour`
+- Immediately after (proxy `/_status`): `u5=0.17 u7=0.03 u7_oi=0.07` — `u5`
+  and `u7` are byte-identical to the pre-probe reading; `u7_oi` is the only
+  value that changed (went from previously-unobserved/`None` to `0.07`,
+  i.e. this was the first time this token's Fable-specific bucket was
+  sampled since the proxy restart, and it already reads non-zero from prior
+  real Fable traffic on that token).
+
+**Sonnet probe** (`claude-sonnet-5`, `max_tokens: 1`, same token,
+immediately after the Fable probe):
+
+- Response headers contain **no `7d_oi-*` fields at all** — only
+  `5h-utilization: 0.17`, `7d-utilization: 0.03`, and the corresponding
+  `-status`/`-reset` fields. The unified-status header set is a strict
+  subset of the Fable response's set, missing exactly the three `7d_oi-*`
+  keys.
+- `/_status` after: `u5=0.17 u7=0.03 u7_oi=0.07` — unchanged from the
+  post-Fable-probe reading (both base buckets held steady across two
+  consecutive real requests, and `u7_oi` did not move, consistent with a
+  non-Fable model never touching it).
+
+**Conclusion:** Job 2 is settled empirically, and the conclusion agrees with
+the already-committed hedge in Summary item 2 ("Fable draining its own
+`7d_oi` bucket first/instead"): a Fable-5 request debits **only** the
+dedicated `7d_oi` bucket. Base `7d` and `5h` did not move at all across the
+Fable request (they read identically before and after, including across
+several prior non-probe requests on the same token in the same minute), and
+the `7d_oi` header trio is **absent entirely** from non-Fable (`sonnet-5`)
+responses — confirming `7d_oi` is a Fable-5-only, separately-metered bucket,
+not a shared/overflow counter that other models also report but leave at
+zero. This single-account, `max_tokens: 1`-scale experiment cannot fully
+rule out a tiny/rounded-away debit to base `7d`/`5h` on Fable requests, but
+given multiple prior non-Fable requests on the same token also left `u7`/`u5`
+at the same two-decimal reading, any such effect would have to be well below
+the reporting granularity — i.e., not practically relevant to the picker's
+pressure math.
