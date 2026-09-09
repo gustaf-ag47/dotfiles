@@ -36,6 +36,12 @@ Token selection (see docs/research/claude-token-rotation-oss.md): CC_PROXY_PICK
 `headroom` — legacy lowest-7d-utilization) and CC_PROXY_PICK_TOLERANCE (default
 1.5 — stickiness band that keeps the previous token, and its prompt cache,
 unless another token's pressure is this many times better).
+429 pacing: CC_PROXY_BURST_WAIT_MAX (default 15s) — a 429 that does not mark a
+spent bucket is a per-minute burst limit, so the proxy waits out Retry-After (up
+to this cap) and retries the SAME token once instead of rotating; rotating would
+only move the burst to another account and throw away the warm prompt cache.
+A quota-429 (`anthropic-ratelimit-unified*-status: rejected`) still cools the
+token down and fails over immediately.
 A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may list fingerprints
 (whitespace-separated) to treat as cooled-down — used for testing rollover without
 burning real quota.
@@ -75,6 +81,22 @@ USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
 FAILOVER_STATUSES = {401, 403, 429, 529}
+# A 429 either means "this bucket is spent" (rotate) or "you are going too fast"
+# (wait). Only the former is worth a failover — see docs/research/
+# claude-token-rotation-oss.md and docs/research/anthropic-ratelimit-buckets.md §3.
+BURST_WAIT_MAX = float(os.environ.get("CC_PROXY_BURST_WAIT_MAX", "15"))
+UNIFIED_STATUS_RE = re.compile(r"^anthropic-ratelimit-unified-(?:[a-z0-9_]+-)?status$")
+# `representative-claim` names the bucket the account-level status refers to,
+# using the long name; the per-bucket headers use these abbreviations.
+CLAIM_ABBREV = {
+    "five_hour": "5h",
+    "seven_day": "7d",
+    "seven_day_opus": "7d_opus",
+    "seven_day_sonnet": "7d_sonnet",
+    "seven_day_overage_included": "7d_oi",
+    "five_hour_overage_included": "5h_oi",
+    "overage": "overage",
+}
 HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "proxy-connection", "te", "trailer", "upgrade"}
 
 
@@ -288,6 +310,55 @@ def retry_after_seconds(headers, default: float = 60.0) -> float:
         return max(1.0, (when - datetime.now(timezone.utc)).total_seconds())
     except Exception:
         return default
+
+
+def header_map(headers) -> dict[str, str]:
+    """Lower-cased snapshot of a header container (http.client Message or dict)."""
+    try:
+        items = headers.items()
+    except AttributeError:
+        return {}
+    return {str(k).lower(): ("" if v is None else str(v)) for k, v in items}
+
+
+def classify_429(headers) -> str:
+    """Tell a spent quota bucket apart from a per-minute burst limit.
+
+    "quota" when the response says a bucket is done for this window — the
+    account-level `anthropic-ratelimit-unified-status: rejected`, any per-bucket
+    `anthropic-ratelimit-unified-<claim>-status: rejected`, or the bucket named
+    by `representative-claim` reporting full utilization. Anything else is
+    "burst": the account still has quota, we are just sending too fast.
+    """
+    hdrs = header_map(headers)
+    for name, value in hdrs.items():
+        if UNIFIED_STATUS_RE.match(name) and value.strip().lower() == "rejected":
+            return "quota"
+    claim = hdrs.get("anthropic-ratelimit-unified-representative-claim", "").strip().lower()
+    abbrev = CLAIM_ABBREV.get(claim)
+    if abbrev:
+        try:
+            if float(hdrs.get(f"anthropic-ratelimit-unified-{abbrev}-utilization", "")) >= 1.0:
+                return "quota"
+        except ValueError:
+            pass
+    return "burst"
+
+
+def burst_pause_seconds(headers, cap: float | None = None) -> float | None:
+    """How long to pause and retry the same token, or None to cool down + fail over.
+
+    Only a burst-429 carrying an explicit Retry-After within the cap is worth
+    waiting for; a missing Retry-After, an over-cap one, or a quota-429 all take
+    the historical rotate-now path.
+    """
+    limit = BURST_WAIT_MAX if cap is None else cap
+    if limit <= 0 or classify_429(headers) != "burst":
+        return None
+    if not header_map(headers).get("retry-after", "").strip():
+        return None
+    wait = retry_after_seconds(headers)
+    return wait if wait <= limit else None
 
 
 def update_from_headers(tok: Tok, headers) -> None:
@@ -731,8 +802,10 @@ class Handler(BaseHTTPRequestHandler):
         valid_count = len([t for t in STATE if t.valid])
         endpoint = self.path.split("?", 1)[0]
         model = request_model(body)
+        paced: set[str] = set()  # tokens already given one burst-429 pause
 
-        for _ in range(max(1, valid_count + 1)):
+        # Every token may burn one extra attempt on a burst pause before failover.
+        for _ in range(max(1, valid_count + 1) + valid_count):
             with LOCK:
                 tok = pick(exclude=tried, model=model)
             if tok is None:
@@ -756,8 +829,12 @@ class Handler(BaseHTTPRequestHandler):
                 tok.last_status = resp.status
                 tok.responses += 1
                 save_usage_state()
+                pause = None
                 if resp.status == 429:
-                    tok.cooldown_until = time.time() + retry_after_seconds(resp.headers)
+                    if tok.fp not in paced:
+                        pause = burst_pause_seconds(resp.headers)
+                    if pause is None:  # spent bucket (or unpaceable): cool down + rotate
+                        tok.cooldown_until = time.time() + retry_after_seconds(resp.headers)
                 else:
                     tok.cooldown_until = 0.0
                 if resp.status in (401, 403):
@@ -770,7 +847,21 @@ class Handler(BaseHTTPRequestHandler):
 
             log(f"{self.command} {endpoint} -> token {tok.name()} "
                 f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
-                + (" [failover]" if resp.status in FAILOVER_STATUSES else ""))
+                + (f" [burst, pausing {pause}s]" if pause is not None
+                   else " [failover]" if resp.status in FAILOVER_STATUSES else ""))
+
+            if pause is not None:
+                # Burst limit, not a spent bucket: waiting is cheaper than rotating,
+                # which would only move the burst and lose this token's prompt cache.
+                # The token stays out of `tried` and out of cooldown, so the next
+                # pick() — deterministic over unchanged state — returns it again.
+                paced.add(tok.fp)
+                try:
+                    resp.read()
+                finally:
+                    conn.close()
+                time.sleep(pause)  # outside LOCK: never block other requests
+                continue
 
             if resp.status in FAILOVER_STATUSES and len(tried) < valid_count:
                 tried.add(tok.fp)

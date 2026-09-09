@@ -144,5 +144,77 @@ class PickPolicyTests(TestCase):
         self.assertIs(proxy.pick(exclude={best.fp}, model="claude-opus-5"), last)
 
 
+class Burst429Tests(TestCase):
+    """A spent bucket must rotate; a per-minute burst must just wait."""
+
+    def test_account_level_rejected_is_quota(self):
+        self.assertEqual(
+            proxy.classify_429({"anthropic-ratelimit-unified-status": "rejected"}),
+            "quota",
+        )
+
+    def test_per_bucket_rejected_is_quota(self):
+        for header in ("anthropic-ratelimit-unified-7d-status",
+                       "anthropic-ratelimit-unified-7d_oi-status",
+                       "anthropic-ratelimit-unified-overage-status"):
+            with self.subTest(header=header):
+                self.assertEqual(proxy.classify_429({header: "rejected"}), "quota")
+
+    def test_representative_claim_at_full_utilization_is_quota(self):
+        headers = {
+            "anthropic-ratelimit-unified-representative-claim": "seven_day_overage_included",
+            "anthropic-ratelimit-unified-7d_oi-utilization": "1.0",
+        }
+        self.assertEqual(proxy.classify_429(headers), "quota")
+
+    def test_allowed_status_is_burst(self):
+        headers = {
+            "anthropic-ratelimit-unified-status": "allowed_warning",
+            "anthropic-ratelimit-unified-representative-claim": "seven_day",
+            "anthropic-ratelimit-unified-7d-utilization": "0.42",
+        }
+        self.assertEqual(proxy.classify_429(headers), "burst")
+
+    def test_absent_ratelimit_headers_are_burst(self):
+        self.assertEqual(proxy.classify_429({}), "burst")
+        self.assertEqual(proxy.classify_429({"retry-after": "5"}), "burst")
+
+    def test_header_case_does_not_matter(self):
+        self.assertEqual(
+            proxy.classify_429({"Anthropic-RateLimit-Unified-Status": "Rejected"}),
+            "quota",
+        )
+
+    def test_burst_within_cap_is_paced(self):
+        self.assertEqual(proxy.burst_pause_seconds({"retry-after": "7"}, cap=15), 7.0)
+
+    def test_burst_over_cap_is_not_paced(self):
+        self.assertIsNone(proxy.burst_pause_seconds({"retry-after": "60"}, cap=15))
+
+    def test_quota_429_is_never_paced(self):
+        headers = {"retry-after": "5", "anthropic-ratelimit-unified-status": "rejected"}
+        self.assertIsNone(proxy.burst_pause_seconds(headers, cap=15))
+
+    def test_missing_retry_after_is_not_paced(self):
+        self.assertIsNone(proxy.burst_pause_seconds({}, cap=15))
+
+    def test_zero_cap_disables_pacing(self):
+        self.assertIsNone(proxy.burst_pause_seconds({"retry-after": "1"}, cap=0))
+
+    def test_cap_defaults_to_the_env_knob(self):
+        with mock.patch.object(proxy, "BURST_WAIT_MAX", 3):
+            self.assertEqual(proxy.burst_pause_seconds({"retry-after": "2"}), 2.0)
+            self.assertIsNone(proxy.burst_pause_seconds({"retry-after": "9"}))
+
+    def test_http_message_headers_are_accepted(self):
+        from email.message import Message
+
+        message = Message()
+        message["Retry-After"] = "4"
+        message["anthropic-ratelimit-unified-status"] = "allowed"
+        self.assertEqual(proxy.classify_429(message), "burst")
+        self.assertEqual(proxy.burst_pause_seconds(message, cap=15), 4.0)
+
+
 if __name__ == "__main__":
     main()
