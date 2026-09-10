@@ -178,8 +178,33 @@ link_config "$DOTFILES/config/gui/Wayland/hypr" "$XDG_CONFIG_HOME/hypr"
 link_config "$DOTFILES/config/gui/Wayland/waybar" "$XDG_CONFIG_HOME/waybar"
 link_config "$DOTFILES/config/gui/Wayland/wofi" "$XDG_CONFIG_HOME/wofi"
 
-# Create host-specific Hyprland config symlink (outside hypr dir to avoid sync issues)
+# --- machine profile ------------------------------------------------------
+# One file per machine describing what it IS (class, battery, gpu, disk), read
+# both here and by install-arch. See profiles/README.md.
 HOSTNAME="${HOST:-$(cat /etc/hostname 2>/dev/null || echo 'unknown')}"
+PROFILE="${PROFILE:-$HOSTNAME}"
+PROFILE_FILE="$DOTFILES/profiles/$PROFILE.env"
+if [ ! -f "$PROFILE_FILE" ]; then
+	echo "Warning: no profile at profiles/$PROFILE.env, falling back to default"
+	echo "  create one so this machine gets the right config overlays"
+	PROFILE_FILE="$DOTFILES/profiles/default.env"
+fi
+# shellcheck disable=SC1090  # path is computed at runtime
+. "$PROFILE_FILE"
+echo "Profile: $PROFILE (class=${PROFILE_CLASS:-unknown} battery=${PROFILE_HAS_BATTERY:-unknown})"
+
+# Class-specific waybar overlay. The main config "include"s this path, so the
+# overlay can drop modules that do not apply (battery on a desktop).
+WAYBAR_PROFILE="$DOTFILES/config/gui/Wayland/waybar/profiles/${PROFILE_CLASS:-laptop}.jsonc"
+if [ -f "$WAYBAR_PROFILE" ]; then
+	mkdir -p "$XDG_CONFIG_HOME/waybar"
+	link_config "$WAYBAR_PROFILE" "$XDG_CONFIG_HOME/waybar/profile.jsonc"
+	echo "  waybar overlay: ${PROFILE_CLASS}.jsonc"
+else
+	echo "  Warning: no waybar overlay for class '${PROFILE_CLASS:-}'"
+fi
+
+# Create host-specific Hyprland config symlink (outside hypr dir to avoid sync issues)
 HOST_HYPR_CONF="$DOTFILES/config/gui/Wayland/hypr/hosts/$HOSTNAME.conf"
 if [ -f "$HOST_HYPR_CONF" ]; then
     ln -sf "$HOST_HYPR_CONF" "$XDG_CONFIG_HOME/hypr-host.conf"

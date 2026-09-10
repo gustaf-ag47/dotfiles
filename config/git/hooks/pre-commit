@@ -77,7 +77,9 @@ echo "🔐 Checking for secrets..."
 # forced the encrypted bootstrap config to live only inside $SYNC and created
 # the bootstrap paradox. Allow the known-public artifacts; the content scan
 # below is what actually catches private key material.
-safe_public='^secrets/(recipients\.txt|kit-manifest\.txt|yubikey-identity\.txt|known-devices\.txt|\.gitignore)$|^secrets/.*\.age$'
+# profiles/*.env are machine FACTS (class, gpu, disk, swap), not credentials.
+# The generic *.env rule is right for real env files, so allowlist just this path.
+safe_public='^secrets/(recipients\.txt|kit-manifest\.txt|yubikey-identity\.txt|known-devices\.txt|\.gitignore)$|^secrets/.*\.age$|^profiles/[A-Za-z0-9_-]+\.env$'
 sensitive_files=$(git diff --cached --name-only \
     | grep -iE '\.(env|pem|key|cert|crt|p12|pfx|asc|gpg)$|id_rsa|id_dsa|id_ecdsa|credentials|secret|password|apikey' \
     | grep -vE "$safe_public" || true)
@@ -176,13 +178,19 @@ fi
 # This catches base64-encoded secrets and random strings
 # Exclude:
 #   - lazy-lock.json (contains git commit SHAs)
+#   - Path-shaped matches (3+ slash-separated segments). base64's alphabet
+#     includes '/', so a long filesystem path matches the heuristic; a real
+#     base64 secret with that many slashes is vanishingly rare.
+#   - Diff headers (+++ b/path). '/' is in the base64 character class, so a
+#     long repo path trips the heuristic -- the scanner was flagging its own
+#     diff headers.
 #   - Lines containing file paths (/sys/, /proc/, /dev/, /etc/, /usr/, /var/, /home/, /tmp/)
 #   - Lines containing URLs (http://, https://)
 #   - Public age recipients (age1..., age1yubikey1...). These are PUBLIC keys;
 #     publishing them is the intended design, and they are long base32 so they
 #     trip the entropy heuristic. The private half is AGE-SECRET-KEY-1..., which
 #     the private-material check above catches by content.
-suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '^\+\+\+ ' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' | grep -vE '(/[^/]+){3,}' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3

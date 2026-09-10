@@ -1,4 +1,8 @@
 {
+  // Machine-specific overlay, symlinked by scripts/install.sh from
+  // profiles/<class>.jsonc. Later values win, so this replaces modules-right
+  // (e.g. dropping the battery module on a desktop).
+  "include": ["~/.config/waybar/profile.jsonc"],
   "layer": "top",
   "position": "top", 
   "height": 50,

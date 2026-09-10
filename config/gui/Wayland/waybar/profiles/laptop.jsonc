@@ -1,0 +1,10 @@
+// Laptop overlay: keeps the battery module and adds backlight control.
+{
+  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "backlight", "pulseaudio", "battery", "custom/claude-usage", "custom/power"],
+  "backlight": {
+    "format": "{icon} {percent}%",
+    "format-icons": ["", "", "", "", "", "", "", "", ""],
+    "on-scroll-up": "brightnessctl set +5%",
+    "on-scroll-down": "brightnessctl set 5%-"
+  }
+}
