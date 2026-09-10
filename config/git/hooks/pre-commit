@@ -44,10 +44,12 @@ run_linter() {
 echo "🔍 Running pre-commit checks..."
 
 # Check for merge conflict markers
+# --check reports whitespace errors as well as conflict markers, so report
+# what it actually found instead of always blaming conflict markers.
 if git diff --cached --check; then
-    echo "✅ No merge conflict markers found"
+    echo "✅ No conflict markers or whitespace errors"
 else
-    echo "❌ Merge conflict markers detected"
+    echo "❌ git diff --check failed (conflict markers or whitespace errors above)"
     exit 1
 fi
 
@@ -180,7 +182,7 @@ fi
 #     publishing them is the intended design, and they are long base32 so they
 #     trip the entropy heuristic. The private half is AGE-SECRET-KEY-1..., which
 #     the private-material check above catches by content.
-suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE '^\+[[:space:]]*#?[[:space:]]*age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3
