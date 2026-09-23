@@ -82,6 +82,16 @@ CLAUDE_CODE_ENV="$XDG_CONFIG_HOME/claude-code/env.sh"
 [ -r "$CLAUDE_CODE_ENV" ] && source "$CLAUDE_CODE_ENV"
 unset CLAUDE_CODE_ENV
 
+# Scratch space: /tmp is an 8G tmpfs that agent build caches fill (ENOSPC crashed
+# pi sessions on 2026-09-23). Use the big NVMe when it is mounted; otherwise keep
+# the default. Aged out by ~/.config/user-tmpfiles.d/scratch.conf.
+SCRATCH_TMP=/mnt/my_encrypted_nvme/scratch/tmp
+if [ -d /mnt/my_encrypted_nvme/sync ] && mkdir -p "$SCRATCH_TMP" 2>/dev/null && [ -w "$SCRATCH_TMP" ]; then
+    export TMPDIR="$SCRATCH_TMP"
+    export GOTMPDIR="$SCRATCH_TMP"
+fi
+unset SCRATCH_TMP
+
 # Cleanup
 export GOPATH="${XDG_DATA_HOME:-$HOME/.local/share}"/go
 export PATH="$GOPATH/bin:$PATH"
