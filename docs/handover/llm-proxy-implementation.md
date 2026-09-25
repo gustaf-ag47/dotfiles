@@ -21,6 +21,32 @@ Ordered so every step ships value on its own and nothing routes until step 4.
   `is_available` is false.
 - Fixtures: the ten listed in the introspection doc §5 (redacted real responses).
 
+### Step 1 — done (2026-09-25, commit `bbff6a3`)
+
+- `scripts/llm_usage.py`: `jwt_claims()` (local base64url decode), `codex()` returns
+  `account{email,name,plan,account_id[:6]}`, `windows` (+`additional_rate_limits` by
+  `limit_name`), `allowed`, `limit_reached`, `reached_type`, `upsell` (title only),
+  `models{slug:{available,available_at,credits_would_enable}}`, `credits{balance,
+  has_credits,unlimited,overage_limit_reached}`, `reset_credits`, `topup_url`.
+  `deepseek()` returns `label`, `label_source` (`env|auth.json|key`), `topup_url`.
+  Render split per provider (`anthropic_lines` unchanged in output, `codex_lines`,
+  `deepseek_lines`). `codex()`/`deepseek()` are stdlib-only, no module state —
+  Step 2 can copy them verbatim (they depend on `get_json`, `numeric`, `boolean`,
+  `text`, `jwt_claims`, `quota_window`, `deepseek_key`, `deepseek_label` and the two
+  `*_TOPUP_URL` constants).
+- Open question #3 answered in the introspection doc: pi 0.87.1 merges `auth.json`
+  per provider (`auth-storage.js:389`), so `deepseek.label` survives OAuth refreshes;
+  only `/login deepseek` replaces it.
+- Verified by name: `python3 -m unittest tests.unit.test_llm_usage -v` (22 ok),
+  `make test-unit` (46 ok), `bin/llm-usage --refresh` (live: codex
+  `gs@… (pro)  LIMIT REACHED`, astra row, top-up line; deepseek `key …<last4>
+  EXHAUSTED`, −0.12 USD, top-up URL, label hint), `bin/llm-usage --refresh --json`.
+- Not verified: the Codex top-up URL (`chatgpt.com/codex/settings/usage`) and
+  `platform.deepseek.com/top_up` are still hard-coded and unclicked (open questions
+  #2 and #4). `additional_rate_limits` rendering is fixture-only (live value `null`).
+- Side effect: `bin/llm-usage` and `tests/unit/test_llm_usage.py` were untracked in
+  the main checkout; this commit tracks them.
+
 ## Step 2 — proxy becomes the quota oracle
 
 `bin/claude-token-proxy` + `tests/unit/test_claude_token_proxy.py`.
