@@ -301,6 +301,16 @@ pin_tries() {
 # Reuse an identity already present rather than forcing a restart. The ceremony
 # is not resumable by design (generating overwrites a slot), but a FAILED stage
 # should not strand a key that was already enrolled successfully.
+# Every attached key that already carries a bootstrap identity, as
+# "serial<TAB>recipient". Lets a re-run skip the enrolment stages entirely
+# instead of making the human unplug and swap keys that are already done.
+enrolled_keys() {
+  age-plugin-yubikey --list 2>/dev/null | awk '
+    /^#[[:space:]]+Serial:/ { s=$3; sub(",","",s); next }
+    /^age1yubikey1/ { if (s != "") { print s "\t" $0; s="" } }
+  '
+}
+
 existing_recipient() {
   local serial=$1
   # The reset on a non-matching Serial line matters: without it, a later key's
@@ -455,6 +465,29 @@ note "That is exactly why we enrol TWO keys plus a paper recovery key."
 pause "Ready to begin?"
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
+SKIP_ENROLMENT=no
+if [ "$(enrolled_keys | wc -l)" -ge 2 ]; then
+  stage "Already-enrolled keys detected"
+  say "Two attached keys already carry a bootstrap identity, so there is"
+  say "nothing to generate. Re-generating would mint NEW recipients and"
+  say "invalidate any kit already encrypted to the current ones."
+  say ""
+  enrolled_keys | while IFS=$'\t' read -r ser rec; do
+    printf '    %s  %s\n' "$ser" "$rec"
+  done
+  say ""
+  if confirm "Adopt these two and skip to the paper key?"; then
+    YKA_SERIAL=$(enrolled_keys | sed -n 1p | cut -f1)
+    YKA_PUB=$(enrolled_keys | sed -n 1p | cut -f2)
+    YKB_SERIAL=$(enrolled_keys | sed -n 2p | cut -f1)
+    YKB_PUB=$(enrolled_keys | sed -n 2p | cut -f2)
+    SKIP_ENROLMENT=yes
+    step "adopted $YKA_SERIAL and $YKB_SERIAL"
+    pause "Continue?"
+  fi
+fi
+
+if [ "$SKIP_ENROLMENT" = no ]; then
 stage "Insert YubiKey A"
 say "This generates an age identity on the key itself. The private key never"
 say "leaves the hardware — only a public recipient comes back out."
@@ -521,6 +554,8 @@ step "YubiKey B ($YKB_SERIAL) recipient: $YKB_PUB"
 pause "Recorded. Continue?"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
+fi  # end of the enrolment stages
+
 stage "Paper recovery key"
 say "Last resort if both YubiKeys are lost. Generated in RAM with swap off so"
 say "the private key never touches a disk."
