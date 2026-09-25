@@ -7,20 +7,26 @@ return {
     'supermaven-inc/supermaven-nvim',
     enabled = true,
     event = 'InsertEnter',
-    opts = {
-      keymaps = {
-        accept_suggestion = '<M-l>', -- Alt+l — no conflict with cmp Tab
-        clear_suggestion = '<C-]>',
-        accept_word = '<M-w>',
-      },
-      ignore_filetypes = { 'TelescopePrompt', 'oil', 'dbui', 'help' },
-      color = {
-        suggestion_color = '#9399b2',
-        cterm = 244,
-      },
-      log_level = 'off',
-      disable_inline_completion = false,
-      disable_keymaps = false,
-    },
+    config = function()
+      require('supermaven-nvim').setup({
+        keymaps = {
+          accept_suggestion = '<M-l>', -- Alt+l — no conflict with cmp Tab
+          clear_suggestion = '<C-]>',
+          accept_word = '<M-w>',
+        },
+        ignore_filetypes = { 'TelescopePrompt', 'oil', 'dbui', 'help' },
+        color = {
+          suggestion_color = '#9399b2',
+          cterm = 244,
+        },
+        log_level = 'off',
+        disable_inline_completion = false,
+        disable_keymaps = false,
+      })
+
+      local lifecycle = require('supermaven-nvim.binary.binary_handler')
+      lifecycle.open_popup = function() end
+      lifecycle.show_activation_message = function() end
+    end,
   },
 }
