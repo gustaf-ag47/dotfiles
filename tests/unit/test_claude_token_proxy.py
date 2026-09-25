@@ -652,5 +652,217 @@ class OracleHttpTests(OracleFixture):
             self.assertEqual(self.get("/_usage", method="POST")[0], 405)
 
 
+class FakeUpstreamResponse:
+    """Just enough of http.client.HTTPResponse for Handler._stream()."""
+
+    def __init__(self, status=200, body=b"", content_type="application/json"):
+        self.status = status
+        self._body = body
+        self._headers = [("content-type", content_type), ("x-ds-trace-id", "trace")]
+        self.headers = dict(self._headers)
+
+    def getheader(self, name, default=None):
+        return dict(self._headers).get(name.lower(), default)
+
+    def getheaders(self):
+        return list(self._headers)
+
+    def read(self, n=-1):
+        out, self._body = (self._body, b"") if n < 0 else (self._body[:n], self._body[n:])
+        return out
+
+
+class FakeHTTPSConnection:
+    """Records the one request DeepSeek would receive; `responses` is a shared queue."""
+    calls: list = []
+    responses: list = []
+
+    def __init__(self, host, timeout=None):
+        self.host = host
+
+    def request(self, method, path, body=None, headers=None):
+        FakeHTTPSConnection.calls.append({"host": self.host, "method": method, "path": path,
+                                          "body": body, "headers": dict(headers or {})})
+
+    def getresponse(self):
+        return FakeHTTPSConnection.responses.pop(0)
+
+    def close(self):
+        pass
+
+
+class DeepseekPassthroughTests(OracleFixture):
+    """Opt-in DeepSeek fallback for the real Claude Code CLI (decision 4)."""
+
+    OAUTH_HEADERS = {"content-type": "application/json", "Authorization": f"Bearer {ANTHROPIC_CANARY}",
+                     "anthropic-beta": proxy.OAUTH_BETA, "anthropic-version": "2023-06-01",
+                     "x-app": "cli", "anthropic-dangerous-direct-browser-access": "true"}
+
+    def setUp(self):
+        super().setUp()
+        self._fallback = dict(proxy.FALLBACK)
+        proxy.FALLBACK.update(active=False, since=None, model=None, claude_model=None,
+                              episode_requests=0, requests=0, by_model={})
+        proxy.USAGE_STATE_FILE = proxy.CONTROL_DIR / "usage.json"
+        proxy.PROVIDER_STATE = {"openai-codex": codex_state(), "deepseek": deepseek_state()}
+        FakeHTTPSConnection.calls, FakeHTTPSConnection.responses = [], []
+        self.patches = [mock.patch.object(proxy, "DEEPSEEK_FALLBACK", True),
+                        mock.patch.object(proxy, "read_auth", return_value=fake_auth()),
+                        mock.patch.object(proxy.http.client, "HTTPSConnection", FakeHTTPSConnection),
+                        mock.patch.object(proxy, "upstream", side_effect=AssertionError("anthropic must not be called"))]
+        self.anthropic = self.patches[-1].start()
+        for patch in self.patches[:-1]:
+            patch.start()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), proxy.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        for patch in self.patches:
+            patch.stop()
+        proxy.FALLBACK.clear()
+        proxy.FALLBACK.update(self._fallback)
+        super().tearDown()
+
+    def exhausted_token(self):
+        return self.token(cooldown=time.time() + 600)
+
+    def post(self, model="claude-opus-5-5-20260901", stream=False):
+        body = json.dumps({"model": model, "max_tokens": 5, "stream": stream,
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        conn.request("POST", "/v1/messages?beta=true", body=body, headers=self.OAUTH_HEADERS)
+        resp = conn.getresponse()
+        out = resp.status, resp.read().decode()
+        conn.close()
+        return out
+
+    def usage(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        conn.request("GET", "/_usage")
+        data = json.loads(conn.getresponse().read())
+        conn.close()
+        return data
+
+    def test_feature_off_keeps_the_unavailable_message(self):
+        self.exhausted_token()
+        with mock.patch.object(proxy, "DEEPSEEK_FALLBACK", False):
+            status, body = self.post()
+            usage = self.usage()
+        self.assertEqual(status, 503)
+        self.assertIn("no OAuth account can serve", json.loads(body)["error"]["message"])
+        self.assertEqual(FakeHTTPSConnection.calls, [])
+        self.assertIsNone(usage["routing"]["fallback"])
+        self.assertFalse(usage["routing"]["deepseek_fallback"]["enabled"])
+
+    def test_pool_exhausted_forwards_to_deepseek_with_its_own_key(self):
+        self.exhausted_token()
+        FakeHTTPSConnection.responses.append(FakeUpstreamResponse(
+            200, b'{"type":"message","model":"deepseek-v4-pro","usage":{"input_tokens":7,"output_tokens":3}}'))
+        with mock.patch.object(proxy, "log") as log:
+            status, body = self.post()
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["model"], "deepseek-v4-pro")
+        self.anthropic.assert_not_called()
+        [call] = FakeHTTPSConnection.calls
+        self.assertEqual((call["host"], call["method"], call["path"]),
+                         ("api.deepseek.com", "POST", "/anthropic/v1/messages?beta=true"))
+        headers = {k.lower(): v for k, v in call["headers"].items()}
+        self.assertEqual(headers["x-api-key"], DEEPSEEK_CANARY)
+        self.assertNotIn("authorization", headers)
+        self.assertEqual(headers["host"], "api.deepseek.com")
+        sent = json.loads(call["body"])
+        self.assertEqual(sent["model"], "deepseek-v4-pro")
+        self.assertEqual(sent["messages"], [{"role": "user", "content": "hi"}])
+        wire = json.dumps({**call, "body": call["body"].decode()})
+        self.assertNotIn(ANTHROPIC_CANARY, wire)
+        self.assertNotIn("sk-ant-oat", wire)
+        self.assertIn("-> deepseek deepseek-v4-pro (fallback: anthropic pool exhausted)",
+                      " ".join(str(c.args[0]) for c in log.call_args_list))
+        usage = self.usage()
+        fallback = usage["routing"]["fallback"]
+        self.assertEqual((fallback["provider"], fallback["model"], fallback["requests"]),
+                         ("deepseek", "deepseek-v4-pro", 1))
+        self.assertIsNotNone(fallback["since"])
+        by_model = usage["routing"]["deepseek_fallback"]["by_model"]["claude-opus-5-5-20260901"]
+        self.assertEqual((by_model["requests"], by_model["input_tokens"], by_model["output_tokens"]), (1, 7, 3))
+        self.assertEqual(usage["providers"]["anthropic"]["tokens"][0]["counters"]["requests"], 0)
+        persisted = json.loads(proxy.USAGE_STATE_FILE.read_text())[proxy.FALLBACK_STATE_KEY]
+        self.assertEqual(persisted["by_model"]["claude-opus-5-5-20260901"]["requests"], 1)
+        self.assertNotIn(DEEPSEEK_CANARY, json.dumps(usage))
+
+    def test_streaming_response_is_relayed_and_counted(self):
+        self.exhausted_token()
+        sse = (b'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":4}}}\n\n'
+               b'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":9}}\n\n')
+        FakeHTTPSConnection.responses.append(FakeUpstreamResponse(200, sse, "text/event-stream"))
+        status, body = self.post(stream=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(body.encode(), sse)
+        bucket = proxy.FALLBACK["by_model"]["claude-opus-5-5-20260901"]
+        self.assertEqual((bucket["input_tokens"], bucket["output_tokens"]), (4, 9))
+
+    def test_balance_below_floor_or_unavailable_keeps_unavailable_message(self):
+        self.exhausted_token()
+        for state in (deepseek_state(balance="0.50"), deepseek_state(balance="-0.12", available=False),
+                      {"status": "unavailable", "reason": "not polled yet"}):
+            with self.subTest(state=state):
+                proxy.PROVIDER_STATE["deepseek"] = state
+                status, body = self.post()
+                self.assertEqual(status, 503)
+                self.assertIn("no OAuth account can serve", body)
+        self.assertEqual(FakeHTTPSConnection.calls, [])
+        self.assertIsNone(self.usage()["routing"]["fallback"])
+
+    def test_model_without_deepseek_route_is_not_forwarded(self):
+        self.exhausted_token()
+        proxy.ROUTES_FILE.write_text(json.dumps({"claude-opus-5-5": [["openai-codex", "gpt-6-luna"]]}))
+        os.utime(proxy.ROUTES_FILE, (time.time() + 5, time.time() + 5))
+        self.assertEqual(self.post()[0], 503)
+        self.assertEqual(self.post(model="gpt-6-luna")[0], 503)
+        self.assertEqual(FakeHTTPSConnection.calls, [])
+
+    def test_healthy_pool_never_fires(self):
+        self.token()
+        self.anthropic.side_effect = None
+        self.anthropic.return_value = (mock.Mock(), FakeUpstreamResponse(200, b'{"type":"message"}'))
+        self.assertEqual(self.post()[0], 200)
+        self.assertEqual(self.anthropic.call_count, 1)
+        self.assertEqual(self.anthropic.call_args.args[4], ANTHROPIC_CANARY)
+        self.assertEqual(FakeHTTPSConnection.calls, [])
+        self.assertIsNone(self.usage()["routing"]["fallback"])
+
+    def test_deepseek_402_is_returned_as_is_without_anthropic_retry(self):
+        self.exhausted_token()
+        error = b'{"error":{"message":"Insufficient Balance","type":"unknown_error"}}'
+        FakeHTTPSConnection.responses.append(FakeUpstreamResponse(402, error))
+        status, body = self.post()
+        self.assertEqual((status, body.encode()), (402, error))
+        self.anthropic.assert_not_called()
+        self.assertEqual(len(FakeHTTPSConnection.calls), 1)
+
+    def test_episode_clears_when_a_token_is_pickable_again(self):
+        tok = self.exhausted_token()
+        FakeHTTPSConnection.responses.append(FakeUpstreamResponse(200, b'{"type":"message"}'))
+        self.assertEqual(self.post()[0], 200)
+        self.assertIsNotNone(self.usage()["routing"]["fallback"])
+        tok.cooldown_until = 0.0
+        usage = self.usage()
+        self.assertIsNone(usage["routing"]["fallback"])
+        self.assertFalse(proxy.FALLBACK["active"])
+        self.assertEqual(usage["routing"]["deepseek_fallback"]["requests_total"], 1)  # ledger survives
+
+    def test_counters_survive_restart(self):
+        proxy.FALLBACK["requests"] = 3
+        proxy.FALLBACK["by_model"] = {"claude-sonnet-5": {"requests": 3, "input_tokens": 1, "output_tokens": 2,
+                                                          "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}
+        self.assertTrue(proxy.save_usage_state())
+        proxy.FALLBACK.update(requests=0, by_model={})
+        proxy.restore_usage_state()
+        self.assertEqual(proxy.FALLBACK["requests"], 3)
+        self.assertEqual(proxy.FALLBACK["by_model"]["claude-sonnet-5"]["output_tokens"], 2)
+
+
 if __name__ == "__main__":
     main()

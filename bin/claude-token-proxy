@@ -37,8 +37,24 @@ executed, tokens are never logged) and exposes them under `providers` in `/_usag
 equivalence table `config/llm-proxy/routes.json` (`CC_PROXY_ROUTES` overrides the
 path; re-read on mtime change) — Anthropic pool first via the read-only pick
 preview, then the table order — and says which is routable and why not. It is a
-pure read: nothing is forwarded to another provider by this proxy.
+pure read: nothing is forwarded to another provider by this proxy unless the
+DeepSeek passthrough below is switched on.
 Readings from undocumented endpoints degrade to `unavailable`, never to 0 %.
+
+DeepSeek Anthropic-passthrough (opt-in, decision 4 in the same doc): with
+`CC_PROXY_DEEPSEEK_FALLBACK=1`, a Messages request that NO OAuth token can serve
+(`pick()` returns None: every account parked, cooling or forced down — never on
+mere pressure or threshold) is forwarded unchanged to DeepSeek's Anthropic-compatible
+endpoint `https://api.deepseek.com/anthropic` with `x-api-key` from the DeepSeek
+credential pi holds and the model rewritten per the `deepseek` entry of
+`routes.json`. Gates: the cached balance must be above
+`CC_PROXY_DEEPSEEK_MIN_BALANCE` and `is_available` must not be false, and the
+model must have a `deepseek` route; otherwise the usual "no OAuth account can
+serve" error is returned. The OAuth bearer is never sent to DeepSeek, a DeepSeek
+error (e.g. 402 on a negative balance) is returned to the client as-is and never
+retried against Anthropic, and every fallback request is logged and counted
+(`routing.fallback` in `/_usage`). This changes who is billed and who receives the
+conversation, which is why it is off by default.
 
 Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
 CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
@@ -59,7 +75,8 @@ A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may list fingerprints
 burning real quota.
 Oracle knobs: CC_PROXY_ROUTES (routes.json path), CC_PROXY_DEEPSEEK_MIN_BALANCE
 (default 1.0 — DeepSeek is only routable above this balance), PI_CODING_AGENT_DIR
-(where auth.json lives), DEEPSEEK_ACCOUNT_LABEL (display label for the key).
+(where auth.json lives), DEEPSEEK_ACCOUNT_LABEL (display label for the key),
+CC_PROXY_DEEPSEEK_FALLBACK (default 0; 1 enables the passthrough above).
 """
 
 from __future__ import annotations
@@ -102,6 +119,11 @@ USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
 ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
 DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
+DEEPSEEK_FALLBACK = os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0") == "1"
+DEEPSEEK_HOST = "api.deepseek.com"
+# DeepSeek mounts its Anthropic-compatible API under this prefix; the bare
+# /v1/messages path is a 404 there (checked 2026-09-25).
+DEEPSEEK_ANTHROPIC_PREFIX = "/anthropic"
 PI_AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")).expanduser()
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -254,6 +276,12 @@ LOCK = threading.Lock()
 TOKEN_FILE = ""
 FILE_MTIME = 0.0
 PERSISTENCE_ERROR: str | None = None
+# DeepSeek passthrough bookkeeping. `active`/`since`/`model` describe the current
+# exhaustion episode (cleared as soon as a real token is pickable again); the
+# counters survive restarts under the "_deepseek_fallback" key of usage.json.
+FALLBACK_STATE_KEY = "_deepseek_fallback"
+FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model": None,
+                  "episode_requests": 0, "requests": 0, "by_model": {}}
 
 
 def load_usage_state() -> dict:
@@ -278,6 +306,9 @@ def save_usage_state() -> bool:
             "cache_creation_input_tokens": t.cache_creation_input_tokens,
             "by_model": t.by_model,
         } for t in STATE}
+        if FALLBACK["requests"]:
+            data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
+                                        "by_model": FALLBACK["by_model"]}
         tmp = USAGE_STATE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
         tmp.replace(USAGE_STATE_FILE)
@@ -302,6 +333,11 @@ def restore_usage_state() -> None:
             setattr(tok, key, int(saved.get(key, 0) or 0))
         models = saved.get("by_model", {})
         tok.by_model = models if isinstance(models, dict) else {}
+    saved = data.get(FALLBACK_STATE_KEY, {})
+    if isinstance(saved, dict):
+        FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
+        models = saved.get("by_model", {})
+        FALLBACK["by_model"] = models if isinstance(models, dict) else {}
 
 
 def _hdr_float(headers, name: str) -> float | None:
@@ -477,27 +513,64 @@ def record_request(tok: Tok, model: str) -> None:
         save_usage_state()
 
 
-def add_usage(tok: Tok, model: str, usage: dict) -> None:
-    """Record usage reported by a JSON or SSE response, if present."""
+def _usage_values(usage) -> dict[str, int] | None:
     if not isinstance(usage, dict):
-        return
+        return None
     values = {
         key: int(usage.get(key, 0) or 0)
         for key in ("input_tokens", "output_tokens", "cache_read_input_tokens",
                     "cache_creation_input_tokens")
     }
-    if not any(values.values()):
-        return
-    for key, value in values.items():
-        setattr(tok, key, getattr(tok, key) + value)
-    bucket = tok.by_model.setdefault(model, {
+    return values if any(values.values()) else None
+
+
+def _model_bucket(by_model: dict, model: str) -> dict:
+    return by_model.setdefault(model, {
         "requests": 0, "input_tokens": 0, "output_tokens": 0,
         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
     })
+
+
+def add_usage(tok: Tok | None, model: str, usage: dict) -> None:
+    """Record usage reported by a JSON or SSE response, if present.
+
+    `tok` is None for a DeepSeek passthrough response; those tokens are
+    counted under the fallback ledger, never against an OAuth account.
+    """
+    values = _usage_values(usage)
+    if values is None:
+        return
+    if tok is None:
+        bucket = _model_bucket(FALLBACK["by_model"], model)
+    else:
+        for key, value in values.items():
+            setattr(tok, key, getattr(tok, key) + value)
+        bucket = _model_bucket(tok.by_model, model)
     for key, value in values.items():
         bucket[key] += value
     with LOCK:
         save_usage_state()
+
+
+def record_fallback_request(model: str, target: str) -> None:
+    """One more request served by DeepSeek for `model` (billed as `target`)."""
+    now = time.time()
+    with LOCK:
+        if not FALLBACK["active"]:
+            FALLBACK.update(active=True, since=datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                            episode_requests=0)
+        FALLBACK["model"], FALLBACK["claude_model"] = target, model
+        FALLBACK["episode_requests"] += 1
+        FALLBACK["requests"] += 1
+        _model_bucket(FALLBACK["by_model"], model)["requests"] += 1
+        save_usage_state()
+
+
+def clear_fallback(reason: str) -> None:
+    """A real token is pickable again: end the exhaustion episode (caller holds LOCK)."""
+    if FALLBACK["active"]:
+        log(f"deepseek fallback ended ({reason}) after {FALLBACK['episode_requests']} request(s)")
+        FALLBACK.update(active=False, since=None, model=None, claude_model=None, episode_requests=0)
 
 
 def usage_from_json(body: bytes) -> dict | None:
@@ -1127,7 +1200,7 @@ def codex_candidate(model: str, state: dict) -> dict:
 def deepseek_candidate(model: str, state: dict) -> dict:
     out = {"provider": "deepseek", "model": model, "routable": False, "reason": "unknown",
            "balance": None, "currency": None, "min_balance": DEEPSEEK_MIN_BALANCE,
-           "checked_at": state.get("checked_at")}
+           "proxy_passthrough": DEEPSEEK_FALLBACK, "checked_at": state.get("checked_at")}
     if state.get("status") != "ok":
         return out
     rows = state.get("balances") or []
@@ -1171,11 +1244,85 @@ def route_payload(model: str) -> dict | None:
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
+# --- DeepSeek Anthropic-passthrough (opt-in) ----------------------------------
+
+
+def fallback_target(model: str) -> tuple[str | None, str]:
+    """(deepseek model, reason) for a request no OAuth token can serve.
+
+    The model is None whenever the passthrough must not fire: feature off, no
+    `deepseek` route for this model, no DeepSeek key, or the cached balance not
+    routable (below the floor, `is_available` false, or never polled). Reads
+    only cached state; never touches an upstream.
+    """
+    if not DEEPSEEK_FALLBACK:
+        return None, "disabled"
+    key = route_key(model)
+    target = next((t for p, t in ROUTES.get(key or "", []) if p == "deepseek"), None)
+    if target is None:
+        return None, "no deepseek route"
+    if not deepseek_key(read_auth()):
+        return None, "no deepseek key"
+    with LOCK:
+        state = dict(PROVIDER_STATE.get("deepseek", {}))
+    candidate = deepseek_candidate(target, state)
+    if not candidate["routable"]:
+        return None, f"deepseek {candidate['reason']}"
+    return target, "anthropic pool exhausted"
+
+
+def rewrite_model(body: bytes, target: str) -> bytes:
+    data = json.loads(body)
+    data["model"] = target
+    return json.dumps(data).encode("utf-8")
+
+
+def deepseek_upstream(method: str, path: str, headers: dict, body: bytes, key: str,
+                      timeout: float = 600.0):
+    """Forward an Anthropic-shaped request to DeepSeek with its own credential.
+
+    Same wire format, different host, prefix and auth header. The OAuth bearer
+    was already dropped by _forward_headers(); it is dropped here again so no
+    future caller can leak it. `anthropic-beta`/`anthropic-version` are passed
+    through (DeepSeek documents them as ignored on /messages; checked 2026-09-25
+    together with Claude Code's `x-app` and browser-access headers: none is
+    rejected).
+    """
+    h = {k: v for k, v in headers.items() if k.lower() not in ("authorization", "x-api-key", "host")}
+    h["x-api-key"] = key
+    h["Host"] = DEEPSEEK_HOST
+    conn = http.client.HTTPSConnection(DEEPSEEK_HOST, timeout=timeout)
+    conn.request(method, DEEPSEEK_ANTHROPIC_PREFIX + path, body=body, headers=h)
+    return conn, conn.getresponse()
+
+
+def fallback_payload() -> dict:
+    """`routing.fallback` for /_usage: the live episode, or None (caller holds LOCK).
+
+    The episode is also ended here when a real token has become pickable
+    since the last request, so the reader never shows a stale fallback.
+    """
+    if FALLBACK["active"] and rank_pool(FALLBACK["claude_model"] or "unknown")["would_pick"]:
+        clear_fallback("token pickable again")
+    if not FALLBACK["active"]:
+        return None
+    return {"provider": "deepseek", "model": FALLBACK["model"], "for_model": FALLBACK["claude_model"],
+            "since": FALLBACK["since"], "requests": FALLBACK["episode_requests"],
+            "reason": "anthropic pool exhausted"}
+
+
 def usage_payload() -> dict:
     """/_usage schema 2: the schema-1 keys unchanged, plus `providers` for every provider."""
     with LOCK:
         toks = [t.snapshot() for t in STATE]
         routing = routing_preview()
+        routing["fallback"] = fallback_payload()
+        routing["deepseek_fallback"] = {
+            "enabled": DEEPSEEK_FALLBACK, "min_balance": DEEPSEEK_MIN_BALANCE,
+            "requests_total": FALLBACK["requests"], "by_model": FALLBACK["by_model"],
+            "note": "opt-in passthrough of Claude Code requests to api.deepseek.com/anthropic when no "
+                    "OAuth token is pickable; `fallback` is non-null only during such an episode",
+        }
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
     anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
@@ -1295,9 +1442,13 @@ class Handler(BaseHTTPRequestHandler):
                     detail = ", ".join(
                         f"{t.name()}[{'parked' if not t.valid else 'forced' if t.fp in forced_cooldown_fps() else 'cooling'}"
                         f" u7={t.u7}]" for t in STATE)
-                    log(f"WARNING: request rejected — no token pickable: {detail}")
+                if self._deepseek_fallback(endpoint, fwd, body, model):
+                    return
+                log(f"WARNING: request rejected — no token pickable: {detail}")
                 self._send_api_error(503, unavailable_message(model), "overloaded_error")
                 return
+            with LOCK:
+                clear_fallback(f"token {tok.fp} pickable")
             try:
                 conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
                 record_request(tok, model)
@@ -1361,6 +1512,38 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_api_error(502, "claude-token-proxy: all tokens failed or exhausted")
 
+    def _deepseek_fallback(self, endpoint: str, fwd: dict, body: bytes, model: str) -> bool:
+        """Serve the request from DeepSeek instead of failing it; True when handled.
+
+        Only reached when pick() found no token at all. Whatever DeepSeek answers
+        (including a 402 on a negative balance) goes back to the client as-is:
+        there is no Anthropic retry, which would loop on the exhausted pool.
+        """
+        target, reason = fallback_target(model)
+        if target is None:
+            if DEEPSEEK_FALLBACK:
+                log(f"deepseek fallback not taken for {model}: {reason}")
+            return False
+        key = deepseek_key(read_auth())
+        try:
+            forwarded = rewrite_model(body, target)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            log(f"deepseek fallback not taken for {model}: body is not JSON")
+            return False
+        log(f"{self.command} {endpoint} -> deepseek {target} (fallback: {reason}) model={model}")
+        try:
+            conn, resp = deepseek_upstream(self.command, self.path, fwd, forwarded, key)
+        except Exception as exc:
+            log(f"{self.command} {endpoint} -> deepseek {target} ERROR {exc.__class__.__name__}")
+            self._send_api_error(502, f"claude-token-proxy: DeepSeek fallback failed ({exc.__class__.__name__})\n"
+                                 + unavailable_message(model), "api_error")
+            return True
+        record_fallback_request(model, target)
+        log(f"{self.command} {endpoint} -> deepseek {target} status {resp.status}")
+        self._stream(resp, None, model)
+        conn.close()
+        return True
+
     def do_GET(self):
         endpoint = self.path.split("?", 1)[0]
         if endpoint in ("/_status", "/_health"):
@@ -1376,7 +1559,7 @@ class Handler(BaseHTTPRequestHandler):
 
     do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
 
-    def _stream(self, resp, tok: Tok, model: str):
+    def _stream(self, resp, tok: Tok | None, model: str):
         content_type = resp.getheader("content-type", "")
         is_json = "text/event-stream" not in content_type.lower()
         captured = bytearray()
