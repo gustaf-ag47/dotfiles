@@ -27,6 +27,20 @@ cctoken
 claude-code-token.env
 .credentials.json
 
+# Pi credentials/runtime must never enter the portable resource tree.
+auth.json
+auth.json.*
+trust.json
+models-store.json
+config/pi/**/sessions/
+config/pi/**/delegate-mailbox/
+config/pi/**/locks/
+config/pi/**/node_modules/
+config/pi/**/.venv/
+config/pi/**/__pycache__/
+config/pi/**/*.pyc
+config/pi/**/*.bak*
+
 # Company/personal-specific files kept on disk (synced via Syncthing) but never
 # committed to this PUBLIC repo. Templates (*.example) ARE committed.
 config/nvim/lua/dbui_private.lua

@@ -1,0 +1,14 @@
+{
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-fable-5",
+  "defaultThinkingLevel": "medium",
+  "hideThinkingBlock": true,
+  "theme": "dark",
+  "enabledModels": [
+    "anthropic/claude-fable-5",
+    "anthropic/claude-opus-5",
+    "openai-codex/gpt-6-astra",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash"
+  ]
+}
