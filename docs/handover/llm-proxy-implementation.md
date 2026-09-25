@@ -62,6 +62,64 @@ Ordered so every step ships value on its own and nothing routes until step 4.
   Codex → DeepSeek per the table; Anthropic pool first via `routing_preview()`.
   Never mutates state.
 
+### Step 2 — done (2026-09-25, commit `5066d32`)
+
+- `config/llm-proxy/routes.json` (decision 5, tracked). `route_key()` matches exact →
+  longest row prefixing the model (`claude-opus-5-5-20260901`) → nearest row the model
+  prefixes (`claude-fable-5` → `claude-fable-5-1`). Re-read on mtime change; a bad file
+  keeps the last good table and sets `routes_error`. `CC_PROXY_ROUTES` overrides the path,
+  which is otherwise resolved through the `~/.local/bin` symlink to `$DOTFILES/config/…`.
+- `/_usage` is schema 2: `tokens`/`routing` unchanged, plus
+  `providers.{anthropic,openai-codex,deepseek}`. `anthropic` = `{status, kind, tokens,
+  routing, checked_at}`; the other two are the `codex()`/`deepseek()` dicts copied into
+  the proxy, polled on the watcher every `USAGE_INTERVAL` (first poll off-thread at
+  startup so listening is not delayed), cached in `PROVIDER_STATE`, `checked_at` per
+  provider, any failure → `{status: unavailable, reason}` (HTTP code or exception class
+  only — never a body or message).
+- `GET /_route?model=` → `{model, route, candidates[], first_routable, generated_at}`.
+  Anthropic candidate comes from `rank_pool(model)` (the `routing_preview()` dry run,
+  refactored to take the real model so per-scope cooldowns count; never touches
+  `LAST_PICK`), reasons `cooldown|exhausted|no token`. Codex: `exhausted` (window ≥
+  100 % or `allowed:false`), `model unavailable` (per `model_usage`, `reset_at` =
+  `available_at`), else routable; DeepSeek: `unavailable` (`is_available:false`),
+  `balance below floor` (`CC_PROXY_DEEPSEEK_MIN_BALANCE`, default 1.0), else routable.
+  Unpolled/failed provider → `reason: "unknown"`. Unknown model → 404 JSON listing the
+  known rows. `POST`/`PUT` on any `/_*` path → 405; local endpoints are never forwarded.
+- Labels (decision 6): Codex `account{email,plan}` from JWT claims (live `wham/usage`
+  values win); DeepSeek `DEEPSEEK_ACCOUNT_LABEL` → `auth.json.label` → `key …last4`.
+- Verified by name: `python3 -m unittest tests.unit.test_claude_token_proxy -v` (42 ok:
+  24 existing + 18 new), `make test-unit` (42 ok in the worktree; 68 on master with
+  Step 1's suite), `systemctl --user restart claude-token-proxy.service && curl
+  …/_route?model=claude-opus-5-5` (live, redacted below), `llm-usage --refresh` (renders
+  unchanged; the reader still uses its own adapters — switching it to `providers.*` is a
+  later step). Live `/_usage` + `/_route` bodies were grepped against every token in
+  `~/cctoken` and `auth.json`: clean.
+
+  ```json
+  {"model": "claude-opus-5-5", "route": "claude-opus-5-5", "candidates": [
+    {"provider": "anthropic", "model": "claude-opus-5-5", "routable": true, "reason": null,
+     "quota_left_percent": 12.0, "reset_at": "2026-09-30T06:00:00+00:00", "account": "82a2…"},
+    {"provider": "openai-codex", "model": "gpt-6-luna", "routable": false, "reason": "exhausted",
+     "quota_left_percent": 0.0, "reset_at": "2026-09-30T14:38:22+00:00", "checked_at": 1790325858},
+    {"provider": "deepseek", "model": "deepseek-v4-pro", "routable": false, "reason": "unavailable",
+     "balance": -0.12, "currency": "USD", "min_balance": 1.0, "checked_at": 1790325859}],
+   "first_routable": {"provider": "anthropic", …}}
+  ```
+
+- Open items:
+  - The adapters were copied before Step 1 landed. Field names agree, but Step 1's
+    final `codex()` also returns `account.name`, `account.account_id[:6]`, `upsell`,
+    `reset_credits`, `topup_url` and `additional_rate_limits` windows, and `deepseek()`
+    returns `label_source` and `topup_url`. Sync the proxy copies (small diff) before the
+    reader switches to `providers.*` as its single source.
+  - Codex routability ignores `credits` (a Pro account at 100 % with credits could still
+    serve); revisit with Step 4 if "running on credits" should count as routable.
+  - Anthropic `reset_at` when nothing is routable is the earliest of cooldown deadlines
+    and over-threshold bucket resets — good enough for "next reset X", not per-account.
+  - The main `master` checkout had ~150 lines of uncommitted extra tests in
+    `tests/unit/test_claude_token_proxy.py` (pick-policy/opaque-429 cases); they were
+    stashed around the fast-forward and restored, still uncommitted, still green.
+
 ## Step 3 — DeepSeek Anthropic-passthrough for non-pi clients (decision 4)
 
 `bin/claude-token-proxy`.
