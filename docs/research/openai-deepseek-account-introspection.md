@@ -1,6 +1,8 @@
 # OpenAI (ChatGPT/Codex OAuth) and DeepSeek account introspection
 
-Status: research — implementation PR to follow in scripts/llm_usage.py
+Status: decided 2026-09-25 — implement §4 as proposed; DeepSeek label order is env
+`DEEPSEEK_ACCOUNT_LABEL` → `auth.json` `label` → last-4 of key. Tracked in
+`docs/handover/llm-proxy-implementation.md`
 
 Probed live 2026-09-25 ~07:50 UTC from this PC with the credentials pi already
 holds in `~/.pi/agent/auth.json`. GET requests only. No token refresh, no login, no

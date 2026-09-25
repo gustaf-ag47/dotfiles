@@ -1,6 +1,25 @@
 # Evolving `claude-token-proxy` into a general LLM proxy (Anthropic / OpenAI-Codex / DeepSeek)
 
-Status: research — awaiting operator decision on option (a)/(b)/(c)
+Status: decided 2026-09-25 — option (c); implementation tracked in
+`docs/handover/llm-proxy-implementation.md`
+
+## Operator decisions (2026-09-25)
+
+1. **pi stays on the OAuth pool** with the Claude-Code identity extension. Accepted
+   risk. No new cloaking, no CLIProxyAPI, no multi-tenant sharing; pi keeps its honest
+   `originator` on Codex.
+2. **Architecture (c):** proxy = Anthropic pool + cross-provider quota/route oracle
+   (`/_usage` v2, `GET /_route?model=`); a pi extension does the switching.
+3. **Failover is notify-only**, both directions (switch away and switch back). No
+   deny-list for now.
+4. **DeepSeek Anthropic-passthrough for Claude Code:** implemented, opt-in, off by
+   default (`CC_PROXY_DEEPSEEK_FALLBACK=1`), balance floor 1 USD, surfaced in `/_usage`
+   routing.
+5. **Equivalence table** (`config/llm-proxy/routes.json`): fable → gpt-6-astra, gpt-6-sol
+   / deepseek-v4-pro; **opus → gpt-6-luna** / deepseek-v4-pro; sonnet → gpt-6-sol /
+   deepseek-flash; haiku → gpt-6-luna / deepseek-flash. Codex before DeepSeek.
+6. **DeepSeek label:** `DEEPSEEK_ACCOUNT_LABEL` env first, `auth.json` `label` second,
+   last-4 of key fallback. Codex label from the access-token JWT claims.
 
 Date: 2026-09-25. Research only. `bin/`, `scripts/`, `config/` and `~/.pi/agent/*` were
 not changed, and no services were restarted. Brief:
