@@ -7,6 +7,16 @@ WIFI_INTERFACE=$(iw dev | awk '$1=="Interface"{print $2}')
 BATTERY_PATH="/sys/class/power_supply/BAT0"
 AC_PATH="/sys/class/power_supply/AC"
 
+# WiFi chipsets whose firmware crashes (Microcode SW error / NMI_INTERRUPT_HOST)
+# when power_save is enabled. On these, we never toggle `iw set power_save on`.
+# Matched against `lspci` / driver output. See /etc/modprobe.d/iwlwifi.conf.
+WIFI_POWERSAVE_BLOCKLIST_REGEX='AX211|AX210|AX201|AX200'
+
+# Return 0 if the active WiFi device is known to crash with power_save on.
+wifi_powersave_unsafe() {
+  lspci -nnk 2>/dev/null | grep -qiE "$WIFI_POWERSAVE_BLOCKLIST_REGEX"
+}
+
 # List of services to manage
 POWER_SAVE_SERVICES=("bluetooth.service" "docker.service" "NetworkManager-wait-online.service")
 PERFORMANCE_SERVICES=("bluetooth.service" "docker.service")
@@ -73,9 +83,15 @@ enable_power_save() {
     fi
   fi
 
-  # Enable Wi-Fi power saving
+  # Enable Wi-Fi power saving — but NOT on chipsets whose firmware crash-loops
+  # with power_save on (e.g. Intel AX211). See wifi_powersave_unsafe().
   if [[ -n "$WIFI_INTERFACE" ]]; then
-    sudo iw dev "$WIFI_INTERFACE" set power_save on || log "⚠️ Failed to set Wi-Fi power-saving mode."
+    if wifi_powersave_unsafe; then
+      log "⏭️  Skipping Wi-Fi power-save: chipset in crash blocklist (keeping power_save off)."
+      sudo iw dev "$WIFI_INTERFACE" set power_save off 2>/dev/null || true
+    else
+      sudo iw dev "$WIFI_INTERFACE" set power_save on || log "⚠️ Failed to set Wi-Fi power-saving mode."
+    fi
   fi
 
   # Reduce brightness

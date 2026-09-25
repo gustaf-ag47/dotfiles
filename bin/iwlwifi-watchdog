@@ -1,0 +1,47 @@
+#!/bin/bash
+# iwlwifi-watchdog — recover the Intel AX211 from its firmware crash loop.
+#
+# The AX211 (so-a0-gf-a0) periodically hits a firmware NMI:
+#   "0x20000066 | NMI_INTERRUPT_HOST" / "Device error - SW reset"
+#   "RFIm is deactivated, reason = 4"
+# and then self-restarts every ~11s WITHOUT recovering, so WiFi stays dead for
+# minutes (typically noticed after locking / going AFK, when auto-suspend's WiFi
+# teardown kicks the firmware into the loop).
+#
+# A single module reload breaks the loop cleanly. This watchdog tails the kernel
+# log, and on an NMI reloads the iwlwifi stack once, with a cooldown so the reload
+# itself is not treated as a new fault.
+#
+# Run as root (needs modprobe). Installed via iwlwifi-watchdog.service.
+
+set -uo pipefail
+
+COOLDOWN=60          # seconds to wait after a recovery before acting again
+PATTERN='NMI_INTERRUPT_HOST|Device error - SW reset'
+last_recovery=0
+
+log() { echo "$(date '+%F %T') iwlwifi-watchdog: $*"; }
+
+reload_stack() {
+    log "firmware NMI detected — reloading iwlwifi stack"
+    modprobe -r iwlmvm 2>/dev/null
+    modprobe -r iwlwifi 2>/dev/null
+    sleep 1
+    modprobe iwlwifi 2>/dev/null
+    log "reload complete"
+}
+
+log "started (watching for: $PATTERN)"
+
+# Follow only NEW kernel messages.
+journalctl -k -f -n 0 --output=cat 2>/dev/null | while IFS= read -r line; do
+    [[ "$line" =~ $PATTERN ]] || continue
+    now=$(date +%s)
+    if (( now - last_recovery < COOLDOWN )); then
+        continue   # still inside cooldown from the last reload
+    fi
+    last_recovery=$now
+    reload_stack
+    # swallow the burst of dump lines the crash produced
+    sleep 5
+done
