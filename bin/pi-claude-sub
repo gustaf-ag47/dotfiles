@@ -63,6 +63,25 @@ auto)
 *) die "PI_CLAUDE_SUB_PROXY must be auto, 1, or 0 (got: $PROXY_MODE)" ;;
 esac
 
+# Never supply a Claude credential to a different provider. Respect `--` so
+# prompt text that happens to contain flags is not interpreted as configuration.
+expect=""
+for arg in "$@"; do
+	[ "$arg" = "--" ] && break
+	if [ "$expect" = provider ]; then
+		[ "$arg" = anthropic ] || die "pi-claude-sub is Anthropic-only; use pi for $arg"
+	elif [ "$expect" = model ] && [[ "$arg" == */* ]]; then
+		[[ "$arg" == anthropic/* ]] || die "pi-claude-sub is Anthropic-only; use pi --model $arg"
+	fi
+	expect=""
+	case "$arg" in
+		--provider) expect=provider ;;
+		--model) expect=model ;;
+		--provider=*) [ "${arg#*=}" = anthropic ] || die "pi-claude-sub is Anthropic-only; use pi for ${arg#*=}" ;;
+		--model=*/*) [[ "${arg#*=}" == anthropic/* ]] || die "pi-claude-sub is Anthropic-only; use pi --model ${arg#*=}" ;;
+	esac
+done
+
 ext_args=(-e "$EXT")
 
 # Cross-provider failover via the proxy's /_route oracle. Skipped once
