@@ -1,0 +1,5 @@
+#!/bin/bash
+# Unified account usage: Claude pool, ChatGPT subscription, DeepSeek balance.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+exec python3 "$ROOT/scripts/llm_usage.py" "$@"

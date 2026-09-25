@@ -276,6 +276,25 @@ the test, with payload `{"https://api.openai.com/profile":{"email":"a@b"},
 1. **Does `gpt-6-luna` still work while the 7-day window is at 100 %?** `model_usage` only listed `gpt-6-astra` as blocked. The `luna-reserve` header suggests luna has its own reserve, but `additional_rate_limits` was `null`. One real luna request would answer it, but that means inference, which is outside this read-only brief. This matters for the `delegate` skill's Codex→Opus fallback check.
 2. What is the correct Codex **add-credits URL**? The response gives only `ctas[].action:"add_credits"`, and the guess `chatgpt.com/codex/settings/usage` hasn't been verified.
 3. Does pi keep unknown fields (`label`) in `auth.json` when it rewrites the file on refresh? If it drops them, fall back to the env var.
+   **Answered 2026-09-25 (pi 0.87.1, read from source, Step 1).** Yes for the `deepseek`
+   entry, with one caveat:
+   - Every write goes through `FileCredentialStorage.modify(provider, fn)` in
+     `pi-coding-agent/dist/core/auth-storage.js:378-392`, which re-reads the file under
+     a lock and writes `{ ...currentData, [provider]: next }` (line 389). Only the
+     provider being modified is replaced; every other provider's object is copied
+     through untouched. An OAuth refresh of `openai-codex` or `anthropic` therefore
+     never touches `deepseek.label`.
+   - The refresh path itself (`pi-ai/dist/auth/resolve.js:77-87` →
+     `pi-ai/dist/auth/oauth/openai-codex.js:326-338` `credentialsFromToken`) rebuilds the
+     **refreshed provider's** entry from scratch (`type/access/refresh/expires/accountId`),
+     so extra fields on an *oauth* entry would be dropped. `deepseek` is `api_key` and is
+     never refreshed, so this does not apply.
+   - Caveat: `/login deepseek` (`pi-ai/dist/models.js:310-314`) replaces the whole entry
+     with the freshly entered credential, so `label` must be re-added after a re-login.
+   - `load()` validation (`auth-storage.js:185-193`) only checks `key`/`env` types on
+     `api_key` entries; extra keys are accepted, so pi keeps starting normally.
+   The adapter uses env → `auth.json` `label` → `key …<last4>` (decision #6) and renders a
+   `set DEEPSEEK_ACCOUNT_LABEL (or "label" in auth.json)` hint only on the last tier.
 4. Is `platform.deepseek.com/top_up` the right deep link for the operator's (non-CN) account?
 
 ## Appendix A — `GET /backend-api/wham/usage` (live, redacted)
