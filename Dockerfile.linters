@@ -22,8 +22,8 @@ RUN apk add --no-cache \
 # Install luacheck via luarocks
 RUN luarocks-5.3 install luacheck
 
-# Create symlink for lua command
-RUN ln -s /usr/bin/lua5.3 /usr/bin/lua
+# Create symlinks for lua/luac commands (pre-commit hook calls bare `luac -p`)
+RUN ln -s /usr/bin/lua5.3 /usr/bin/lua && ln -s /usr/bin/luac5.3 /usr/bin/luac
 
 # Set working directory
 WORKDIR /workspace
