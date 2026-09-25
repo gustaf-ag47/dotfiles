@@ -336,11 +336,57 @@ systemctl --user restart claude-token-proxy.service && llm-usage --refresh
 - Pre-existing red, not from this work: untracked `tests/unit/test_pi_provider_integration.py`
   needs an OpenRouter key.
 
+## Step 6 — live switch/switch-back verified; DeepSeek label set (2026-09-25)
+
+No code change; `llm-failover.ts` and the opt-out header behaved as designed in a real
+interactive pi (0.87.1, TUI mode). Driven by a stub proxy
+(`$(pi-scratch dir llm-step6)/stub-proxy.py`, Python stdlib, not a fixture): a flag file
+toggles "exhausted" — `POST /v1/messages` → 503 with the real `unavailable_message()`
+shape, `/_route` anthropic `routable:false reason:cooldown`; otherwise both are forwarded
+to the real `:8788`. Codex/DeepSeek rows mirrored the live `/_route`, with Codex forced
+`routable:true` (it is really exhausted, so the switched-to model 429s — expected).
+Launch: `DOTFILES=<wt> PI_ANTHROPIC_PROXY_URL=http://127.0.0.1:<stub> PI_CLAUDE_SUB_PROXY=1
+PI_CLAUDE_SUB_FAILOVER_EXTENSION=<wt>/config/pi/extensions/llm-failover.ts bin/pi-claude-sub
+--model anthropic/claude-haiku-4-5` in a `tmux new-window`.
+
+Sequence observed (pane capture in the vault output):
+
+1. healthy prompt → `OK` via stub → real proxy; stub log for that `POST /v1/messages`
+   shows **`"x-cc-proxy-fallback": "none"`** (7 of 7 pi requests carried it; header ✓).
+2. `/failover status` → `failover: on; on anthropic/claude-haiku-4-5`, oracle URL, the
+   three ranking lines.
+3. flag exhausted → prompt → `Error: 503 … no OAuth account can serve …` then
+   **`Warning: ↪ switched to openai-codex/gpt-6-luna: anthropic pool exhausted (next reset
+   in 116h 47m)`**; footer badge became `(openai-codex) gpt-6-luna`; pi's retry then
+   `Codex error: The usage limit has been reached` (Codex really exhausted today). Switch ✓.
+4. flag cleared, 65 s later prompt → `turn_start` poll #1 (`/_route` anthropic
+   routable) — no switch back yet (one poll only), prompt still failed on Codex.
+5. 62 s later prompt → poll #2 → **`↩ back to anthropic/claude-haiku-4-5: pool
+   recovered`** (Info line, no prefix), badge back to `(anthropic) claude-haiku-4-5`, the
+   same prompt was then answered by Anthropic (`OK2 OK3 OK4` — the queued ones). Switch-back ✓.
+6. `/failover off` + flag exhausted → 503 propagated through pi's 3 retries, **no**
+   `/_route` call, badge unchanged; `/failover status` → `failover: off; …`. Off ✓.
+
+Stub gotcha worth knowing for any future fixture: the real proxy answers HTTP/1.0 with
+`Connection: close` and no length framing; a HTTP/1.1 stub that copies the headers
+verbatim leaves undici waiting forever (pi's spinner never stops, curl looks fine).
+Re-frame as chunked.
+
+DeepSeek label: `export DEEPSEEK_ACCOUNT_LABEL="gs@gustafsilver.se"` (value supplied by
+the operator) appended to the gitignored `local/env/.env` (sourced by `.zshrc`);
+`llm-usage --refresh --provider deepseek` in a fresh login shell now renders
+`gs@gustafsilver.se  EXHAUSTED` instead of `key …30cf`. Not committed.
+
+Gates: `node --test --experimental-strip-types tests/unit/test_llm_failover.mjs` (10 ok),
+`make test-unit` (85 ok; `test_pi_provider_integration.py` is untracked and not in this
+worktree). Nothing asked of the proxy. Manual item 2 below is closed.
+
 ## Remaining manual items
 
 1. Top up DeepSeek, then run Step 3's live check (`CC_PROXY_DEEPSEEK_FALLBACK=1` on a
    scratch port) and record the headers DeepSeek rejects.
-2. Switch-back path of `llm-failover.ts` is live-untested (needs a real pool recovery).
+2. ~~Switch-back path of `llm-failover.ts` is live-untested~~ — done in Step 6 (stub-driven,
+   real pi TUI); a real pool recovery has still not been observed in the wild.
 3. ~~Auto-loading `config/pi/extensions/*.ts` for plain `pi`~~ — done in Step 5
    (`bin/pi-link-extensions`). In the master checkout `git pull` will conflict on
    `bin/pi-claude-sub` and `scripts/install.sh` (uncommitted wire-pi hunks); take the
