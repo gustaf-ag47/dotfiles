@@ -1,0 +1,97 @@
+#!/bin/bash
+# Make plain `pi` load the dotfiles extensions by symlinking each allowlisted
+# file from config/pi/extensions/ into pi's global extensions directory.
+#
+# Idempotent and reversible: re-running is a no-op, `--remove` deletes only the
+# links this script owns. Never touches auth.json, settings.json or models.json.
+#
+#   pi-link-extensions            link (default)
+#   pi-link-extensions --check    report pending changes, exit 1 if any
+#   pi-link-extensions --remove   unlink managed extensions
+#
+# Env: DOTFILES (repo root), PI_CODING_AGENT_DIR (pi config dir, ~/.pi/agent).
+set -euo pipefail
+
+DOTFILES="${DOTFILES:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+SRC_DIR="$DOTFILES/config/pi/extensions"
+DST_DIR="$AGENT_DIR/extensions"
+
+# Explicit allowlist: an untracked or experimental .ts in config/pi/extensions
+# must not reach every pi session just by existing.
+EXTENSIONS=(
+	goal.ts
+	llm-usage.ts
+	llm-failover.ts
+)
+
+mode="link"
+case "${1:-}" in
+	"") ;;
+	--check | -n) mode="check" ;;
+	--remove) mode="remove" ;;
+	-h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	*) echo "pi-link-extensions: unknown argument $1" >&2; exit 2 ;;
+esac
+
+pending=0
+conflicts=0
+for name in "${EXTENSIONS[@]}"; do
+	src="$SRC_DIR/$name"
+	dst="$DST_DIR/$name"
+	if [ "$mode" = remove ]; then
+		if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
+			rm "$dst"
+			echo "unlinked $dst"
+		fi
+		continue
+	fi
+	if [ ! -f "$src" ]; then
+		echo "  warning: missing source $src, skipping" >&2
+		continue
+	fi
+	if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
+		continue
+	fi
+	if [ -e "$dst" ] && [ ! -L "$dst" ] && ! cmp -s "$src" "$dst"; then
+		# A diverged local copy is the user's work; never overwrite it blindly.
+		echo "  conflict: $dst differs from $src; diff and reconcile, then re-run" >&2
+		conflicts=$((conflicts + 1))
+		continue
+	fi
+	pending=$((pending + 1))
+	if [ "$mode" = check ]; then
+		echo "link: $dst -> $src"
+		continue
+	fi
+	mkdir -p "$DST_DIR"
+	ln -sfn "$src" "$dst"
+	echo "linked $dst -> $src"
+done
+
+# Drop links we created for extensions that later left the allowlist, so pi
+# does not fail loading a dangling symlink.
+if [ "$mode" != remove ] && [ -d "$DST_DIR" ]; then
+	for dst in "$DST_DIR"/*; do
+		[ -L "$dst" ] || continue
+		target="$(readlink "$dst")"
+		case "$target" in
+			"$SRC_DIR"/*) ;;
+			*) continue ;;
+		esac
+		[ -e "$target" ] && continue
+		pending=$((pending + 1))
+		if [ "$mode" = check ]; then
+			echo "unlink (dangling): $dst"
+		else
+			rm "$dst"
+			echo "removed dangling $dst"
+		fi
+	done
+fi
+
+if [ "$mode" = check ]; then
+	echo "$pending pending changes, $conflicts conflicts"
+	[ "$((pending + conflicts))" -eq 0 ]
+fi
+[ "$conflicts" -eq 0 ]

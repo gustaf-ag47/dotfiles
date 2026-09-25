@@ -273,6 +273,12 @@ if [ -d "$DOTFILES/local/bin" ]; then
     done
 fi
 
+# Pi: symlink the allowlisted dotfiles extensions into ~/.pi/agent/extensions so
+# plain `pi` loads /usage, /failover and /goal. Idempotent; never touches auth.
+if command -v pi >/dev/null 2>&1; then
+    "$DOTFILES/bin/pi-link-extensions" || echo "  warning: pi-link-extensions reported conflicts" >&2
+fi
+
 # Link Claude Code user configuration
 mkdir -p "$HOME/.claude"
 link_config "$DOTFILES/.claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"

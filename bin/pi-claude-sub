@@ -65,8 +65,8 @@ esac
 
 ext_args=(-e "$EXT")
 
-# Cross-provider failover via the proxy's /_route oracle. Skipped once pi-setup
-# has linked config/pi/extensions into ~/.pi/agent/extensions (pi loads it there).
+# Cross-provider failover via the proxy's /_route oracle. Skipped once
+# pi-link-extensions has linked it into ~/.pi/agent/extensions (pi loads it there).
 FAILOVER_EXT="${PI_CLAUDE_SUB_FAILOVER_EXTENSION:-$DOTFILES/config/pi/extensions/llm-failover.ts}"
 if [ -f "$FAILOVER_EXT" ] && [ ! -e "$HOME/.pi/agent/extensions/llm-failover.ts" ]; then
 	ext_args+=(-e "$FAILOVER_EXT")
