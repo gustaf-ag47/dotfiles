@@ -502,6 +502,22 @@ class RouteRankingTests(OracleFixture):
         self.assertEqual(out["first_routable"]["provider"], "deepseek")
         self.assertEqual(out["first_routable"]["model"], "deepseek-flash")
 
+    def test_codex_credits_keep_it_routable_after_window_spent(self):
+        """Bought credits serve past the weekly window; a blocked model still is not."""
+        self.token(cooldown=time.time() + 600)
+        state = codex_state(used=100, allowed=False,
+                            models={"gpt-6-astra": {"available": False, "credits_would_enable": False}})
+        state["credits"] = {"balance": "12.50", "has_credits": True, "unlimited": False, "overage_limit_reached": False}
+        self.providers(state, deepseek_state())
+        opus = proxy.route_payload("claude-opus-5-5")
+        self.assertEqual((opus["candidates"][1]["routable"], opus["candidates"][1].get("on_credits")), (True, True))
+        self.assertEqual(opus["first_routable"]["provider"], "openai-codex")
+        fable = proxy.route_payload("claude-fable-5-1")["candidates"][1]
+        self.assertEqual((fable["routable"], fable["reason"]), (False, "exhausted"))
+        state["credits"]["overage_limit_reached"] = True
+        self.providers(state, deepseek_state())
+        self.assertFalse(proxy.route_payload("claude-opus-5-5")["candidates"][1]["routable"])
+
     def test_codex_model_block_is_per_model(self):
         self.providers(codex_state(models={"gpt-6-astra": {"available": False, "available_at": "2026-09-30T14:38:22Z",
                                                             "credits_would_enable": True}}), deepseek_state())
@@ -553,7 +569,8 @@ class ProviderAdapterTests(OracleFixture):
                    "rate_limit_reached_type": {"type": "rate_limit_reached"}, "user_id": "user-SECRETUSERID"}
         with mock.patch.object(proxy, "get_json", return_value=payload) as get:
             out = proxy.codex(fake_auth())
-        self.assertEqual(out["account"], {"email": "live@b", "plan": "pro"})
+        self.assertEqual(out["account"], {"email": "live@b", "name": None, "plan": "pro", "account_id": "acct-1"})
+        self.assertEqual((out["reset_credits"], out["topup_url"]), (None, proxy.CODEX_TOPUP_URL))
         self.assertEqual(out["windows"][0]["used_percent"], 100)
         self.assertFalse(out["allowed"])
         self.assertEqual(out["models"]["gpt-6-astra"]["credits_would_enable"], True)

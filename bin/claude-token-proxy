@@ -130,6 +130,7 @@ DEEPSEEK_HOST = "api.deepseek.com"
 DEEPSEEK_ANTHROPIC_PREFIX = "/anthropic"
 PI_AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")).expanduser()
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CODEX_TOPUP_URL = "https://chatgpt.com/codex/settings/usage"
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
@@ -699,6 +700,7 @@ def jwt_claims(token: str) -> dict:
     auth = data.get("https://api.openai.com/auth")
     return {
         "email": profile.get("email") if isinstance(profile, dict) else None,
+        "name": profile.get("name") if isinstance(profile, dict) else None,
         "plan": auth.get("chatgpt_plan_type") if isinstance(auth, dict) else None,
     }
 
@@ -734,15 +736,22 @@ def codex(auth: dict) -> dict:
                                  "credits_would_enable": row.get("credits_would_enable")}
     credits = data.get("credits") if isinstance(data.get("credits"), dict) else {}
     reached = data.get("rate_limit_reached_type")
+    upsell = data.get("rate_limit_upsell") if isinstance(data.get("rate_limit_upsell"), dict) else {}
+    reset_credits = data.get("rate_limit_reset_credits") if isinstance(data.get("rate_limit_reset_credits"), dict) else {}
     return {"status": "ok", "kind": "subscription quota",
             "account": {"email": data.get("email") or claims["email"],
-                        "plan": data.get("plan_type") or claims["plan"]},
+                        "name": claims.get("name"),
+                        "plan": data.get("plan_type") or claims["plan"],
+                        "account_id": str(credential.get("accountId") or "")[:6] or None},
             "windows": windows,
             "allowed": limits.get("allowed"), "limit_reached": limits.get("limit_reached"),
             "reached_type": reached.get("type") if isinstance(reached, dict) else None,
+            "upsell": upsell.get("title"),
             "models": models,
             "credits": {key: credits.get(key) for key in
                         ("balance", "has_credits", "unlimited", "overage_limit_reached")},
+            "reset_credits": numeric(reset_credits.get("available_count")),
+            "topup_url": CODEX_TOPUP_URL,
             "note": "ChatGPT subscription only; read-only internal endpoint, not OpenAI API billing."}
 
 
@@ -1179,6 +1188,12 @@ def anthropic_candidate(model: str) -> dict:
     return out
 
 
+def codex_on_credits(state: dict) -> bool:
+    """Purchased credits keep serving after the subscription window is spent."""
+    credits = state.get("credits") or {}
+    return bool((credits.get("has_credits") or credits.get("unlimited")) and not credits.get("overage_limit_reached"))
+
+
 def codex_candidate(model: str, state: dict) -> dict:
     out = {"provider": "openai-codex", "model": model, "routable": False, "reason": "unknown",
            "quota_left_percent": None, "reset_at": None, "checked_at": state.get("checked_at")}
@@ -1192,7 +1207,10 @@ def codex_candidate(model: str, state: dict) -> dict:
     out["reset_at"] = _epoch_iso(worst.get("reset_at"))
     blocked = (state.get("models") or {}).get(model) or {}
     if worst["used_percent"] >= 100 or state.get("allowed") is False:
-        out["reason"] = "exhausted"
+        if codex_on_credits(state) and blocked.get("available") is not False:
+            out.update(routable=True, reason=None, on_credits=True)
+        else:
+            out["reason"] = "exhausted"
     elif blocked.get("available") is False:
         out["reason"] = "model unavailable"
         out["reset_at"] = blocked.get("available_at") or out["reset_at"]
