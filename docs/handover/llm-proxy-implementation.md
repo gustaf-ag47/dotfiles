@@ -201,6 +201,58 @@ for where extensions live in this repo).
 - No confirmation prompt (notify-only). No deny-list (none requested).
 - Test: drive the extension against a stub proxy in `tests/unit/`.
 
+### Step 4 — done (2026-09-25, commit `d7d9e32`)
+
+- `config/pi/extensions/llm-failover.ts` (pi 0.87.1). Hooks actually used, after
+  reading `dist/core/extensions/types.d.ts` and `pi-ai/dist/api/anthropic-messages.js`:
+  - **Trigger is `turn_end`, not `after_provider_response`.** The Anthropic SDK throws
+    on a non-2xx before pi calls `onResponse`, so `after_provider_response` (status +
+    headers only) never fires for the proxy's 503. The error is only visible as
+    `message.errorMessage` = `503 {"type":"error","error":{"type":"overloaded_error",
+    "message":"Claude subscription request unavailable: no OAuth account can serve …"}}`.
+    Match is the substring `no OAuth account can serve` (`isPoolExhausted()`), never a
+    generic 5xx. `agent_end` is a backstop with a `WeakSet` dedupe on the message.
+  - `pi.setModel(model: Model)` takes a catalog object, not `(provider, id)`; resolved
+    via `ctx.modelRegistry.find(provider, id)`. A `false` return (no auth) falls through
+    to the next routable candidate. pi's own auto-retry (3 attempts, 2 s backoff) then
+    re-sends on the new model because `prepareRequest` reads `agent.state.model`.
+  - `turn_start` polls `/_route?model=<original>` at most every 60 s while switched;
+    switch back only after two consecutive routable polls ≥ 60 s apart.
+  - `model_select` (source ≠ ours) = manual pick → tracking stops.
+  - `/failover status|on|off`. Notify via `ctx.ui.notify` when `ctx.hasUI`,
+    `console.log` in print mode, `console.error` otherwise. Lines carry
+    provider/model/reason only; the proxy payload is never printed.
+  - `/_route` fetch: loopback origin from `PI_ANTHROPIC_PROXY_URL` / `CC_PROXY_PORT`,
+    3 s `AbortController` timeout, any failure → treated as "oracle unreachable".
+- Loader: `scripts/pi_setup.py` (still untracked in the main checkout) links
+  `config/pi/extensions/*` → `~/.pi/agent/extensions/`. Until that lands,
+  `bin/pi-claude-sub` passes `-e config/pi/extensions/llm-failover.ts`, guarded by
+  `[ ! -e ~/.pi/agent/extensions/llm-failover.ts ]` so it never loads twice.
+- Tests: `tests/unit/test_llm_failover.mjs` (10 cases: trigger match, codex → switch,
+  setModel fallthrough, none routable → one line + no repeat, two-poll recovery,
+  one-poll/flap → no switch back, `/failover off`, non-anthropic ignored + manual pick,
+  `fetchRoute` timeout/bad answers, origin parsing).
+- Verified by name: `node --test --experimental-strip-types tests/unit/test_llm_failover.mjs`
+  (10 ok), `make test-unit` (74 ok), `pi -e config/pi/extensions/llm-failover.ts -p
+  "reply with OK"` (loads; plain pi then 400s on direct Anthropic as expected),
+  `bin/pi-claude-sub --model anthropic/claude-haiku-4-5 -p "/failover status"` (live
+  ranking from `:8788`). Live trigger against a stub (scratch
+  `pi-scratch/llm-step4/stub-proxy.py`: `/_status`, 503 on `POST /v1/messages` with the
+  real `unavailable_message()` text, canned `/_route`):
+  ```bash
+  STUB_PORT=8799 python3 "$(pi-scratch dir llm-step4)/stub-proxy.py" &
+  DOTFILES=$PWD PI_ANTHROPIC_PROXY_URL=http://127.0.0.1:8799 PI_CLAUDE_SUB_PROXY=1 \
+    bin/pi-claude-sub -e config/pi/extensions/llm-failover.ts \
+    --model anthropic/claude-haiku-4-5 -p "reply with exactly: OK"
+  # → "↪ switched to openai-codex/gpt-6-luna: anthropic pool exhausted (next reset in 117h 07m)"
+  #   then pi retried on Codex (really exhausted today → "Codex error: The usage limit has been reached")
+  STUB_CODEX=0 … # → one "✗ no provider routable — anthropic exhausted, codex exhausted,
+                 #   deepseek unavailable" across pi's 4 attempts, 503 propagated
+  ```
+- Not verified live: switch-back (needs a real exhaustion + recovery; unit-tested only)
+  and the `↪` line inside the TUI (print mode only). Not changed: `bin/claude-token-proxy`,
+  `~/.pi/agent/*`. `/_route` had everything needed; nothing to ask of Step 3.
+
 ## Verification gates (every step)
 
 ```bash
