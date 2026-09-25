@@ -135,6 +135,58 @@ Ordered so every step ships value on its own and nothing routes until step 4.
   renders `Claude Code → deepseek-v4-pro (anthropic pool exhausted until …)`.
 - Tests: unit with a fake upstream; one manual live check before enabling.
 
+### Step 3 — done (2026-09-25, commit `04d864e`)
+
+- `bin/claude-token-proxy`: `CC_PROXY_DEEPSEEK_FALLBACK=1` (default `0`) enables
+  `Handler._deepseek_fallback()`, reached only when `pick()` returns `None` in the
+  request loop. `fallback_target()` gates on the `deepseek` entry of `routes.json`
+  (`route_key()` prefix match), a resolvable DeepSeek key (`deepseek_key()`, same as
+  the poller) and `deepseek_candidate()` being routable on the *cached* balance
+  (`CC_PROXY_DEEPSEEK_MIN_BALANCE`, default 1.0, reused from Step 2; `is_available`
+  false → not routable). `deepseek_upstream()` forwards the same method/body/query to
+  `api.deepseek.com` with `/anthropic` prefixed to the path, `x-api-key` set, and
+  `Authorization`/`x-api-key`/`Host` dropped; `rewrite_model()` only replaces `model`.
+  Whatever DeepSeek returns (402 included) streams back as-is through the existing
+  `_stream()` path — no Anthropic retry. A DeepSeek network error is a 502 with the
+  unavailable message appended.
+- Surfacing: log line `POST /v1/messages -> deepseek <model> (fallback: anthropic pool
+  exhausted) model=<claude-model>`; `/_usage` `routing.fallback =
+  {provider, model, for_model, since, requests, reason}` during an episode, `null`
+  otherwise (the episode ends when a real token is picked, or when `/_usage` sees
+  `rank_pool()` would pick one); `routing.deepseek_fallback = {enabled, min_balance,
+  requests_total, by_model}` always; `/_route` deepseek candidate gains
+  `proxy_passthrough`. Counters persist under `_deepseek_fallback` in `usage.json`
+  (token rows unchanged; the fallback is never attributed to an OAuth account).
+- What DeepSeek rejects (probed live with the negative-balance key, 2026-09-25): the
+  bare `/v1/messages` path is a **404** — the `/anthropic` prefix is mandatory (the
+  brief's "path unchanged" was wrong on that point). `anthropic-beta` (the full
+  Claude Code OAuth list), `anthropic-version`, `x-app`,
+  `anthropic-dangerous-direct-browser-access`, `user-agent: claude-cli/*` and a
+  `?beta=true` query are all accepted up to the billing gate (402, not 400); the docs
+  list `anthropic-beta`/`anthropic-version`/`cache_control` as ignored and `thinking`
+  as supported (`budget_tokens` ignored), so nothing but `Authorization` is
+  stripped. The 402 body is OpenAI-shaped (`{"error":{"message":"Insufficient
+  Balance …","type":"unknown_error"}}`, no top-level `type: "error"`); it is relayed
+  verbatim.
+- Verified by name: `python3 -m unittest tests.unit.test_claude_token_proxy -v`
+  (61 ok, 9 new in `DeepseekPassthroughTests` — feature off, forward with rewritten
+  model + `x-api-key` and no bearer, SSE relay + counting, balance below floor /
+  unavailable / unpolled, no deepseek route, healthy pool never fires, 402 as-is
+  without Anthropic retry, episode clears, counters survive restart), `make test-unit`
+  (83 ok), `systemctl --user restart claude-token-proxy.service && sleep 6 &&
+  llm-usage --refresh` (feature off in the unit; unchanged behaviour).
+- **Live check pending a top-up.** Balance was still −0.12 USD, so the forward was
+  exercised only on a scratch instance (port 8799, all tokens forced down,
+  `CC_PROXY_DEEPSEEK_FALLBACK=1`): the gate correctly refused (`deepseek fallback
+  not taken for claude-sonnet-5: deepseek unavailable`) and the client got the
+  unchanged 503. The wire path itself was proven with a direct 402 probe, not via the
+  proxy. Nothing was topped up; the feature is not enabled in the service.
+- Note for Step 4: with the passthrough on, a pi request during an exhaustion episode
+  is also served by DeepSeek *before* pi's extension sees an "unavailable" error, so
+  pi would show the Claude model id while DeepSeek answers. The extension can detect
+  this from `/_usage` `routing.fallback` or `/_route` `proxy_passthrough`; nothing in
+  `/_route` had to change for Step 4.
+
 ## Step 4 — pi extension: notify-only failover (decisions 2, 3)
 
 New pi extension under `config/pi/extensions/` (check `docs/research/pi-unified-providers-and-dotfiles.md`
