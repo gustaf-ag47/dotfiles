@@ -267,3 +267,27 @@ systemctl --user restart claude-token-proxy.service && llm-usage --refresh
 - Codex multi-account pooling (earlier operator decision).
 - Reading DeepSeek's private dashboard API.
 - Any identity cloaking beyond what exists today (decision 1).
+
+## Orchestrator follow-up — done (2026-09-25)
+
+- `ad02886` — pi opts out of the DeepSeek passthrough: `config/pi/anthropic-token-proxy.ts`
+  sends `x-cc-proxy-fallback: none`; the proxy returns the normal unavailable error so
+  `llm-failover.ts` switches natively (decision #3 stays notify-only). Claude Code keeps
+  the passthrough. Test: `test_client_opt_out_header_keeps_the_unavailable_message`.
+- next commit — proxy codex adapter at parity with `llm_usage.py`; `/_route` counts a
+  Codex account on purchased credits as routable (`on_credits: true`) unless the model
+  is blocked or `overage_limit_reached`. Test: `test_codex_credits_keep_it_routable_after_window_spent`.
+- Gates: `python3 -m unittest tests.unit.test_claude_token_proxy` (64 ok), live
+  `pi-claude-sub --model claude-haiku-4-5 -p` through the proxy → OK, `/_usage`
+  `providers.openai-codex.account` carries email/name/plan, `llm-usage --refresh` renders.
+- Pre-existing red, not from this work: untracked `tests/unit/test_pi_provider_integration.py`
+  needs an OpenRouter key.
+
+## Remaining manual items
+
+1. Top up DeepSeek, then run Step 3's live check (`CC_PROXY_DEEPSEEK_FALLBACK=1` on a
+   scratch port) and record the headers DeepSeek rejects.
+2. Switch-back path of `llm-failover.ts` is live-untested (needs a real pool recovery).
+3. Auto-loading `config/pi/extensions/*.ts` for plain `pi` waits on the untracked
+   `scripts/pi_setup.py`; today it loads via `pi-claude-sub`.
+4. Verify the two top-up URLs (Codex, DeepSeek) once each is used for real.
