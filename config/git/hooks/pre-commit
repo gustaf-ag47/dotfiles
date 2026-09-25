@@ -190,7 +190,9 @@ fi
 #     publishing them is the intended design, and they are long base32 so they
 #     trip the entropy heuristic. The private half is AGE-SECRET-KEY-1..., which
 #     the private-material check above catches by content.
-suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '^\+\+\+ ' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' | grep -vE '(/[^/]+){3,}' || true)
+#   - Bare 40-hex strings: git commit SHAs (upstreams.json pins, research docs
+#     quoting them). lazy-lock.json is the same case; this covers it generally.
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '^\+\+\+ ' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' | grep -vE '(/[^/]+){3,}' | grep -vE '^[0-9a-f]{40}$' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3
