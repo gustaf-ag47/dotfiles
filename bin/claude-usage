@@ -1,4 +1,4 @@
 #!/bin/bash
-# Human-readable multi-account Claude subscription usage.
+# Compatibility name; use llm-usage for Claude, ChatGPT and DeepSeek.
 set -euo pipefail
-waybar-claude-usage | jq -r .tooltip
+exec "$(dirname "$(readlink -f "$0")")/llm-usage" "$@"

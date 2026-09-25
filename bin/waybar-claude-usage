@@ -50,7 +50,7 @@ tooltip="Claude subscription usage"
 token_count=$(echo "$DATA" | jq '.tokens | length')
 tooltip+=$'\nAccounts: '"$token_count"
 
-while IFS=$'\t' read -r fp label valid u5 u7 u5_reset u7_reset u7_oi u7_oi_reset cooldown_until quota_status quota_error quota_retry_until quota_scope_denied quota counters; do
+while IFS=$'\t' read -r fp label valid u5 u7 u5_reset u7_reset u7_oi u7_oi_reset cooldown_until quota_status quota_error quota_retry_until quota_scope_denied quota counters model_cooldowns; do
     [ -n "$fp" ] || continue
     if [ -z "$label" ] || [ "$label" = "-" ]; then label="$fp"; fi
     [ "$u5" = "-" ] && u5=""
@@ -126,7 +126,11 @@ while IFS=$'\t' read -r fp label valid u5 u7 u5_reset u7_reset u7_oi u7_oi_reset
         fi
     fi
     [ "$valid" = "true" ] || tooltip+=$'\n  '"Proxy state: parked/unusable"
-    [ -n "$cooldown_until" ] && tooltip+=$'\n  '"Retry cooldown until: $(reset_text "$cooldown_until")"
+    [ -n "$cooldown_until" ] && tooltip+=$'\n  '"Account retry cooldown until: $(reset_text "$cooldown_until")"
+    while IFS=$'\t' read -r scope scope_reset; do
+        [ -n "$scope" ] || continue
+        tooltip+=$'\n  '"${scope} retry cooldown until: $(reset_text "$scope_reset") (other models unaffected)"
+    done < <(jq -r 'to_entries[] | [.key, .value] | @tsv' <<<"$model_cooldowns")
 
     if [ -n "$weekly_pct" ]; then
         if [ -z "$max_weekly" ] || [ "$weekly_pct" -gt "$max_weekly" ]; then
@@ -141,7 +145,7 @@ done < <(echo "$DATA" | jq -r '.tokens[] | [
     (.cooldown_until // "-"), ((.quota_status // "-")|tostring),
     (if (.quota_error // "") == "" then "-" else .quota_error end),
     (.quota_retry_until // "-"), ((.quota_scope_denied // "-")|tostring),
-    ((.quota // {})|tojson), ((.counters // {})|tojson)
+    ((.quota // {})|tojson), ((.counters // {})|tojson), ((.model_cooldowns // {})|tojson)
 ] | @tsv')
 
 if [ -z "$max_weekly" ]; then
