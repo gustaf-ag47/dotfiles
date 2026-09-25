@@ -156,7 +156,8 @@ class Tok:
         self.u7_reset: str | None = None
         self.u7_oi_reset: str | None = None
         self.unified_status: str | None = None
-        self.cooldown_until = 0.0
+        self.cooldown_until = 0.0  # shared/unknown limits apply to every model
+        self.model_cooldowns: dict[str, float] = {}
         self.valid = True
         self.last_status: int | None = None
         self.label = ""
@@ -196,6 +197,10 @@ class Tok:
             "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
             "cooldown_until": datetime.fromtimestamp(self.cooldown_until, timezone.utc).isoformat()
             if self.cooldown_until > now else None,
+            "model_cooldowns": {
+                scope: datetime.fromtimestamp(until, timezone.utc).isoformat()
+                for scope, until in self.model_cooldowns.items() if until > now
+            },
             "forced_down": self.fp in forced_cooldown_fps(),
             "quota": self.quota,
             "quota_status": self.quota_status,
@@ -361,6 +366,53 @@ def burst_pause_seconds(headers, cap: float | None = None) -> float | None:
     return wait if wait <= limit else None
 
 
+def model_scope(model: str) -> str:
+    if FABLE_MODEL_RE.search(model or ""):
+        return "fable"
+    for family in ("opus", "sonnet"):
+        if f"claude-{family}" in (model or "").lower():
+            return family
+    return "other"
+
+
+def cooldown_deadline(tok: Tok, model: str) -> float:
+    return max(tok.cooldown_until, tok.model_cooldowns.get(model_scope(model), 0.0))
+
+
+def quota_cooldown_scope(headers) -> str | None:
+    """Scope only explicitly identified model quotas; unknown/burst stays shared.
+
+    A representative claim identifies the blocking bucket, not every utilization
+    header in the response. Never infer scope from a retained full bucket alone.
+    """
+    if classify_429(headers) != "quota":
+        return None
+    hdrs = header_map(headers)
+    scopes = {
+        "seven_day_overage_included": "fable",
+        "five_hour_overage_included": "fable",
+        "seven_day_opus": "opus",
+        "seven_day_sonnet": "sonnet",
+    }
+    claim = hdrs.get("anthropic-ratelimit-unified-representative-claim", "").strip().lower()
+    if claim:
+        return scopes.get(claim)
+    rejected = [name for name, abbrev in CLAIM_ABBREV.items()
+                if hdrs.get(f"anthropic-ratelimit-unified-{abbrev}-status", "").lower() == "rejected"]
+    identified = {scopes.get(name) for name in rejected}
+    return identified.pop() if len(identified) == 1 else None
+
+
+def apply_cooldown(tok: Tok, headers) -> str:
+    scope = quota_cooldown_scope(headers)
+    until = time.time() + retry_after_seconds(headers)
+    if scope:
+        tok.model_cooldowns[scope] = max(tok.model_cooldowns.get(scope, 0.0), until)
+    else:
+        tok.cooldown_until = max(tok.cooldown_until, until)
+    return scope or "account"
+
+
 def update_from_headers(tok: Tok, headers) -> None:
     u5 = _hdr_float(headers, "anthropic-ratelimit-unified-5h-utilization")
     u7 = _hdr_float(headers, "anthropic-ratelimit-unified-7d-utilization")
@@ -523,12 +575,12 @@ def quota_bucket_text(quota: dict | None, key: str) -> str:
     return f"{percent(used)} used{suffix}"
 
 
-def unavailable_message() -> str:
+def unavailable_message(model: str = "unknown") -> str:
     """Explain every account when a request cannot be routed."""
     now = time.time()
     forced = forced_cooldown_fps()
     lines = [
-        "Claude subscription request unavailable: no OAuth account can serve it right now.",
+        f"Claude subscription request unavailable: no OAuth account can serve {model} right now.",
         "Account status:",
     ]
     for tok in STATE:
@@ -536,9 +588,9 @@ def unavailable_message() -> str:
             state = "forced offline"
         elif not tok.valid:
             state = f"parked (last HTTP {tok.last_status or 'unknown'})"
-        elif now < tok.cooldown_until:
-            until = datetime.fromtimestamp(tok.cooldown_until, timezone.utc).isoformat()
-            state = f"cooldown until {until}"
+        elif now < cooldown_deadline(tok, model):
+            until = datetime.fromtimestamp(cooldown_deadline(tok, model), timezone.utc).isoformat()
+            state = f"cooldown until {until} for {model}"
         else:
             state = "available"
         quota = tok.quota
@@ -696,7 +748,7 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
     forced = forced_cooldown_fps()
     eligible = [
         t for t in STATE
-        if t.valid and t.fp not in exclude and now >= t.cooldown_until and t.fp not in forced
+        if t.valid and t.fp not in exclude and now >= cooldown_deadline(t, model) and t.fp not in forced
     ]
 
     if PICK_MODE == "headroom":  # legacy rollback path: exact pre-pressure behavior
@@ -717,10 +769,47 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
                 best = prev
             LAST_PICK[key] = best.fp
             return best
-    # Everything over-threshold/cooled — fall back to the soonest-recovering valid
-    # token, but never one explicitly forced down (a forced token is "dead").
-    fallback = [t for t in STATE if t.valid and t.fp not in exclude and t.fp not in forced]
-    return min(fallback, key=lambda t: t.cooldown_until) if fallback else None
+    # No eligible account remains. Never bypass an upstream cooldown: doing so
+    # defeats backoff and retries exhausted accounts on every incoming request.
+    # Over-threshold but eligible tokens were already considered above.
+    return None
+
+
+ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
+
+
+def routing_preview() -> dict:
+    """Read-only view of what pick() would choose per weekly bucket. Never mutates LAST_PICK."""
+    now = time.time()
+    forced = forced_cooldown_fps()
+    out = {"mode": PICK_MODE, "threshold": ROTATE_THRESHOLD, "tolerance": PICK_TOLERANCE, "buckets": {}}
+    for key, model in ROUTING_PREVIEW_MODELS.items():
+        ranked = []
+        for t in STATE:
+            util = bucket_util(t, key)
+            if t.fp in forced:
+                reason = "forced offline"
+            elif not t.valid:
+                reason = "parked"
+            elif now < cooldown_deadline(t, model):
+                reason = "cooldown"
+            elif (util or 0.0) >= ROTATE_THRESHOLD:
+                reason = "over threshold"
+            else:
+                reason = None
+            ranked.append({"fp": t.fp, "eligible": reason is None, "reason": reason,
+                           "utilization": util, "pressure": pressure(t, key, now) if reason is None else None})
+        ranked.sort(key=lambda r: (not r["eligible"], -(r["pressure"] or 0.0)))
+        chosen = None
+        eligible = [r for r in ranked if r["eligible"]]
+        if eligible:
+            best = eligible[0]
+            prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
+            sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
+            chosen = prev["fp"] if sticky else best["fp"]
+        out["buckets"][key] = {"model_example": model, "last_pick": LAST_PICK.get(key),
+                               "would_pick": chosen, "ranking": ranked}
+    return out
 
 
 def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
@@ -760,12 +849,19 @@ class Handler(BaseHTTPRequestHandler):
             usable = len([t for t in STATE if t.valid])
             now = time.time()
             forced = forced_cooldown_fps()
-            available = len([t for t in STATE if t.valid
-                             and t.fp not in forced and now >= t.cooldown_until])
+            available_by_model = {
+                model: sum(t.valid and t.fp not in forced
+                           and now >= cooldown_deadline(t, model) for t in STATE)
+                for model in ("claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5")
+            }
+            available = sum(t.valid and t.fp not in forced
+                            and any(now >= cooldown_deadline(t, model) for model in available_by_model)
+                            for t in STATE)
         self._send_json(200, {
             "tokens": toks,
             "usable": usable,
             "available": available,
+            "available_by_model": available_by_model,
             "total": len(toks),
             "min_valid": MIN_VALID,
             "degraded": usable < MIN_VALID,
@@ -778,10 +874,12 @@ class Handler(BaseHTTPRequestHandler):
     def _usage_page(self) -> None:
         with LOCK:
             toks = [t.snapshot() for t in STATE]
+            routing = routing_preview()
         self._send_json(200, {
             "schema": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "tokens": toks,
+            "routing": routing,
             "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses",
         })
 
@@ -814,7 +912,7 @@ class Handler(BaseHTTPRequestHandler):
                         f"{t.name()}[{'parked' if not t.valid else 'forced' if t.fp in forced_cooldown_fps() else 'cooling'}"
                         f" u7={t.u7}]" for t in STATE)
                     log(f"WARNING: request rejected — no token pickable: {detail}")
-                self._send_api_error(503, unavailable_message(), "overloaded_error")
+                self._send_api_error(503, unavailable_message(model), "overloaded_error")
                 return
             try:
                 conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
@@ -830,13 +928,14 @@ class Handler(BaseHTTPRequestHandler):
                 tok.responses += 1
                 save_usage_state()
                 pause = None
+                cooldown_scope = None
                 if resp.status == 429:
                     if tok.fp not in paced:
                         pause = burst_pause_seconds(resp.headers)
                     if pause is None:  # spent bucket (or unpaceable): cool down + rotate
-                        tok.cooldown_until = time.time() + retry_after_seconds(resp.headers)
-                else:
-                    tok.cooldown_until = 0.0
+                        cooldown_scope = apply_cooldown(tok, resp.headers)
+                # Success on another model (or an older in-flight request) must
+                # not erase an unexpired cooldown.
                 if resp.status in (401, 403):
                     if tok.valid:
                         tok.invalid_since = time.time()
@@ -845,8 +944,9 @@ class Handler(BaseHTTPRequestHandler):
                     tok.last_revalidate = time.time()
                     check_health("token rejected upstream")
 
-            log(f"{self.command} {endpoint} -> token {tok.name()} "
+            log(f"{self.command} {endpoint} -> token {tok.name()} model={model} "
                 f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
+                + (f" cooldown_scope={cooldown_scope}" if cooldown_scope else "")
                 + (f" [burst, pausing {pause}s]" if pause is not None
                    else " [failover]" if resp.status in FAILOVER_STATUSES else ""))
 
@@ -947,9 +1047,7 @@ def probe(tok: Tok, note: str = "seed") -> None:
             update_from_headers(tok, r.headers)
             tok.last_status = r.status
             if r.status == 429:
-                tok.cooldown_until = time.time() + retry_after_seconds(r.headers)
-            else:
-                tok.cooldown_until = 0.0
+                apply_cooldown(tok, r.headers)
             if r.status in (401, 403):
                 if tok.valid:
                     tok.invalid_since = time.time()
