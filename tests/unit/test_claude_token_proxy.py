@@ -143,6 +143,102 @@ class PickPolicyTests(TestCase):
         self.assertIsNotNone(known)
         self.assertIs(proxy.pick(model="claude-fable-5"), never_seen)
 
+    def test_all_cooling_returns_none_until_earliest_cooldown_expires(self):
+        first = self.make("gs", u7=0.64)
+        first.cooldown_until = 1060
+        exhausted = self.make("exhausted", u7=1.0)
+        exhausted.cooldown_until = 2000
+        for mode in ("pressure", "headroom"):
+            with self.subTest(mode=mode), mock.patch.object(proxy, "PICK_MODE", mode):
+                with mock.patch.object(proxy.time, "time", return_value=1000):
+                    self.assertIsNone(proxy.pick(model="claude-opus-5"))
+                with mock.patch.object(proxy.time, "time", return_value=1060):
+                    self.assertIs(proxy.pick(model="claude-opus-5"), first)
+
+    def test_excluded_available_token_does_not_fall_back_to_cooling_token(self):
+        available = self.make("available", u7=0.64)
+        cooling = self.make("cooling", u7=1.0)
+        cooling.cooldown_until = 2000
+        with mock.patch.object(proxy.time, "time", return_value=1000):
+            self.assertIsNone(proxy.pick(exclude={available.fp}))
+
+    def test_over_threshold_without_cooldown_remains_pickable(self):
+        # Header observations may be stale; the threshold remains a preference,
+        # unlike an explicit upstream cooldown.
+        token = self.make("near-limit", u7=0.99)
+        self.assertIs(proxy.pick(model="claude-opus-5"), token)
+
+    def test_opaque_429_does_not_fail_over_to_cooling_accounts(self):
+        import io
+        from email.message import Message
+
+        available = self.make("gs", u7=0.64)
+        cooling = self.make("exhausted", u7=1.0)
+        cooling.cooldown_until = 2000
+        body = b'{"model":"claude-opus-5"}'
+        handler = object.__new__(proxy.Handler)
+        handler.command = "POST"
+        handler.path = "/v1/messages"
+        handler.headers = Message()
+        handler.headers["Content-Length"] = str(len(body))
+        handler.rfile = io.BytesIO(body)
+        handler._send_api_error = mock.Mock()
+        handler._stream = mock.Mock()
+        response = mock.Mock(status=429, headers=Message())
+        connection = mock.Mock()
+        with mock.patch.object(proxy.time, "time", return_value=1000), \
+                mock.patch.object(proxy, "save_usage_state"), \
+                mock.patch.object(proxy, "upstream", return_value=(connection, response)) as upstream:
+            handler._proxy()
+
+        self.assertEqual(upstream.call_count, 1)
+        self.assertEqual(upstream.call_args.args[4], available.token)
+        self.assertEqual(available.cooldown_until, 1060)
+        self.assertEqual(cooling.cooldown_until, 2000)
+        connection.close.assert_called_once()
+        handler._stream.assert_not_called()
+        self.assertEqual(handler._send_api_error.call_args.args[0], 503)
+        self.assertIn("cooldown until", handler._send_api_error.call_args.args[1])
+
+    def test_fable_quota_429_does_not_block_opus_or_get_cleared_by_opus(self):
+        import io
+        from email.message import Message
+
+        token = self.make("gs", u7=0.64)
+        headers = Message()
+        headers["Retry-After"] = "600"
+        headers["anthropic-ratelimit-unified-status"] = "rejected"
+        headers["anthropic-ratelimit-unified-representative-claim"] = "seven_day_overage_included"
+        headers["anthropic-ratelimit-unified-7d_oi-utilization"] = "1.0"
+        responses = [mock.Mock(status=429, headers=headers),
+                     mock.Mock(status=200, headers=Message())]
+        connection = mock.Mock()
+        with mock.patch.object(proxy.time, "time", return_value=1000), \
+                mock.patch.object(proxy, "save_usage_state"), \
+                mock.patch.object(proxy, "upstream", side_effect=[(connection, r) for r in responses]) as upstream:
+            for model in ("claude-fable-5", "claude-opus-5"):
+                body = ('{"model":"' + model + '"}').encode()
+                handler = object.__new__(proxy.Handler)
+                handler.command = "POST"
+                handler.path = "/v1/messages"
+                handler.headers = Message()
+                handler.headers["Content-Length"] = str(len(body))
+                handler.rfile = io.BytesIO(body)
+                handler._send_api_error = mock.Mock()
+                handler._stream = mock.Mock()
+                handler._proxy()
+                if model == "claude-fable-5":
+                    self.assertIsNone(proxy.pick(model=model))
+                    self.assertIs(proxy.pick(model="claude-opus-5"), token)
+                else:
+                    handler._stream.assert_called_once()
+                    handler._send_api_error.assert_not_called()
+            self.assertEqual(upstream.call_count, 2)
+            self.assertIsNone(proxy.pick(model="claude-fable-5"))
+            self.assertIs(proxy.pick(model="claude-opus-5"), token)
+        with mock.patch.object(proxy.time, "time", return_value=1600):
+            self.assertIs(proxy.pick(model="claude-fable-5"), token)
+
     def test_exclude_and_cooldown_still_respected(self):
         reset = iso_in(hours=6)
         best = self.make("a", u7=0.1, u7_reset=reset)
@@ -150,6 +246,57 @@ class PickPolicyTests(TestCase):
         cooling.cooldown_until = __import__("time").time() + 300
         last = self.make("c", u7=0.9, u7_reset=reset)
         self.assertIs(proxy.pick(exclude={best.fp}, model="claude-opus-5"), last)
+
+
+class CooldownScopeTests(TestCase):
+    def test_explicit_model_claims_are_scoped(self):
+        for claim, scope in (("seven_day_overage_included", "fable"),
+                             ("five_hour_overage_included", "fable"),
+                             ("seven_day_opus", "opus"),
+                             ("seven_day_sonnet", "sonnet")):
+            with self.subTest(claim=claim):
+                self.assertEqual(proxy.quota_cooldown_scope({
+                    "anthropic-ratelimit-unified-status": "rejected",
+                    "anthropic-ratelimit-unified-representative-claim": claim,
+                }), scope)
+
+    def test_shared_unknown_and_burst_limits_remain_account_wide(self):
+        for headers in ({}, {"retry-after": "60"}, {
+            "anthropic-ratelimit-unified-status": "rejected",
+            "anthropic-ratelimit-unified-representative-claim": "seven_day",
+            "anthropic-ratelimit-unified-7d_oi-utilization": "1.0",
+        }, {
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-unified-representative-claim": "seven_day_overage_included",
+            "anthropic-ratelimit-unified-7d_oi-utilization": "0.5",
+        }):
+            with self.subTest(headers=headers):
+                self.assertIsNone(proxy.quota_cooldown_scope(headers))
+
+    def test_per_bucket_rejection_without_representative_claim(self):
+        self.assertEqual(proxy.quota_cooldown_scope({
+            "Anthropic-RateLimit-Unified-7d_oi-Status": "Rejected",
+        }), "fable")
+        self.assertIsNone(proxy.quota_cooldown_scope({
+            "anthropic-ratelimit-unified-7d_oi-status": "rejected",
+            "anthropic-ratelimit-unified-7d-status": "rejected",
+        }))
+
+    def test_applying_cooldown_never_shortens_existing_deadline(self):
+        token = proxy.Tok("synthetic")
+        token.cooldown_until = 2000
+        with mock.patch.object(proxy.time, "time", return_value=1000):
+            proxy.apply_cooldown(token, {"retry-after": "1"})
+        self.assertEqual(token.cooldown_until, 2000)
+
+    def test_snapshot_exposes_only_active_model_cooldowns(self):
+        token = proxy.Tok("synthetic")
+        token.model_cooldowns = {"fable": 2000, "opus": 900}
+        with mock.patch.object(proxy.time, "time", return_value=1000), \
+                mock.patch.object(proxy, "forced_cooldown_fps", return_value=set()):
+            snapshot = token.snapshot()
+        self.assertEqual(set(snapshot["model_cooldowns"]), {"fable"})
+        self.assertEqual(snapshot["cooldown_remaining"], 0)
 
 
 class Burst429Tests(TestCase):
