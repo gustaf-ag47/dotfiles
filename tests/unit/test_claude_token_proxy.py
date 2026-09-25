@@ -728,11 +728,12 @@ class DeepseekPassthroughTests(OracleFixture):
     def exhausted_token(self):
         return self.token(cooldown=time.time() + 600)
 
-    def post(self, model="claude-opus-5-5-20260901", stream=False):
+    def post(self, model="claude-opus-5-5-20260901", stream=False, extra_headers=None):
         body = json.dumps({"model": model, "max_tokens": 5, "stream": stream,
                            "messages": [{"role": "user", "content": "hi"}]}).encode()
         conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
-        conn.request("POST", "/v1/messages?beta=true", body=body, headers=self.OAUTH_HEADERS)
+        conn.request("POST", "/v1/messages?beta=true", body=body,
+                     headers={**self.OAUTH_HEADERS, **(extra_headers or {})})
         resp = conn.getresponse()
         out = resp.status, resp.read().decode()
         conn.close()
@@ -755,6 +756,18 @@ class DeepseekPassthroughTests(OracleFixture):
         self.assertEqual(FakeHTTPSConnection.calls, [])
         self.assertIsNone(usage["routing"]["fallback"])
         self.assertFalse(usage["routing"]["deepseek_fallback"]["enabled"])
+
+    def test_client_opt_out_header_keeps_the_unavailable_message(self):
+        """pi's llm-failover extension switches natively; a silent DeepSeek answer
+        labelled as Claude would defeat its notify-only contract (decision 3)."""
+        self.exhausted_token()
+        with mock.patch.object(proxy, "log") as log:
+            status, body = self.post(extra_headers={proxy.FALLBACK_OPT_OUT_HEADER: "none"})
+        self.assertEqual(status, 503)
+        self.assertIn("no OAuth account can serve", json.loads(body)["error"]["message"])
+        self.assertEqual(FakeHTTPSConnection.calls, [])
+        self.assertIsNone(self.usage()["routing"]["fallback"])
+        self.assertIn("client opted out", " ".join(str(c.args[0]) for c in log.call_args_list))
 
     def test_pool_exhausted_forwards_to_deepseek_with_its_own_key(self):
         self.exhausted_token()

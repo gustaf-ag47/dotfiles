@@ -120,6 +120,10 @@ ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
 DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
 DEEPSEEK_FALLBACK = os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0") == "1"
+# A client that does its own cross-provider failover (pi's llm-failover extension)
+# sends `x-cc-proxy-fallback: none` so an exhausted pool surfaces as the normal
+# unavailable error instead of a silent DeepSeek answer priced and labelled as Claude.
+FALLBACK_OPT_OUT_HEADER = "x-cc-proxy-fallback"
 DEEPSEEK_HOST = "api.deepseek.com"
 # DeepSeek mounts its Anthropic-compatible API under this prefix; the bare
 # /v1/messages path is a 404 there (checked 2026-09-25).
@@ -1519,6 +1523,9 @@ class Handler(BaseHTTPRequestHandler):
         (including a 402 on a negative balance) goes back to the client as-is:
         there is no Anthropic retry, which would loop on the exhausted pool.
         """
+        if (self.headers.get(FALLBACK_OPT_OUT_HEADER) or "").strip().lower() == "none":
+            log(f"deepseek fallback not taken for {model}: client opted out ({FALLBACK_OPT_OUT_HEADER})")
+            return False
         target, reason = fallback_target(model)
         if target is None:
             if DEEPSEEK_FALLBACK:
