@@ -253,6 +253,59 @@ for where extensions live in this repo).
   and the `↪` line inside the TUI (print mode only). Not changed: `bin/claude-token-proxy`,
   `~/.pi/agent/*`. `/_route` had everything needed; nothing to ask of Step 3.
 
+## Step 5 — done (2026-09-25, commits `a5f0a41`, `cc3a583`)
+
+**Verdict on `scripts/pi_setup.py`: replaced with a small symlink step.** Ground truth:
+`origin/research/wire-pi-into-dotfiles` == `origin/master` (no commits of its own); the
+wire-pi work exists only as untracked/modified files in the master checkout. `pi_setup.py`
+(186 lines) does much more than asked: links `@earendil-works/pi-ai` into
+`config/pi/node_modules` and `~/.pi/agent/node_modules`, links *every* file under
+`config/pi/{extensions,lib,skills}` plus `dotfiles-local/config/pi/skills`, seeds
+`settings.json`/`models.json`, checks `upstreams.json`. The skills it would link have
+diverged from `~/.pi/agent/skills/` (browse-shop, deepseek, delegate, ralph-loop,
+web-research, website-screenshot all differ), and `anthropic-subscription.ts` is a
+global Anthropic provider override that reroutes plain `pi`'s Anthropic calls through
+the proxy — that changes how Anthropic sessions authenticate, i.e. decision #1 territory.
+Its unit tests do run against temp dirs only (the "Installed 1 resources … Rollback"
+lines in `make test-unit` are from `tempfile` paths, not `~/.pi/agent`).
+
+- `a5f0a41` — `bin/pi-link-extensions`: explicit allowlist (`goal.ts`, `llm-usage.ts`,
+  `llm-failover.ts`) symlinked from `config/pi/extensions/` into
+  `$PI_CODING_AGENT_DIR/extensions/` (default `~/.pi/agent/extensions`). `--check`
+  (exit 1 iff pending), `--remove`, prunes dangling links it owns, refuses to overwrite
+  a diverged local copy (identical copies are replaced — the old `goal.ts` copy was
+  byte-identical), never touches `auth/settings/models.json`. `scripts/install.sh` runs
+  it when `pi` is on PATH. `config/pi/extensions/{goal,llm-usage}.ts` now tracked.
+  `llm-usage.ts` resolves `bin/llm-usage` via `realpathSync(__filename)`, so links (not
+  copies) are required.
+- `cc3a583` — `bin/pi-claude-sub` Anthropic-only guard (from the uncommitted hunk, minus
+  `PI_DOTFILES_LEGACY_CLAUDE_PID`, which only served the unlanded provider override) +
+  `tests/unit/test_pi_claude_sub.py` (fake pi binary, proxy off).
+- Gates by name: `make test-unit` → **93 ok** in the worktree; `python3 -m unittest
+  tests.unit.test_pi_link_extensions tests.unit.test_pi_claude_sub` (5 + 3 ok);
+  `bash -n` + shellcheck clean. Live after `bin/pi-link-extensions`:
+  `pi --model gpt-6-luna --no-session -p "/usage"` → llm-usage table, rc 0, no
+  extension error; `pi --no-session -p "/failover status"` → live ranking from `:8788`.
+  ```
+  ~/.pi/agent/extensions/goal.ts         -> $DOTFILES/config/pi/extensions/goal.ts
+  ~/.pi/agent/extensions/llm-failover.ts -> $DOTFILES/config/pi/extensions/llm-failover.ts
+  ~/.pi/agent/extensions/llm-usage.ts    -> $DOTFILES/config/pi/extensions/llm-usage.ts
+  ```
+- (B) `test_pi_provider_integration.py` (untracked, master checkout only): the failure is
+  pi resolving `anthropic/claude-haiku-4-5` to openrouter under the provider override,
+  not a missing key per se. Edited in place (still untracked) to
+  `skipUnless(PI_PROVIDER_INTEGRATION=1)` with a named reason → master checkout
+  `make test-unit` = 89 ok, 1 skipped.
+- Stays untracked, on purpose: `scripts/pi_setup.py`, `bin/pi-setup`,
+  `tests/unit/test_pi_setup.py`, `tests/unit/test_pi_provider_integration.py`,
+  `tests/unit/test_pi_route.mjs`, `tests/e2e/pi-unified-tmux.py`,
+  `config/pi/extensions/anthropic-subscription.ts`, `config/pi/lib/`, `config/pi/skills/`,
+  `config/pi/{models,settings}.example.json`, `config/pi/upstreams.json`, and the
+  `.gitignore`/`claude-usage`/`waybar-claude-usage`/`install.sh` wire-pi hunks. Landing
+  the provider override / skills sync is a separate decision (decision #1) — if wanted,
+  the natural next step is to reconcile `~/.pi/agent/skills` vs `config/pi/skills` and
+  add the skills to `pi-link-extensions`' model, not to resurrect `pi_setup.py` wholesale.
+
 ## Verification gates (every step)
 
 ```bash
@@ -288,6 +341,8 @@ systemctl --user restart claude-token-proxy.service && llm-usage --refresh
 1. Top up DeepSeek, then run Step 3's live check (`CC_PROXY_DEEPSEEK_FALLBACK=1` on a
    scratch port) and record the headers DeepSeek rejects.
 2. Switch-back path of `llm-failover.ts` is live-untested (needs a real pool recovery).
-3. Auto-loading `config/pi/extensions/*.ts` for plain `pi` waits on the untracked
-   `scripts/pi_setup.py`; today it loads via `pi-claude-sub`.
+3. ~~Auto-loading `config/pi/extensions/*.ts` for plain `pi`~~ — done in Step 5
+   (`bin/pi-link-extensions`). In the master checkout `git pull` will conflict on
+   `bin/pi-claude-sub` and `scripts/install.sh` (uncommitted wire-pi hunks); take the
+   committed side, the guard is already landed.
 4. Verify the two top-up URLs (Codex, DeepSeek) once each is used for real.
