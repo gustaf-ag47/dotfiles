@@ -1,0 +1,6 @@
+{
+  "claude-fable-5-1": [["openai-codex", "gpt-6-astra"], ["openai-codex", "gpt-6-sol"], ["deepseek", "deepseek-v4-pro"]],
+  "claude-opus-5-5": [["openai-codex", "gpt-6-luna"], ["deepseek", "deepseek-v4-pro"]],
+  "claude-sonnet-5": [["openai-codex", "gpt-6-sol"], ["deepseek", "deepseek-flash"]],
+  "claude-haiku-4-5": [["openai-codex", "gpt-6-luna"], ["deepseek", "deepseek-flash"]]
+}

@@ -28,6 +28,18 @@ retry cooldowns, quota status, and local response counters) without touching ups
 The proxy refreshes the read-only `/api/oauth/usage` endpoint every five minutes;
 OAuth scope failures are reported per token and never invalidate inference.
 
+Cross-provider quota oracle (docs/research/generic-llm-proxy.md, option c): on the
+same five-minute cadence the proxy polls the ChatGPT/Codex `wham/usage` and
+DeepSeek `/user/balance` endpoints with the credentials pi already holds in
+`~/.pi/agent/auth.json` (read-only; OAuth is never refreshed, `!cmd` keys are never
+executed, tokens are never logged) and exposes them under `providers` in `/_usage`.
+`GET /_route?model=<claude-model>` ranks substitutes across providers from the
+equivalence table `config/llm-proxy/routes.json` (`CC_PROXY_ROUTES` overrides the
+path; re-read on mtime change) — Anthropic pool first via the read-only pick
+preview, then the table order — and says which is routable and why not. It is a
+pure read: nothing is forwarded to another provider by this proxy.
+Readings from undocumented endpoints degrade to `unavailable`, never to 0 %.
+
 Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
 CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
 CC_PROXY_WATCH_INTERVAL (default 30s), CC_PROXY_REVALIDATE_INTERVAL (default 600s).
@@ -45,11 +57,15 @@ token down and fails over immediately.
 A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may list fingerprints
 (whitespace-separated) to treat as cooled-down — used for testing rollover without
 burning real quota.
+Oracle knobs: CC_PROXY_ROUTES (routes.json path), CC_PROXY_DEEPSEEK_MIN_BALANCE
+(default 1.0 — DeepSeek is only routable above this balance), PI_CODING_AGENT_DIR
+(where auth.json lives), DEEPSEEK_ACCOUNT_LABEL (display label for the key).
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import http.client
 import json
@@ -58,6 +74,9 @@ import re
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -78,6 +97,14 @@ REVALIDATE_INTERVAL = float(os.environ.get("CC_PROXY_REVALIDATE_INTERVAL", "600"
 USAGE_INTERVAL = float(os.environ.get("CC_PROXY_USAGE_INTERVAL", "300"))
 CONTROL_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-proxy"
 USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
+# Equivalence table (decision 5 in docs/research/generic-llm-proxy.md). Resolved
+# through the symlink so the systemd unit and the checkout agree on the file.
+ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
+                   or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
+DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
+PI_AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")).expanduser()
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
 FAILOVER_STATUSES = {401, 403, 429, 529}
@@ -551,6 +578,163 @@ def fetch_oauth_usage(tok: Tok) -> None:
         log(f"usage {tok.name()}: error {exc.__class__.__name__}")
 
 
+# --- Cross-provider quota adapters -------------------------------------------
+# Copied from scripts/llm_usage.py (2026-09-25) so the proxy stays stdlib-only and
+# single-file; result dicts are whitelisted field by field — no raw passthrough, no
+# exception text (either could carry a credential). Codex `wham/usage` is an
+# undocumented ChatGPT endpoint: any unrecognised shape is `unavailable`, never 0 %.
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def get_json(url: str, headers: dict | None = None):
+    req = urllib.request.Request(url, headers={"Accept": "application/json", **(headers or {})})
+    with urllib.request.build_opener(NoRedirect()).open(req, timeout=8) as response:
+        return json.loads(response.read(1024 * 1024))
+
+
+def numeric(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def read_auth() -> dict:
+    """pi's credential store, read-only. Missing or malformed -> empty."""
+    try:
+        auth = json.loads((PI_AGENT_DIR / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return auth if isinstance(auth, dict) else {}
+
+
+def jwt_claims(token: str) -> dict:
+    """Display claims from the Codex access token (payload only, no signature check)."""
+    try:
+        payload = token.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError, TypeError, UnicodeDecodeError):
+        return {"email": None, "plan": None}
+    if not isinstance(data, dict):
+        return {"email": None, "plan": None}
+    profile = data.get("https://api.openai.com/profile")
+    auth = data.get("https://api.openai.com/auth")
+    return {
+        "email": profile.get("email") if isinstance(profile, dict) else None,
+        "plan": auth.get("chatgpt_plan_type") if isinstance(auth, dict) else None,
+    }
+
+
+def codex(auth: dict) -> dict:
+    credential = auth.get("openai-codex") or {}
+    if credential.get("type") != "oauth" or not credential.get("access"):
+        return {"status": "unavailable", "reason": "Log in to openai-codex in Pi."}
+    claims = jwt_claims(credential["access"])
+    if not numeric(credential.get("expires")) or credential["expires"] <= time.time() * 1000:
+        who = f" for {claims['email']}" if claims["email"] else ""
+        return {"status": "unavailable", "account": claims,
+                "reason": f"OAuth{who} expired; use Pi to refresh/login. This reader never refreshes tokens."}
+    headers = {"Authorization": "Bearer " + credential["access"], "User-Agent": "pi-llm-usage"}
+    if credential.get("accountId"):
+        headers["ChatGPT-Account-Id"] = credential["accountId"]
+    data = get_json(CODEX_USAGE_URL, headers)
+    windows = []
+    limits = data.get("rate_limit") or {}
+    for name in ("primary_window", "secondary_window"):
+        window = limits.get(name)
+        if isinstance(window, dict):
+            windows.append({"name": name, "used_percent": numeric(window.get("used_percent")),
+                            "window_seconds": numeric(window.get("limit_window_seconds")),
+                            "reset_at": numeric(window.get("reset_at"))})
+    if not windows:
+        return {"status": "unavailable", "account": claims,
+                "reason": "Subscription endpoint returned no recognized quota windows."}
+    models = {}
+    for slug, row in (data.get("model_usage") or {}).items():
+        if isinstance(row, dict):
+            models[str(slug)] = {"available": row.get("available"), "available_at": row.get("available_at"),
+                                 "credits_would_enable": row.get("credits_would_enable")}
+    credits = data.get("credits") if isinstance(data.get("credits"), dict) else {}
+    reached = data.get("rate_limit_reached_type")
+    return {"status": "ok", "kind": "subscription quota",
+            "account": {"email": data.get("email") or claims["email"],
+                        "plan": data.get("plan_type") or claims["plan"]},
+            "windows": windows,
+            "allowed": limits.get("allowed"), "limit_reached": limits.get("limit_reached"),
+            "reached_type": reached.get("type") if isinstance(reached, dict) else None,
+            "models": models,
+            "credits": {key: credits.get(key) for key in
+                        ("balance", "has_credits", "unlimited", "overage_limit_reached")},
+            "note": "ChatGPT subscription only; read-only internal endpoint, not OpenAI API billing."}
+
+
+def deepseek_key(auth: dict) -> str | None:
+    credential = auth.get("deepseek")
+    if credential is not None:
+        if credential.get("type") != "api_key":
+            return None
+        key = credential.get("key") or ""
+        if key.startswith("!"):
+            return None  # Status tools must not execute arbitrary credential commands.
+        env = {**os.environ, **credential.get("env", {})}
+        return re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda m: env.get(m[1] or m[2], ""), key) or None
+    return os.environ.get("DEEPSEEK_API_KEY")
+
+
+def deepseek_label(auth: dict, key: str) -> str:
+    """Decision 6: env label, then auth.json `label`, then the key's last four."""
+    credential = auth.get("deepseek") or {}
+    return (os.environ.get("DEEPSEEK_ACCOUNT_LABEL") or credential.get("label")
+            or f"key …{key[-4:]}")
+
+
+def deepseek(auth: dict) -> dict:
+    key = deepseek_key(auth)
+    if not key:
+        return {"status": "unavailable",
+                "reason": "No supported DeepSeek API key configured (credential commands are not executed)."}
+    label = deepseek_label(auth, key)
+    data = get_json(DEEPSEEK_BALANCE_URL, {"Authorization": "Bearer " + key})
+    balances = [{field: row.get(field) for field in ("currency", "total_balance", "granted_balance", "topped_up_balance")}
+                for row in data.get("balance_infos", []) if isinstance(row, dict)]
+    if not balances:
+        return {"status": "unavailable", "label": label,
+                "reason": "Balance endpoint returned no recognized balances."}
+    return {"status": "ok", "kind": "prepaid balance", "label": label, "available": data.get("is_available"),
+            "balances": balances, "topup_url": "https://platform.deepseek.com/top_up",
+            "note": "Balance is not a subscription quota or a session cost estimate."}
+
+
+PROVIDER_ADAPTERS = {"openai-codex": codex, "deepseek": deepseek}
+PROVIDER_STATE: dict[str, dict] = {
+    name: {"status": "unavailable", "reason": "not polled yet", "checked_at": None}
+    for name in PROVIDER_ADAPTERS
+}
+
+
+def safe_query(provider: str, auth: dict) -> dict:
+    """Never raise, never echo response bodies or exception text."""
+    try:
+        result = PROVIDER_ADAPTERS[provider](auth)
+    except urllib.error.HTTPError as error:
+        result = {"status": "unavailable", "reason": f"Usage endpoint HTTP {error.code}; inference may still work."}
+    except Exception as error:
+        result = {"status": "unavailable", "reason": f"Usage lookup failed ({type(error).__name__})."}
+    return {**result, "checked_at": int(time.time())}
+
+
+def refresh_providers() -> None:
+    """Poll every non-Anthropic provider once; runs off the request path."""
+    auth = read_auth()
+    for provider in PROVIDER_ADAPTERS:
+        result = safe_query(provider, auth)
+        with LOCK:
+            PROVIDER_STATE[provider] = result
+        log(f"provider {provider}: {result['status']}"
+            + (f" ({result.get('reason')})" if result["status"] != "ok" else ""))
+
+
 def forced_cooldown_fps() -> set[str]:
     try:
         return set((CONTROL_DIR / "force_cooldown").read_text(encoding="utf-8").split())
@@ -680,6 +864,7 @@ def watchdog(path: str) -> None:
         if now >= next_usage:
             for tok in list(STATE):
                 fetch_oauth_usage(tok)
+            refresh_providers()
             next_usage = now + USAGE_INTERVAL
         with LOCK:
             stale = [t for t in STATE
@@ -778,38 +963,233 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
 ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
 
 
-def routing_preview() -> dict:
-    """Read-only view of what pick() would choose per weekly bucket. Never mutates LAST_PICK."""
-    now = time.time()
+def rank_pool(model: str, now: float | None = None) -> dict:
+    """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
+    now = time.time() if now is None else now
+    key = bucket_key(model)
     forced = forced_cooldown_fps()
-    out = {"mode": PICK_MODE, "threshold": ROTATE_THRESHOLD, "tolerance": PICK_TOLERANCE, "buckets": {}}
-    for key, model in ROUTING_PREVIEW_MODELS.items():
-        ranked = []
-        for t in STATE:
-            util = bucket_util(t, key)
-            if t.fp in forced:
-                reason = "forced offline"
-            elif not t.valid:
-                reason = "parked"
-            elif now < cooldown_deadline(t, model):
-                reason = "cooldown"
-            elif (util or 0.0) >= ROTATE_THRESHOLD:
-                reason = "over threshold"
-            else:
-                reason = None
-            ranked.append({"fp": t.fp, "eligible": reason is None, "reason": reason,
-                           "utilization": util, "pressure": pressure(t, key, now) if reason is None else None})
-        ranked.sort(key=lambda r: (not r["eligible"], -(r["pressure"] or 0.0)))
-        chosen = None
-        eligible = [r for r in ranked if r["eligible"]]
-        if eligible:
-            best = eligible[0]
-            prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
-            sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
-            chosen = prev["fp"] if sticky else best["fp"]
-        out["buckets"][key] = {"model_example": model, "last_pick": LAST_PICK.get(key),
-                               "would_pick": chosen, "ranking": ranked}
+    ranked = []
+    for t in STATE:
+        util = bucket_util(t, key)
+        if t.fp in forced:
+            reason = "forced offline"
+        elif not t.valid:
+            reason = "parked"
+        elif now < cooldown_deadline(t, model):
+            reason = "cooldown"
+        elif (util or 0.0) >= ROTATE_THRESHOLD:
+            reason = "over threshold"
+        else:
+            reason = None
+        ranked.append({"fp": t.fp, "eligible": reason is None, "reason": reason,
+                       "utilization": util, "reset_at": _bucket_reset_iso(t, key),
+                       "pressure": pressure(t, key, now) if reason is None else None})
+    ranked.sort(key=lambda r: (not r["eligible"], -(r["pressure"] or 0.0)))
+    chosen = None
+    eligible = [r for r in ranked if r["eligible"]]
+    if eligible:
+        best = eligible[0]
+        prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
+        sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
+        chosen = prev["fp"] if sticky else best["fp"]
+    return {"model_example": model, "last_pick": LAST_PICK.get(key), "would_pick": chosen, "ranking": ranked}
+
+
+def _bucket_reset_iso(t: Tok, key: str) -> str | None:
+    return t.u7_oi_reset if key == "oi" else t.u7_reset
+
+
+def routing_preview() -> dict:
+    """Read-only view of what pick() would choose per weekly bucket."""
+    now = time.time()
+    return {"mode": PICK_MODE, "threshold": ROTATE_THRESHOLD, "tolerance": PICK_TOLERANCE,
+            "buckets": {key: rank_pool(model, now) for key, model in ROUTING_PREVIEW_MODELS.items()}}
+
+
+# --- Equivalence table + route oracle -----------------------------------------
+
+ROUTES: dict[str, list[list[str]]] = {}
+ROUTES_MTIME: float | None = None
+ROUTES_ERROR: str | None = None
+
+
+def load_routes() -> dict[str, list[list[str]]]:
+    """routes.json, re-read when its mtime changes; a bad file keeps the last good table."""
+    global ROUTES, ROUTES_MTIME, ROUTES_ERROR
+    try:
+        mtime = ROUTES_FILE.stat().st_mtime
+    except OSError as exc:
+        if ROUTES_ERROR is None:
+            log(f"routes file {ROUTES_FILE} unreadable ({exc.__class__.__name__}); /_route has no table")
+        ROUTES_ERROR = exc.__class__.__name__
+        return ROUTES
+    if mtime == ROUTES_MTIME:
+        return ROUTES
+    try:
+        data = json.loads(ROUTES_FILE.read_text(encoding="utf-8"))
+        table = {
+            str(model): [[str(provider), str(target)] for provider, target in candidates]
+            for model, candidates in data.items()
+        }
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        log(f"routes file {ROUTES_FILE} invalid ({exc.__class__.__name__}); keeping previous table")
+        ROUTES_ERROR = exc.__class__.__name__
+        ROUTES_MTIME = mtime
+        return ROUTES
+    ROUTES, ROUTES_MTIME, ROUTES_ERROR = table, mtime, None
+    log(f"routes loaded from {ROUTES_FILE}: {sorted(table)}")
+    return ROUTES
+
+
+def route_key(model: str, table: dict | None = None) -> str | None:
+    """Table row for a model id: exact, else the longest row that prefixes the model
+    (claude-opus-5-5-20260901 -> claude-opus-5-5), else the nearest row the model
+    prefixes (claude-fable-5 -> claude-fable-5-1)."""
+    table = load_routes() if table is None else table
+    model = (model or "").strip().lower()
+    if not model:
+        return None
+    if model in table:
+        return model
+    prefixes = [key for key in table if model.startswith(key)]
+    if prefixes:
+        return max(prefixes, key=len)
+    families = [key for key in table if key.startswith(model)]
+    return min(families, key=len) if families else None
+
+
+def _pct_left(used) -> float | None:
+    return round(100.0 - used, 1) if numeric(used) is not None else None
+
+
+def _epoch_iso(value) -> str | None:
+    if numeric(value) is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def anthropic_candidate(model: str) -> dict:
+    """Anthropic pool viewed through the same dry run pick() would take."""
+    ranking = rank_pool(model)
+    rows = ranking["ranking"]
+    chosen = next((r for r in rows if r["fp"] == ranking["would_pick"]), None)
+    out = {"provider": "anthropic", "model": model, "routable": chosen is not None, "reason": None,
+           "quota_left_percent": None, "reset_at": None, "account": None}
+    if chosen is not None:
+        util = chosen["utilization"]
+        out.update(quota_left_percent=_pct_left(util * 100) if util is not None else None,
+                   reset_at=chosen["reset_at"], account=chosen["fp"])
+        return out
+    reasons = {r["reason"] for r in rows}
+    if not rows or reasons <= {"parked", "forced offline"}:
+        out["reason"] = "no token"
+    elif "cooldown" in reasons:
+        out["reason"] = "cooldown"
+    else:
+        out["reason"] = "exhausted"
+    known = [r["utilization"] for r in rows if r["utilization"] is not None]
+    if known:
+        out["quota_left_percent"] = _pct_left(min(known) * 100)
+    now = time.time()
+    resets = [_iso_epoch(r["reset_at"]) for r in rows if r["reason"] == "over threshold"]
+    resets += [cooldown_deadline(t, model) for t in STATE if now < cooldown_deadline(t, model)]
+    resets = [r for r in resets if r is not None and r > now]
+    if resets:
+        out["reset_at"] = datetime.fromtimestamp(min(resets), timezone.utc).isoformat()
     return out
+
+
+def codex_candidate(model: str, state: dict) -> dict:
+    out = {"provider": "openai-codex", "model": model, "routable": False, "reason": "unknown",
+           "quota_left_percent": None, "reset_at": None, "checked_at": state.get("checked_at")}
+    if state.get("status") != "ok":
+        return out
+    windows = [w for w in state.get("windows", []) if numeric(w.get("used_percent")) is not None]
+    if not windows:
+        return out
+    worst = max(windows, key=lambda w: w["used_percent"])
+    out["quota_left_percent"] = _pct_left(worst["used_percent"])
+    out["reset_at"] = _epoch_iso(worst.get("reset_at"))
+    blocked = (state.get("models") or {}).get(model) or {}
+    if worst["used_percent"] >= 100 or state.get("allowed") is False:
+        out["reason"] = "exhausted"
+    elif blocked.get("available") is False:
+        out["reason"] = "model unavailable"
+        out["reset_at"] = blocked.get("available_at") or out["reset_at"]
+    else:
+        out.update(routable=True, reason=None)
+    return out
+
+
+def deepseek_candidate(model: str, state: dict) -> dict:
+    out = {"provider": "deepseek", "model": model, "routable": False, "reason": "unknown",
+           "balance": None, "currency": None, "min_balance": DEEPSEEK_MIN_BALANCE,
+           "checked_at": state.get("checked_at")}
+    if state.get("status") != "ok":
+        return out
+    rows = state.get("balances") or []
+    row = next((r for r in rows if r.get("currency") == "USD"), rows[0] if rows else None)
+    try:
+        balance = float(row["total_balance"])
+    except (TypeError, ValueError, KeyError):
+        return out
+    out.update(balance=balance, currency=row.get("currency"))
+    if state.get("available") is False:
+        out["reason"] = "unavailable"
+    elif balance <= DEEPSEEK_MIN_BALANCE:
+        out["reason"] = "balance below floor"
+    else:
+        out.update(routable=True, reason=None)
+    return out
+
+
+def route_payload(model: str) -> dict | None:
+    """Ranked cross-provider candidates for one Claude model, or None when unmapped.
+
+    Anthropic first (what pick() would do), then the routes.json order. Pure:
+    reads cached provider state and the pool, touches no upstream, mutates nothing.
+    """
+    key = route_key(model)
+    if key is None:
+        return None
+    with LOCK:
+        providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
+        candidates = [anthropic_candidate(model)]
+    for provider, target in ROUTES.get(key, []):
+        state = providers.get(provider, {})
+        if provider == "openai-codex":
+            candidates.append(codex_candidate(target, state))
+        elif provider == "deepseek":
+            candidates.append(deepseek_candidate(target, state))
+        else:
+            candidates.append({"provider": provider, "model": target, "routable": False, "reason": "unknown"})
+    return {"model": model, "route": key, "candidates": candidates,
+            "first_routable": next((c for c in candidates if c["routable"]), None),
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+def usage_payload() -> dict:
+    """/_usage schema 2: the schema-1 keys unchanged, plus `providers` for every provider."""
+    with LOCK:
+        toks = [t.snapshot() for t in STATE]
+        routing = routing_preview()
+        providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
+    checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
+    anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
+                 "checked_at": int(max(checked)) if checked else None}
+    return {
+        "schema": 2,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "tokens": toks,
+        "routing": routing,
+        "providers": {"anthropic": anthropic, **providers},
+        "routes_file": str(ROUTES_FILE),
+        "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses; "
+                "providers.* are read-only cross-provider readings refreshed every usage_interval",
+    }
 
 
 def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
@@ -872,16 +1252,17 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _usage_page(self) -> None:
-        with LOCK:
-            toks = [t.snapshot() for t in STATE]
-            routing = routing_preview()
-        self._send_json(200, {
-            "schema": 1,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "tokens": toks,
-            "routing": routing,
-            "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses",
-        })
+        self._send_json(200, usage_payload())
+
+    def _route_page(self) -> None:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        model = (query.get("model") or [""])[0]
+        payload = route_payload(model)
+        if payload is None:
+            self._send_json(404, {"error": "unknown model", "model": model, "routes": sorted(load_routes()),
+                                  "routes_file": str(ROUTES_FILE), "routes_error": ROUTES_ERROR})
+            return
+        self._send_json(200, payload)
 
     def _forward_headers(self) -> dict:
         fwd = {}
@@ -893,6 +1274,9 @@ class Handler(BaseHTTPRequestHandler):
         return fwd
 
     def _proxy(self):
+        if self.path.startswith("/_"):  # local control endpoints are read-only and never forwarded
+            self._send_json(405, {"error": "method not allowed", "path": self.path.split("?", 1)[0]})
+            return
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         fwd = self._forward_headers()
@@ -984,6 +1368,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if endpoint == "/_usage":
             self._usage_page()
+            return
+        if endpoint == "/_route":
+            self._route_page()
             return
         self._proxy()
 
@@ -1104,6 +1491,9 @@ def main() -> int:
     elif len(STATE) < MIN_VALID:
         health_warn("too few tokens configured")
 
+    load_routes()
+    # First oracle poll runs off-thread so listening is not delayed by a slow upstream.
+    threading.Thread(target=refresh_providers, daemon=True).start()
     threading.Thread(target=watchdog, args=(TOKEN_FILE,), daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     log(f"listening on http://127.0.0.1:{args.port} threshold={ROTATE_THRESHOLD} "
