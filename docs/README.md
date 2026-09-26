@@ -78,6 +78,9 @@ All configurations are organized in the `config/` directory:
 - `config/nvim/` - Editor configuration  
 - `config/gui/` - Desktop environment configs
 - `config/tmux/` - Terminal multiplexer
+- `config/pi/` - pi agent; `extensions/llm-failover.ts` switches provider or, when nothing is routable,
+  waits for the earliest OAuth cooldown reset and resumes the turn (`PI_FAILOVER_WAIT=0` disables,
+  `PI_FAILOVER_MAX_WAIT_HOURS` caps the wait, default 6; `PI_FAILOVER_POLL_SECONDS`, default 60)
 
 ## 📖 Documentation
 

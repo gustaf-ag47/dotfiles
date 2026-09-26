@@ -21,6 +21,38 @@ Status: decided 2026-09-25 — option (c); implementation tracked in
 6. **DeepSeek label:** `DEEPSEEK_ACCOUNT_LABEL` env first, `auth.json` `label` second,
    last-4 of key fallback. Codex label from the access-token JWT claims.
 
+## Decision 4 (2026-09-26): wait for the earliest reset when nothing is routable
+
+When every OAuth account is cooling for the requested model and no substitute is
+routable, pi used to give up: the proxy's 503 `overloaded_error` matches pi's
+agent-level retry (`retry.maxRetries` 3, 2/4/8 s backoff), which ignores
+`Retry-After`, then the run settles on the error. Sessions whose last message is that
+error: 6 on 2026-09-10, 5 on 09-11, 1 on 09-15, and 2 each on 09-20, 09-25 and 09-26.
+
+`llm-failover.ts` now handles `agent_before_settle` (outcome `error`, last message the
+proxy's `no OAuth account can serve` 503, provider `anthropic`):
+
+- The wait target is the earliest future `cooldown until <ISO> for <model>` in the 503
+  body or the oracle's anthropic `reset_at`, whichever is sooner. One line names the
+  time and account: `⏳ … waiting until 00:39:59Z (in 13m) for gs@… to reset`.
+- It re-polls `/_route` every `PI_FAILOVER_POLL_SECONDS` (60) and wakes 5–20 s after
+  a known reset. Anthropic routable: it resumes. A substitute routable: it switches
+  (decisions 2 and 3) and resumes.
+- Resume means a `context_edit` that omits the failed attempt (what pi's own retry
+  does), followed by `continue: true`. The same run continues, with no user message.
+- The cap is `PI_FAILOVER_MAX_WAIT_HOURS` (6), counted across repeated failures and
+  reset by a successful turn. A reset past the cap prints one line and does not
+  wait. `PI_FAILOVER_WAIT=0` turns waiting off.
+- To stop waiting, type a message or run `/failover off`. Esc does not wake the
+  wait, because `ctx.signal` is unset at that boundary (pi 0.87.1: no low-level run is
+  active).
+- No `Retry-After` header on the proxy: pi's agent-level retry never reads it, and
+  provider-level retries are off by default and capped at 60 s.
+
+Tests: `tests/unit/test_llm_failover.mjs` (body parsing, plan, cap, the loop, and the
+hook against a fake `/_route`), plus `tests/unit/test_pi_wait_for_reset.py` (real pi
+against a fake proxy returning 503 then 200).
+
 Date: 2026-09-25. Research only. `bin/`, `scripts/`, `config/` and `~/.pi/agent/*` were
 not changed, and no services were restarted. Brief:
 `docs/handover/research-generic-llm-proxy.md`. Sibling doc for *what each provider's
