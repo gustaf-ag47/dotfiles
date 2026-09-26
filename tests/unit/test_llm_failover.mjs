@@ -3,8 +3,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createFailover, isPoolExhausted, fetchRoute, noRouteLine, relativeTime, proxyOrigin,
-  RECOVERY_POLL_MS,
+  RECOVERY_POLL_MS, earliestCooldown, planWait, waitSettings, waitLine, clockText,
 } from '../../config/pi/extensions/llm-failover.ts';
+import llmFailover from '../../config/pi/extensions/llm-failover.ts';
+import http from 'node:http';
 
 const PROXY_ERROR = '503 {"type":"error","error":{"type":"overloaded_error","message":'
   + '"Claude subscription request unavailable: no OAuth account can serve claude-fable-5-1 right now.\\n'
@@ -24,14 +26,17 @@ const answer = (candidates) => ({
   model: 'claude-fable-5-1', candidates, first_routable: candidates.find(c => c.routable) ?? null,
 });
 
-function harness({ routes, setModelOk = () => true, start = 1_000_000 }) {
-  const calls = { route: [], setModel: [], notify: [] };
+function harness({ routes, setModelOk = () => true, start = 1_000_000, wait }) {
+  const calls = { route: [], setModel: [], notify: [], sleep: [] };
   let clock = start;
   const core = createFailover({
     fetchRoute: async (model) => { calls.route.push(model); return routes.shift() ?? null; },
     setModel: async (target) => { calls.setModel.push(target); return setModelOk(target); },
     notify: (line, level) => calls.notify.push([level, line]),
     now: () => clock,
+    sleep: async (ms) => { calls.sleep.push(ms); clock += ms; },
+    random: () => 0,
+    wait: wait ?? { enabled: true, maxWaitMs: 6 * 3_600_000, pollMs: RECOVERY_POLL_MS },
   });
   return { core, calls, tick: (ms) => { clock += ms; } };
 }
@@ -165,4 +170,157 @@ test('proxy origin follows PI_ANTHROPIC_PROXY_URL / CC_PROXY_PORT', () => {
   assert.equal(relativeTime('2026-09-30T06:00:00+00:00', Date.parse('2026-09-30T02:48:00+00:00')), 'in 3h 12m');
   assert.equal(relativeTime('2026-09-30T06:00:00+00:00', Date.parse('2026-09-30T07:00:00+00:00')), 'now');
   assert.equal(relativeTime(null, 0), 'unknown');
+});
+
+// The 503 errorMessage exactly as pi recorded it on 2026-09-26 (JSON-escaped newlines, emails anonymised).
+const LIVE_503 = '503 {"type":"error","error":{"type":"overloaded_error","message":"Claude subscription request unavailable: '
+  + 'no OAuth account can serve claude-opus-5-5 right now.\\nAccount status:\\n'
+  + '- ccb67338fbdb (ops@example.test): cooldown until 2026-09-26T01:59:59.216281+00:00 for claude-opus-5-5; weekly 100% (header); 5-hour 0% (header)\\n'
+  + '  detailed quota unavailable: OAuth token does not meet scope requirement user:profile\\n'
+  + '- 82a293204226 (gs@example.test): cooldown until 2026-09-26T00:39:59.161403+00:00 for claude-opus-5-5; weekly 78% (header); 5-hour 101% (header)\\n'
+  + '- a5de118c98c0 (ant@example.test): cooldown until 2026-09-27T09:59:59.277656+00:00 for claude-opus-5-5; weekly 100% (header); 5-hour 0% (header)\\n'
+  + 'Run `claude-usage` for the full account report and reset times."}}';
+const AT_0026 = Date.parse('2026-09-26T00:26:29Z');
+const RESET_GS = Date.parse('2026-09-26T00:39:59.161403+00:00');
+const opus = (routable, extra = {}) => anthropic(routable, { model: 'claude-opus-5-5', reset_at: null, ...extra });
+
+test('earliestCooldown: earliest future reset for the requested model only', () => {
+  const got = earliestCooldown(LIVE_503, 'claude-opus-5-5', AT_0026);
+  assert.deepEqual(got, { account: 'gs@example.test', at: '2026-09-26T00:39:59.161403+00:00', epoch: RESET_GS });
+  assert.equal(earliestCooldown(LIVE_503, 'claude-fable-5-1', AT_0026), null, 'other model');
+  assert.equal(earliestCooldown(LIVE_503, 'claude-opus-5-5', RESET_GS + 1).account, 'ops@example.test', 'past resets skipped');
+  assert.equal(earliestCooldown(LIVE_503.replaceAll('\\n', '\n'), 'claude-opus-5-5', AT_0026).epoch, RESET_GS, 'raw newlines');
+  assert.equal(earliestCooldown('503 Overloaded', 'claude-opus-5-5', AT_0026), null);
+  assert.equal(earliestCooldown(PROXY_ERROR.replace('alice', 'deadbeef0001'), 'claude-fable-5-1', 0).account, 'deadbeef0001');
+});
+
+test('planWait: earliest of body and oracle, capped', () => {
+  const base = { errorMessage: LIVE_503, model: 'claude-opus-5-5', now: AT_0026, waitingSince: 0, maxWaitMs: 6 * 3_600_000 };
+  const plan = planWait({ ...base, route: answer([opus(false, { reset_at: '2026-09-26T01:00:00+00:00' })]) });
+  assert.deepEqual(plan, { action: 'wait', until: RESET_GS, deadline: AT_0026 + 6 * 3_600_000, account: 'gs@example.test' });
+  const earlierOracle = planWait({ ...base, route: answer([opus(false, { reset_at: '2026-09-26T00:30:00+00:00' })]) });
+  assert.equal(earlierOracle.until, Date.parse('2026-09-26T00:30:00+00:00'));
+  assert.equal(earlierOracle.account, null);
+  const unknown = planWait({ ...base, errorMessage: PROXY_ERROR, route: null });
+  assert.equal(unknown.action, 'wait');
+  assert.equal(unknown.until, null);
+  const capped = planWait({ ...base, maxWaitMs: 5 * 60_000, route: null });
+  assert.equal(capped.action, 'stop');
+  assert.match(capped.line, /next reset 00:39:59Z \(in 13m\) is past the 5m wait cap/);
+  const spent = planWait({ ...base, waitingSince: AT_0026 - 7 * 3_600_000, route: null });
+  assert.equal(spent.action, 'stop');
+  assert.match(spent.line, /after 6h of waiting/);
+});
+
+test('waitSettings and the wait line', () => {
+  assert.deepEqual(waitSettings({}), { enabled: true, maxWaitMs: 6 * 3_600_000, pollMs: 60_000 });
+  assert.deepEqual(waitSettings({ PI_FAILOVER_WAIT: '0', PI_FAILOVER_MAX_WAIT_HOURS: '1.5', PI_FAILOVER_POLL_SECONDS: '2' }),
+    { enabled: false, maxWaitMs: 5_400_000, pollMs: 2_000 });
+  assert.deepEqual(waitSettings({ PI_FAILOVER_MAX_WAIT_HOURS: 'x', PI_FAILOVER_POLL_SECONDS: '-1' }).maxWaitMs, 6 * 3_600_000);
+  const plan = { action: 'wait', until: RESET_GS, deadline: AT_0026 + 3_600_000, account: 'gs@example.test' };
+  assert.equal(waitLine('claude-opus-5-5', plan, AT_0026), '⏳ anthropic pool exhausted for claude-opus-5-5; waiting until 00:39:59Z'
+    + ' (in 13m) for gs@example.test to reset, then resuming (type a message or /failover off to stop)');
+  assert.equal(clockText(Date.parse('2026-09-27T09:59:59Z'), AT_0026), '2026-09-27 09:59:59Z');
+});
+
+test('settled exhaustion waits for the reset, polling, then resumes', async () => {
+  const { core, calls } = harness({ start: AT_0026, routes: [
+    answer([opus(false), codex(false)]), answer([opus(false), codex(false)]), answer([opus(true), codex(false)])] });
+  assert.equal(await core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, LIVE_503), true);
+  const toReset = RESET_GS - AT_0026;
+  assert.deepEqual(calls.sleep, [RECOVERY_POLL_MS, RECOVERY_POLL_MS], 'naps at most one poll interval');
+  assert.ok(calls.sleep.reduce((a, b) => a + b, 0) < toReset, 'resumes as soon as the oracle says routable');
+  assert.deepEqual(calls.setModel, []);
+  assert.equal(calls.notify.length, 2);
+  assert.match(calls.notify[0][1], /^⏳ .* waiting until 00:39:59Z \(in 13m\) for gs@example.test/);
+  assert.deepEqual(calls.notify[1], ['info', '▶ anthropic pool recovered; resuming anthropic/claude-opus-5-5']);
+});
+
+test('settled exhaustion: last nap lands just after the reset (grace, no oracle chatter)', async () => {
+  const close = LIVE_503.replace('2026-09-26T00:39:59.161403', '2026-09-26T00:26:49.000000');
+  const { core, calls } = harness({ start: AT_0026, routes: [answer([opus(false)]), answer([opus(true)])] });
+  assert.equal(await core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, close), true);
+  assert.deepEqual(calls.sleep, [25_000], '20 s to reset + 5 s grace');
+});
+
+test('settled exhaustion switches when a substitute becomes routable while waiting', async () => {
+  const { core, calls } = harness({ start: AT_0026, routes: [
+    answer([opus(false), codex(false)]), answer([opus(false), codex(true)]), answer([opus(false), codex(true)])] });
+  assert.equal(await core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, LIVE_503), true);
+  assert.deepEqual(calls.setModel, [{ provider: 'openai-codex', model: 'gpt-6-astra' }]);
+  assert.match(calls.notify.at(-1)[1], /^↪ switched to openai-codex/);
+});
+
+test('settled exhaustion: cap, opt-out, cancel and non-anthropic never wait', async () => {
+  const capped = harness({ start: AT_0026, routes: [answer([opus(false)])], wait: { enabled: true, maxWaitMs: 60_000, pollMs: RECOVERY_POLL_MS } });
+  assert.equal(await capped.core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, LIVE_503), false);
+  assert.deepEqual(capped.calls.sleep, []);
+  assert.match(capped.calls.notify[0][1], /^✗ .* past the 1m wait cap — not waiting$/);
+
+  const unknownReset = harness({ start: AT_0026, routes: Array.from({ length: 10 }, () => answer([opus(false)])),
+    wait: { enabled: true, maxWaitMs: 150_000, pollMs: RECOVERY_POLL_MS } });
+  assert.equal(await unknownReset.core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, PROXY_ERROR.replace('claude-fable-5-1', 'other')), false);
+  assert.deepEqual(unknownReset.calls.sleep, [60_000, 60_000, 30_000]);
+  assert.match(unknownReset.calls.notify.at(-1)[1], /giving up$/);
+  assert.equal(unknownReset.core.state.waitingSince, 0);
+
+  const off = harness({ start: AT_0026, routes: [], wait: { enabled: false, maxWaitMs: 1e9, pollMs: 1 } });
+  assert.equal(await off.core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, LIVE_503), false);
+  assert.deepEqual(off.calls.route, []);
+
+  const cancel = harness({ start: AT_0026, routes: [answer([opus(false)]), answer([opus(false)])] });
+  let polls = 0;
+  assert.equal(await cancel.core.onSettledExhausted({ provider: 'anthropic', model: 'claude-opus-5-5' }, LIVE_503, () => ++polls > 1), false);
+  assert.deepEqual(cancel.calls.notify.at(-1), ['info', '⏹ stopped waiting for the anthropic pool']);
+
+  const codexFail = harness({ start: AT_0026, routes: [] });
+  assert.equal(await codexFail.core.onSettledExhausted({ provider: 'openai-codex', model: 'gpt-6-astra' }, LIVE_503), false);
+});
+
+test('wait budget spans repeated failures and resets after a successful turn', async () => {
+  const { core, tick } = harness({ start: AT_0026, routes: [answer([opus(false)]), answer([opus(true)]), answer([opus(false)])],
+    wait: { enabled: true, maxWaitMs: 3 * 60_000, pollMs: RECOVERY_POLL_MS } });
+  const target = { provider: 'anthropic', model: 'claude-opus-5-5' };
+  assert.equal(await core.onSettledExhausted(target, PROXY_ERROR), true);
+  assert.equal(core.state.waitingSince, AT_0026);
+  tick(3 * 60_000);
+  assert.equal(await core.onSettledExhausted(target, PROXY_ERROR), false, 'budget spent across the resumed failure');
+  core.onTurnSucceeded();
+  assert.equal(core.state.waitingSince, 0);
+});
+
+test('extension: agent_before_settle waits on a fake proxy, then omits the failed entry and continues', async () => {
+  let routeCalls = 0;
+  const server = http.createServer((req, res) => {
+    assert.match(req.url, /^\/_route\?model=claude-opus-5-5$/);
+    routeCalls++;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(answer([opus(routeCalls >= 3), codex(false)])));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const saved = { ...process.env };
+  process.env.PI_ANTHROPIC_PROXY_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.PI_FAILOVER_POLL_SECONDS = '0.05';
+  const handlers = {};
+  const notes = [];
+  try {
+    llmFailover({ on: (name, fn) => { handlers[name] = fn; }, registerCommand: () => {}, setModel: async () => true });
+    const failed = { role: 'assistant', stopReason: 'error', errorMessage: LIVE_503.replace(/2026-09-26T00:39:59\.161403/, new Date(Date.now() + 200).toISOString().slice(0, -1)) };
+    const ctx = { hasUI: true, ui: { notify: (line, level) => notes.push([level, line]) }, model: { provider: 'anthropic', id: 'claude-opus-5-5' },
+      hasPendingMessages: () => false, signal: undefined, modelRegistry: { find: () => undefined } };
+    const event = (outcome, messages) => ({ type: 'agent_before_settle', outcome, entries: [], continue: false,
+      context: { contextEntries: [{ sourceEntry: { id: 'u1' }, messages: [{ role: 'user' }] }, { sourceEntry: { id: 'a9' }, messages }] } });
+    assert.equal(await handlers.agent_before_settle(event('completed', [failed]), ctx), undefined);
+    assert.equal(await handlers.agent_before_settle(event('error', [{ ...failed, errorMessage: '503 Overloaded' }]), ctx), undefined);
+    const started = Date.now();
+    const result = await handlers.agent_before_settle(event('error', [failed]), ctx);
+    assert.deepEqual(result, { entries: [{ type: 'context_edit', targetId: 'a9', replacement: null }], continue: true });
+    assert.equal(routeCalls, 3, 'plan poll + two naps until routable');
+    assert.ok(Date.now() - started < 5_000);
+    assert.match(notes[0][1], /^⏳ anthropic pool exhausted for claude-opus-5-5; waiting until/);
+    assert.deepEqual(notes.at(-1), ['info', '▶ anthropic pool recovered; resuming anthropic/claude-opus-5-5']);
+  } finally {
+    process.env = saved;
+    server.close();
+  }
 });
