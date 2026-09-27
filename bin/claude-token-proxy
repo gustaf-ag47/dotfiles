@@ -63,7 +63,10 @@ Token selection (see docs/research/claude-token-rotation-oss.md): CC_PROXY_PICK
 (`pressure` default — spend perishable weekly quota first, model-aware bucket;
 `headroom` — legacy lowest-7d-utilization) and CC_PROXY_PICK_TOLERANCE (default
 1.5 — stickiness band that keeps the previous token, and its prompt cache,
-unless another token's pressure is this many times better).
+unless another token's pressure is this many times better). Pressure is
+`min(7d headroom / seconds to 7d reset, 5h headroom / seconds to 5h reset)`;
+unknown utilization/reset means full headroom and a full window. Threshold preference
+applies to both the model's weekly bucket and the 5h bucket.
 429 pacing: CC_PROXY_BURST_WAIT_MAX (default 15s) — a 429 that does not mark a
 spent bucket is a per-minute burst limit, so the proxy waits out Retry-After (up
 to this cap) and retries the SAME token once instead of rotating; rotating would
@@ -998,14 +1001,16 @@ def watchdog(path: str) -> None:
                 void_expired_readings(tok, time.time())
 
 
-# Sticky pick per bucket: re-picking a different token for a continuing
-# conversation discards the upstream prompt cache, so we only move when the
-# pressure gap is worth it.
-LAST_PICK: dict[str, str] = {}
+# Session affinity: bounded LRU; timestamps also expire idle conversations.
+from collections import OrderedDict
+
+AFFINITY_MAX = 1000
+AFFINITY_IDLE = 6 * 3600
+LAST_PICK: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
 
 
 def _iso_epoch(value: str | None) -> float | None:
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         return datetime.fromisoformat(value).timestamp()
@@ -1066,7 +1071,7 @@ def five_hour_util(t: Tok, now: float) -> float | None:
 
 
 def pressure(t: Tok, key: str, now: float) -> float:
-    """Perishable-quota score: weekly headroom per second until it expires.
+    """Minimum weekly and 5h headroom per second until the window expires.
 
     Quota that is about to reset is free to spend (it vanishes either way),
     while a distant reset makes the same headroom precious. Highest pressure
@@ -1076,13 +1081,32 @@ def pressure(t: Tok, key: str, now: float) -> float:
     week out, matching the legacy convention of trying unknown tokens early
     and letting the failover path correct us.
     """
-    headroom = 1.0 - (bucket_util(t, key, now) or 0.0)
-    reset = bucket_reset(t, key)
-    seconds = max(60.0, reset - now) if reset is not None and reset > now else 7 * 86400.0
-    return headroom / seconds
+    def score(util, reset, duration):
+        headroom = 1.0 - (util or 0.0)
+        epoch = _iso_epoch(reset)
+        seconds = max(60.0, epoch - now) if epoch is not None and epoch > now else duration
+        return headroom / seconds
+    weekly = score(bucket_util(t, key, now), bucket_reset(t, key), 7 * 86400.0)
+    five_hour = score(five_hour_util(t, now), t.u5_reset, 5 * 3600.0)
+    return min(weekly, five_hour)
 
 
-def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
+def _affinity_key(session_key: str | None, bucket: str) -> tuple[str, str]:
+    return (session_key or "global", bucket)
+
+
+def _prune_affinity(now: float) -> None:
+    for key, value in list(LAST_PICK.items()):
+        if not isinstance(key, tuple) or not isinstance(value, tuple):
+            continue  # tolerate legacy direct test/embedding writes; ignored by routing
+        _, touched = value
+        if now - touched > AFFINITY_IDLE:
+            del LAST_PICK[key]
+    while len(LAST_PICK) > AFFINITY_MAX:
+        LAST_PICK.popitem(last=False)
+
+
+def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None) -> Tok | None:
     """Choose a token for the weekly bucket this request's model debits.
 
     Eligibility (valid, not cooling, not forced down) and the over-threshold
@@ -1106,15 +1130,30 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
                                             five_hour_util(t, now) or 0.0))
     else:
         key = bucket_key(model)
-        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD]
+        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD
+                 and (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD]
         pool = below or eligible
         if pool:
             best = max(pool, key=lambda t: pressure(t, key, now))
-            prev_fp = LAST_PICK.get(key)
-            prev = next((t for t in pool if t.fp == prev_fp), None)
+            _prune_affinity(now)
+            akey = _affinity_key(session_key, key)
+            previous = LAST_PICK.get(akey)
+            if previous is None and key in LAST_PICK:  # compatibility with legacy embedding
+                previous = (LAST_PICK[key], now) if isinstance(LAST_PICK[key], str) else LAST_PICK[key]
+            prev = next((t for t in pool if previous and t.fp == previous[0]), None)
             if prev is not None and pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now):
                 best = prev
-            LAST_PICK[key] = best.fp
+            elif previous is None:
+                # Within the tolerance band, spread new sessions across accounts.
+                band = [t for t in pool if pressure(t, key, now) * PICK_TOLERANCE >= pressure(best, key, now)]
+                counts = {t.fp: sum(1 for affinity, value in LAST_PICK.items()
+                                    if isinstance(affinity, tuple) and len(affinity) == 2 and isinstance(value, tuple)
+                                    and affinity[1] == key and value[0] == t.fp and now - value[1] <= AFFINITY_IDLE)
+                          for t in band}
+                best = min(band, key=lambda t: (counts[t.fp], -pressure(t, key, now)))
+            LAST_PICK[akey] = (best.fp, now)
+            LAST_PICK.move_to_end(akey)
+            _prune_affinity(now)
             return best
     # No eligible account remains. Never bypass an upstream cooldown: doing so
     # defeats backoff and retries exhausted accounts on every incoming request.
@@ -1125,13 +1164,14 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
 ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
 
 
-def rank_pool(model: str, now: float | None = None) -> dict:
+def rank_pool(model: str, now: float | None = None, session_key: str | None = None) -> dict:
     """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
     now = time.time() if now is None else now
     key = "base" if PICK_MODE == "headroom" else bucket_key(model)
     forced = forced_cooldown_fps()
     available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)]
-    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD]
+    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD
+             and (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD]
     # The threshold is a preference, not a hard ban: pick() retries available
     # over-threshold accounts when there are no below-threshold candidates.
     ranked = []
@@ -1160,10 +1200,24 @@ def rank_pool(model: str, now: float | None = None) -> dict:
                                                     five_hour_util(t, now) or 0.0)).fp
         else:
             best = eligible[0]
-            prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
+            _prune_affinity(now)
+            akey = _affinity_key(session_key, key)
+            previous = LAST_PICK.get(akey)
+            prev = next((r for r in eligible if previous and r["fp"] == previous[0]), None)
             sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
-            chosen = prev["fp"] if sticky else best["fp"]
-    return {"model_example": model, "last_pick": LAST_PICK.get(key) if PICK_MODE != "headroom" else None,
+            if sticky:
+                chosen = prev["fp"]
+            elif previous is None and eligible:
+                band = [r for r in eligible if r["pressure"] * PICK_TOLERANCE >= best["pressure"]]
+                counts = {r["fp"]: sum(1 for affinity, value in LAST_PICK.items()
+                                       if isinstance(affinity, tuple) and len(affinity) == 2 and isinstance(value, tuple)
+                                       and affinity[1] == key and value[0] == r["fp"] and now - value[1] <= AFFINITY_IDLE)
+                          for r in band}
+                chosen = min(band, key=lambda r: (counts[r["fp"]], -r["pressure"]))["fp"]
+            else:
+                chosen = best["fp"]
+    previous = LAST_PICK.get(_affinity_key(session_key, key))
+    return {"model_example": model, "last_pick": (previous[0] if previous else None) if PICK_MODE != "headroom" else None,
             "would_pick": chosen, "ranking": ranked}
 
 
@@ -1539,12 +1593,26 @@ class Handler(BaseHTTPRequestHandler):
         valid_count = len([t for t in STATE if t.valid])
         endpoint = self.path.split("?", 1)[0]
         model = request_model(body)
+        session_key = self.headers.get("x-cc-proxy-session")
+        try:
+            payload = json.loads(body)
+            if not session_key and isinstance(payload, dict):
+                metadata = payload.get("metadata")
+                session_key = metadata.get("user_id") if isinstance(metadata, dict) else None
+                if not session_key and payload.get("system"):
+                    system = json.dumps(payload["system"], sort_keys=True, separators=(",", ":"))
+                    session_key = "system:" + hashlib.sha256(system.encode()).hexdigest()
+        except (TypeError, ValueError, UnicodeDecodeError):
+            pass
         paced: set[str] = set()  # tokens already given one burst-429 pause
 
         # Every token may burn one extra attempt on a burst pause before failover.
         for _ in range(max(1, valid_count + 1) + valid_count):
             with LOCK:
-                tok = pick(exclude=tried, model=model)
+                affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket_key(model)))
+                tok = pick(exclude=tried, model=model, session_key=session_key)
+                if affinity_before and tok and affinity_before[0] != tok.fp and affinity_before[0] in tried:
+                    log(f"session affinity moved bucket={bucket_key(model)} reason=cooldown")
             if tok is None:
                 with LOCK:
                     detail = ", ".join(
