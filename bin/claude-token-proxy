@@ -236,6 +236,10 @@ class Tok:
 
     def snapshot(self) -> dict:
         now = time.time()
+        windows = {"5h": (self.u5, self.u5_reset), "7d": (self.u7, self.u7_reset),
+                   "7d_oi": (self.u7_oi, self.u7_oi_reset)}
+        forecasts = {key: forecast(SAMPLES.get(self.fp, {}).get(key, []), value, _iso_epoch(reset), now)
+                     for key, (value, reset) in windows.items()}
         return {
             "fp": self.fp,
             "label": self.label,
@@ -246,6 +250,7 @@ class Tok:
             "u5_reset": self.u5_reset,
             "u7_reset": self.u7_reset,
             "u7_oi_reset": self.u7_oi_reset,
+            "forecast": forecasts,
             "unified_status": self.unified_status,
             "last_status": self.last_status,
             "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
@@ -287,6 +292,61 @@ PERSISTENCE_ERROR: str | None = None
 FALLBACK_STATE_KEY = "_deepseek_fallback"
 FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model": None,
                   "episode_requests": 0, "requests": 0, "by_model": {}}
+SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
+ROUTING_LOG = CONTROL_DIR / "routing.log"
+MAX_SAMPLES = 200
+
+
+def forecast(samples, utilization, reset_at, now=None):
+    now = time.time() if now is None else now
+    points = sorted(samples or [], key=lambda p: p[0])
+    slope = None
+    if len(points) >= 2 and points[-1][0] - points[0][0] >= 900:
+        slope = (points[-1][1] - points[0][1]) / ((points[-1][0] - points[0][0]) / 3600)
+    projected = None
+    state, exhaust_at = "unknown", None
+    if slope is not None and utilization is not None and reset_at:
+        projected = max(0.0, min(1.0, utilization + slope * max(0, reset_at - now) / 3600))
+        if slope > 0 and utilization < 1 and (1-utilization)/slope * 3600 < reset_at-now:
+            state, exhaust_at = "exhaust", now + (1-utilization)/slope*3600
+        elif projected < .9:
+            state = "waste"
+        else:
+            state = "on_track"
+    return {"burn_per_hour": slope, "projected_at_reset": projected,
+            "forecast": state, "exhaust_at": exhaust_at}
+
+
+def append_route(event):
+    try:
+        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        if ROUTING_LOG.exists() and ROUTING_LOG.stat().st_size >= 1_000_000:
+            ROUTING_LOG.replace(ROUTING_LOG.with_suffix(".log.1"))
+        with ROUTING_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, separators=(",", ":")) + "\\n")
+    except OSError:
+        pass
+
+
+def recent_routes():
+    try:
+        return [json.loads(line) for line in ROUTING_LOG.read_text().splitlines()[-20:]]
+    except (OSError, ValueError):
+        return []
+
+
+def record_sample(tok):
+    now = time.time()
+    buckets = (("5h", tok.u5, tok.u5_reset), ("7d", tok.u7, tok.u7_reset),
+               ("7d_oi", tok.u7_oi, tok.u7_oi_reset))
+    for name, value, reset in buckets:
+        if value is None:
+            continue
+        series = SAMPLES.setdefault(tok.fp, {}).setdefault(name, [])
+        if reset and series and series[-1][0] > float(reset):
+            series.clear()
+        series.append([now, float(value)])
+        del series[:-MAX_SAMPLES]
 
 
 def load_usage_state() -> dict:
@@ -312,6 +372,7 @@ def save_usage_state() -> bool:
             "by_model": t.by_model,
             "quota": quota_snapshot(t),
         } for t in STATE}
+        data["_samples"] = SAMPLES
         if FALLBACK["requests"]:
             data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
                                         "by_model": FALLBACK["by_model"]}
@@ -372,6 +433,9 @@ def restore_usage_state() -> None:
         models = saved.get("by_model", {})
         tok.by_model = models if isinstance(models, dict) else {}
         restore_quota(tok, saved.get("quota"))
+    global SAMPLES
+    saved_samples = data.get("_samples", {})
+    SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
     saved = data.get(FALLBACK_STATE_KEY, {})
     if isinstance(saved, dict):
         FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
@@ -531,6 +595,7 @@ def update_from_headers(tok: Tok, headers) -> None:
     status = headers.get("anthropic-ratelimit-unified-7d-status")
     if status:
         tok.unified_status = status
+    record_sample(tok)
 
 
 def request_model(body: bytes) -> str:
@@ -1433,6 +1498,8 @@ def usage_payload() -> dict:
         }
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
+    routing["recent"] = recent_routes()
+    routing["forecast"] = {"weekly_waste_percent": None, "first_exhaust": None}
     anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
                  "checked_at": int(max(checked)) if checked else None}
     return {
@@ -1654,6 +1721,26 @@ class Handler(BaseHTTPRequestHandler):
         self._stream(resp, None, model)
         conn.close()
         return True
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/_event":
+            self._send_api_error(404, "not found")
+            return
+        try:
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_api_error(403, "loopback only")
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 4096:
+                raise ValueError("body too large")
+            data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict) or not data.get("kind"):
+                raise ValueError("invalid event")
+            append_route({"ts": datetime.now(timezone.utc).isoformat(), **{
+                key: str(data.get(key, ""))[:100] for key in ("kind", "from", "to", "reason")}})
+            self._send_json(200, {"ok": True})
+        except (ValueError, json.JSONDecodeError):
+            self._send_api_error(400, "invalid JSON event")
 
     def do_GET(self):
         endpoint = self.path.split("?", 1)[0]
