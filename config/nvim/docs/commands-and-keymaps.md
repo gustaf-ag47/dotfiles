@@ -41,14 +41,6 @@ list. Key ones to remember:
 | `<C-e>` | Abort popup |
 | `<C-f>` / `<C-b>` | Scroll documentation pop-up |
 
-Supermaven (inline AI ghost text — separate from cmp):
-
-| Keymap | What |
-|---|---|
-| `<M-l>` | Accept full inline suggestion |
-| `<M-w>` | Accept one word |
-| `<C-]>` | Dismiss |
-
 ## Project-local config
 
 | Mechanism | Where |
