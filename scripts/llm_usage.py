@@ -309,12 +309,14 @@ def window_line(window, now):
     used = window.get('used_percent')
     reset = to_epoch(window.get('resets_at') or window.get('reset_at'))
     label = window_label(window)
+    if reset is not None and reset <= now:
+        # Reset passed since the last reading: assume a fresh window (what the
+        # proxy's router assumes too) until the next response confirms it.
+        return f'    {label:<9} {bar(100)} {paint("~100% left", "32")}  window reset; unconfirmed'
     if used is None:
         return f'    {label:<9} {"?" * BAR_WIDTH}   ?% left'
     left = max(0.0, min(100.0, 100 - used))
     stale = window.get('source', '').startswith('header')
-    if reset is not None and reset <= now and stale:
-        return f'    {label:<9} {bar(100)} {paint("100% left", "32"):>9}   window reset since last reading'
     tail = f'resets in {until(reset, now)}'
     if stale:
         tail += ' ~'
@@ -330,9 +332,18 @@ def account_status(group, now):
     cooldown = to_epoch(group.get('cooldown_until'))
     if cooldown and cooldown > now:
         return paint(f'COOLDOWN {until(cooldown, now)}', '31;1')
-    exhausted = [w for w in group.get('windows', []) if (w.get('used_percent') or 0) >= 100]
-    if exhausted:
+    # Expired observations cannot establish current exhaustion.
+    exhausted = [w for w in group.get('windows', [])
+                 if (w.get('used_percent') or 0) >= 100
+                 and not ((r := to_epoch(w.get('resets_at') or w.get('reset_at'))) is not None and r <= now)]
+    if any(w['name'] == 'five_hour' for w in exhausted):
         return paint('EXHAUSTED', '31;1')
+    if exhausted or any((to_epoch(r) or 0) > now for r in group.get('model_cooldowns', {}).values()):
+        return paint('PARTIAL · model/bucket limited', '33;1')
+    if not any(w.get('used_percent') is not None
+               and (to_epoch(w.get('resets_at') or w.get('reset_at')) or 0) > now
+               for w in group.get('windows', [])):
+        return paint('UNKNOWN · awaiting fresh reading', '33;1')
     return paint('READY', '32;1')
 
 
@@ -372,7 +383,8 @@ def anthropic_lines(info, now):
     for group in info.get('accounts', []):
         lines.append(f"  {paint(account_name(group['account'], labels), '1')}  {account_status(group, now)}")
         for model, reset in group.get('model_cooldowns', {}).items():
-            lines.append(f"    {paint(f'{model} cooldown {until(to_epoch(reset), now)}', '31')}")
+            if (to_epoch(reset) or 0) > now:
+                lines.append(f"    {paint(f'{model} cooldown {until(to_epoch(reset), now)}', '31')}")
         for window in group.get('windows', []):
             stale |= window.get('source', '').startswith('header')
             lines.append(window_line(window, now))

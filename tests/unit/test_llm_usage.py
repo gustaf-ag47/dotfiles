@@ -243,6 +243,29 @@ class DeepseekTests(unittest.TestCase):
 
 
 class UsageTests(unittest.TestCase):
+    def test_expired_window_is_unknown_not_full_or_exhausted(self):
+        window = {'name': 'five_hour', 'used_percent': 101, 'resets_at': NOW - 1,
+                  'source': 'header observation (may be stale)'}
+        group = {'valid': True, 'windows': [window]}
+        with patch.object(usage, 'use_color', return_value=False):
+            self.assertIn('UNKNOWN', usage.account_status(group, NOW))
+            line = usage.window_line(window, NOW)
+        self.assertIn('~100% left', line)
+        self.assertIn('window reset; unconfirmed', line)
+
+    def test_scoped_exhaustion_is_partial_and_expired_cooldowns_are_hidden(self):
+        group = {'account': 'test', 'valid': True, 'windows': [
+            {'name': 'five_hour', 'used_percent': 10, 'resets_at': NOW + 100},
+            {'name': 'seven_day_overage_included', 'used_percent': 100, 'resets_at': NOW + 100}],
+            'model_cooldowns': {'opus': NOW - 1}}
+        with patch.object(usage, 'use_color', return_value=False):
+            lines, _ = usage.anthropic_lines({'accounts': [group]}, NOW)
+        self.assertIn('PARTIAL', lines[0])
+        self.assertNotIn('opus cooldown', '\n'.join(lines))
+        group['windows'][0]['used_percent'] = 100
+        with patch.object(usage, 'use_color', return_value=False):
+            self.assertEqual(usage.account_status(group, NOW), 'EXHAUSTED')
+
     def test_codex_is_subscription_only_and_whitelists_response(self):
         auth = {'openai-codex': {'type': 'oauth', 'access': 'fake-test', 'expires': (time.time() + 600) * 1000}}
         data = {'private': 'sensitive', 'rate_limit': {'primary_window': {'used_percent': 0, 'reset_at': 100, 'private': 'sensitive'}}}

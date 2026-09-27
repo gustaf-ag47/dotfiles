@@ -310,6 +310,7 @@ def save_usage_state() -> bool:
             "cache_read_input_tokens": t.cache_read_input_tokens,
             "cache_creation_input_tokens": t.cache_creation_input_tokens,
             "by_model": t.by_model,
+            "quota": quota_snapshot(t),
         } for t in STATE}
         if FALLBACK["requests"]:
             data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
@@ -329,6 +330,38 @@ def save_usage_state() -> bool:
     return True
 
 
+# Header observations survive restarts. The seed probe is a haiku call, so it
+# refreshes 5h/7d but never the 7d_oi (fable) bucket; without this a restart
+# forgets that an account is fable-exhausted and "unknown = full headroom"
+# ranks it first. Cooldowns are kept so a restart cannot bypass upstream backoff.
+QUOTA_FIELDS = ("u5", "u7", "u7_oi", "u5_reset", "u7_reset", "u7_oi_reset", "unified_status")
+
+
+def quota_snapshot(t: Tok) -> dict:
+    snap = {key: getattr(t, key) for key in QUOTA_FIELDS}
+    snap["cooldown_until"] = t.cooldown_until
+    snap["model_cooldowns"] = t.model_cooldowns
+    return snap
+
+
+def restore_quota(tok: Tok, saved: dict, now: float | None = None) -> None:
+    """Only fill fields that are still unknown; live headers always win."""
+    if not isinstance(saved, dict):
+        return
+    now = time.time() if now is None else now
+    for key in QUOTA_FIELDS:
+        if getattr(tok, key) is None and saved.get(key) is not None:
+            setattr(tok, key, saved[key])
+    cooldown = saved.get("cooldown_until")
+    if isinstance(cooldown, (int, float)) and cooldown > now:
+        tok.cooldown_until = max(tok.cooldown_until, float(cooldown))
+    scoped = saved.get("model_cooldowns")
+    if isinstance(scoped, dict):
+        for scope, until in scoped.items():
+            if isinstance(until, (int, float)) and until > now:
+                tok.model_cooldowns[scope] = max(tok.model_cooldowns.get(scope, 0.0), float(until))
+
+
 def restore_usage_state() -> None:
     data = load_usage_state()
     for tok in STATE:
@@ -338,6 +371,7 @@ def restore_usage_state() -> None:
             setattr(tok, key, int(saved.get(key, 0) or 0))
         models = saved.get("by_model", {})
         tok.by_model = models if isinstance(models, dict) else {}
+        restore_quota(tok, saved.get("quota"))
     saved = data.get(FALLBACK_STATE_KEY, {})
     if isinstance(saved, dict):
         FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
@@ -954,11 +988,14 @@ def watchdog(path: str) -> None:
             next_usage = now + USAGE_INTERVAL
         with LOCK:
             stale = [t for t in STATE
-                     if not t.valid and now - t.last_revalidate >= REVALIDATE_INTERVAL]
+                     if (not t.valid or readings_expired(t, now)) and now - t.last_revalidate >= REVALIDATE_INTERVAL]
         for tok in stale:
-            probe(tok, note="revalidate")
-            if tok.valid:
+            was_valid = tok.valid
+            probe(tok, note="refresh" if was_valid else "revalidate")
+            if tok.valid and not was_valid:
                 log(f"token {tok.name()} recovered — back in rotation")
+            with LOCK:
+                void_expired_readings(tok, time.time())
 
 
 # Sticky pick per bucket: re-picking a different token for a continuing
@@ -981,12 +1018,51 @@ def bucket_key(model: str) -> str:
     return "oi" if FABLE_MODEL_RE.search(model or "") else "base"
 
 
-def bucket_util(t: Tok, key: str) -> float | None:
+def bucket_reset(t: Tok, key: str) -> float | None:
+    return _iso_epoch(t.u7_oi_reset if key == "oi" else t.u7_reset)
+
+
+def bucket_util(t: Tok, key: str, now: float | None = None) -> float | None:
+    """Last observed weekly utilization, or None once that window has reset.
+
+    Utilization comes from response headers, so an account that stopped
+    receiving traffic keeps its last reading forever. Once the window's reset
+    time has passed the reading is void: treating it as unknown (full headroom)
+    lets the account back into rotation so the next response refreshes it.
+    Without this, a token that hit 100% is "over threshold" for good.
+    """
+    now = time.time() if now is None else now
+    reset = bucket_reset(t, key)
+    if reset is not None and reset <= now:
+        return None
     return t.u7_oi if key == "oi" else t.u7
 
 
-def bucket_reset(t: Tok, key: str) -> float | None:
-    return _iso_epoch(t.u7_oi_reset if key == "oi" else t.u7_reset)
+def readings_expired(t: Tok, now: float) -> bool:
+    """A window reset since the last header observation, so its reading is void.
+
+    Idle tokens never receive traffic, so the watch loop re-probes them to
+    replace the void reading instead of guessing until they are picked again.
+    """
+    return any(reset is not None and reset <= now
+               for reset in (_iso_epoch(t.u5_reset), _iso_epoch(t.u7_reset), _iso_epoch(t.u7_oi_reset)))
+
+
+def void_expired_readings(t: Tok, now: float) -> None:
+    """Drop readings a probe could not refresh (haiku responses carry no 7d_oi).
+
+    Unknown is the honest state and stops the watch loop re-probing forever.
+    """
+    for util, reset in (("u5", "u5_reset"), ("u7", "u7_reset"), ("u7_oi", "u7_oi_reset")):
+        epoch = _iso_epoch(getattr(t, reset))
+        if epoch is not None and epoch <= now:
+            setattr(t, util, None)
+            setattr(t, reset, None)
+
+
+def five_hour_util(t: Tok, now: float) -> float | None:
+    reset = _iso_epoch(t.u5_reset)
+    return None if reset is not None and reset <= now else t.u5
 
 
 def pressure(t: Tok, key: str, now: float) -> float:
@@ -1000,7 +1076,7 @@ def pressure(t: Tok, key: str, now: float) -> float:
     week out, matching the legacy convention of trying unknown tokens early
     and letting the failover path correct us.
     """
-    headroom = 1.0 - (bucket_util(t, key) or 0.0)
+    headroom = 1.0 - (bucket_util(t, key, now) or 0.0)
     reset = bucket_reset(t, key)
     seconds = max(60.0, reset - now) if reset is not None and reset > now else 7 * 86400.0
     return headroom / seconds
@@ -1023,14 +1099,14 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
     ]
 
     if PICK_MODE == "headroom":  # legacy rollback path: exact pre-pressure behavior
-        below = [t for t in eligible if (t.u7 or 0.0) < ROTATE_THRESHOLD]
+        below = [t for t in eligible if (bucket_util(t, "base", now) or 0.0) < ROTATE_THRESHOLD]
         pool = below or eligible
         if pool:
-            return min(pool, key=lambda t: (t.u7 if t.u7 is not None else 0.0,
-                                            t.u5 if t.u5 is not None else 0.0))
+            return min(pool, key=lambda t: (bucket_util(t, "base", now) or 0.0,
+                                            five_hour_util(t, now) or 0.0))
     else:
         key = bucket_key(model)
-        below = [t for t in eligible if (bucket_util(t, key) or 0.0) < ROTATE_THRESHOLD]
+        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD]
         pool = below or eligible
         if pool:
             best = max(pool, key=lambda t: pressure(t, key, now))
@@ -1052,18 +1128,22 @@ ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
 def rank_pool(model: str, now: float | None = None) -> dict:
     """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
     now = time.time() if now is None else now
-    key = bucket_key(model)
+    key = "base" if PICK_MODE == "headroom" else bucket_key(model)
     forced = forced_cooldown_fps()
+    available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)]
+    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD]
+    # The threshold is a preference, not a hard ban: pick() retries available
+    # over-threshold accounts when there are no below-threshold candidates.
     ranked = []
     for t in STATE:
-        util = bucket_util(t, key)
+        util = bucket_util(t, key, now)
         if t.fp in forced:
             reason = "forced offline"
         elif not t.valid:
             reason = "parked"
         elif now < cooldown_deadline(t, model):
             reason = "cooldown"
-        elif (util or 0.0) >= ROTATE_THRESHOLD:
+        elif below and (util or 0.0) >= ROTATE_THRESHOLD:
             reason = "over threshold"
         else:
             reason = None
@@ -1074,11 +1154,17 @@ def rank_pool(model: str, now: float | None = None) -> dict:
     chosen = None
     eligible = [r for r in ranked if r["eligible"]]
     if eligible:
-        best = eligible[0]
-        prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
-        sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
-        chosen = prev["fp"] if sticky else best["fp"]
-    return {"model_example": model, "last_pick": LAST_PICK.get(key), "would_pick": chosen, "ranking": ranked}
+        if PICK_MODE == "headroom":
+            candidates = below or available
+            chosen = min(candidates, key=lambda t: (bucket_util(t, key, now) or 0.0,
+                                                    five_hour_util(t, now) or 0.0)).fp
+        else:
+            best = eligible[0]
+            prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
+            sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
+            chosen = prev["fp"] if sticky else best["fp"]
+    return {"model_example": model, "last_pick": LAST_PICK.get(key) if PICK_MODE != "headroom" else None,
+            "would_pick": chosen, "ranking": ranked}
 
 
 def _bucket_reset_iso(t: Tok, key: str) -> str | None:
@@ -1483,7 +1569,6 @@ class Handler(BaseHTTPRequestHandler):
                 update_from_headers(tok, resp.headers)
                 tok.last_status = resp.status
                 tok.responses += 1
-                save_usage_state()
                 pause = None
                 cooldown_scope = None
                 if resp.status == 429:
@@ -1500,6 +1585,7 @@ class Handler(BaseHTTPRequestHandler):
                     tok.valid = False
                     tok.last_revalidate = time.time()
                     check_health("token rejected upstream")
+                save_usage_state()
 
             log(f"{self.command} {endpoint} -> token {tok.name()} model={model} "
                 f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
@@ -1650,6 +1736,7 @@ def probe(tok: Tok, note: str = "seed") -> None:
             else:
                 tok.valid = True
                 tok.invalid_since = 0.0
+            save_usage_state()
         r.read()
         conn.close()
         log(f"{note} {tok.name()}: status {r.status} u7={tok.u7} u5={tok.u5} valid={tok.valid}")
