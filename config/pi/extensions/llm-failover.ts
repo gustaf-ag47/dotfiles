@@ -39,18 +39,20 @@ export type Candidate = {
 	reason: string | null;
 	reset_at?: string | null;
 	quota_left_percent?: number | null;
+	pressure?: number | null;
 };
 
 export type RouteAnswer = {
 	model: string;
 	candidates: Candidate[];
 	first_routable: Candidate | null;
+	preferred?: Candidate | null;
 };
 
 export type Target = { provider: string; model: string };
 
 export type FailoverDeps = {
-	fetchRoute: (model: string) => Promise<RouteAnswer | null>;
+	fetchRoute: (model: string, current?: string) => Promise<RouteAnswer | null>;
 	/** Returns false when pi cannot select the model (no auth, unknown id). */
 	setModel: (target: Target) => Promise<boolean>;
 	notify: (line: string, level: "info" | "warning" | "error") => void;
@@ -76,6 +78,8 @@ export type FailoverState = {
 	current: Target | null;
 	lastPollAt: number;
 	lastPollRoutable: boolean;
+	pressureDriven: boolean;
+	pinned: boolean;
 	lastNoRouteLine: string;
 	lastNoRouteAt: number;
 	/** Start of the current run of pool-exhausted waits; 0 when not waiting. */
@@ -211,16 +215,16 @@ export function rankingLines(answer: RouteAnswer | null): string[] {
 
 /** Loopback GET with a hard timeout; never inherits an HTTP proxy. */
 export async function fetchRoute(origin: string, model: string, fetchImpl: typeof fetch = fetch,
-	timeoutMs = ROUTE_TIMEOUT_MS): Promise<RouteAnswer | null> {
+	timeoutMs = ROUTE_TIMEOUT_MS, current?: string): Promise<RouteAnswer | null> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const url = `${origin}/_route?model=${encodeURIComponent(model)}`;
+		const url = `${origin}/_route?model=${encodeURIComponent(model)}${current ? `&current=${encodeURIComponent(current)}` : ""}`;
 		const res = await fetchImpl(url, { signal: controller.signal, headers: { accept: "application/json" } });
 		if (!res.ok) return null;
 		const body = (await res.json()) as Partial<RouteAnswer>;
 		if (!Array.isArray(body.candidates)) return null;
-		return { model: body.model ?? model, candidates: body.candidates, first_routable: body.first_routable ?? null };
+		return { model: body.model ?? model, candidates: body.candidates, first_routable: body.first_routable ?? null, preferred: body.preferred ?? null };
 	} catch {
 		return null;
 	} finally {
@@ -236,6 +240,8 @@ export function createFailover(deps: FailoverDeps) {
 		current: null,
 		lastPollAt: 0,
 		lastPollRoutable: false,
+		pressureDriven: false,
+		pinned: false,
 		lastNoRouteLine: "",
 		lastNoRouteAt: 0,
 		waitingSince: 0,
@@ -256,7 +262,7 @@ export function createFailover(deps: FailoverDeps) {
 
 	/** Called with the failed request's provider/model. Returns true when switched. */
 	async function onPoolExhausted(current: Target): Promise<boolean> {
-		if (!state.enabled || current.provider !== ANTHROPIC) return false;
+		if (!state.enabled || state.pinned || current.provider !== ANTHROPIC) return false;
 		const answer = await deps.fetchRoute(current.model);
 		if (!answer) {
 			sayNoRoute([]);
@@ -272,6 +278,7 @@ export function createFailover(deps: FailoverDeps) {
 			const target = { provider: candidate.provider, model: candidate.model };
 			if (!(await deps.setModel(target))) continue;
 			state.original = state.original ?? current;
+			state.pressureDriven = false;
 			state.current = target;
 			state.lastPollAt = now();
 			state.lastPollRoutable = false;
@@ -283,13 +290,41 @@ export function createFailover(deps: FailoverDeps) {
 	}
 
 	/** Called before each turn while switched. Returns true when switched back. */
-	async function onTurnStart(): Promise<boolean> {
-		if (!state.enabled || !state.original) return false;
+	async function onTurnStart(current?: Target): Promise<boolean> {
+		if (!state.enabled || state.pinned) return false;
+		const tracked = state.original ?? current;
+		if (!tracked) return false;
 		const t = now();
 		if (t - state.lastPollAt < RECOVERY_POLL_MS) return false;
 		state.lastPollAt = t;
-		const answer = await deps.fetchRoute(state.original.model);
-		const anthropic = answer?.candidates.find((c) => c.provider === ANTHROPIC);
+		const answer = await deps.fetchRoute(tracked.model, (state.current ?? current)?.provider);
+		if (!answer) return false;
+		if (state.pressureDriven && state.original) {
+			const preferred = answer.preferred;
+			if (preferred && preferred.provider !== (state.current ?? current)?.provider) {
+				const previous = state.current ?? current;
+				const previousCandidate = answer.candidates.find(c => c.provider === previous?.provider);
+				const target = { provider: preferred.provider, model: preferred.model };
+				if (await deps.setModel(target)) {
+					state.current = target;
+					const pressure = (c: Candidate | undefined) => typeof c?.pressure === "number" ? c.pressure.toPrecision(2) : "?";
+					deps.notify(`↪ switched to ${target.provider}/${target.model}: quota pressure (${pressure(preferred)} vs ${pressure(previousCandidate)} perishable headroom)`, "info");
+				}
+			}
+			return false;
+		}
+		if (!state.original) {
+			const preferred = answer.preferred;
+			if (!preferred || preferred.provider === (current?.provider ?? "")) return false;
+			const target = { provider: preferred.provider, model: preferred.model };
+			if (!(await deps.setModel(target))) return false;
+			state.original = current ?? null;
+			state.current = target;
+			state.pressureDriven = true;
+			deps.notify(`↪ switched to ${target.provider}/${target.model}: quota pressure ${(preferred.pressure ?? 0).toPrecision(2)}; spend this reset window before it expires`, "info");
+			return true;
+		}
+		const anthropic = answer.candidates.find((c) => c.provider === ANTHROPIC);
 		const routable = anthropic?.routable === true;
 		const confirmed = routable && state.lastPollRoutable;
 		state.lastPollRoutable = routable;
@@ -297,6 +332,7 @@ export function createFailover(deps: FailoverDeps) {
 		const original = state.original;
 		if (!(await deps.setModel(original))) return false;
 		state.original = null;
+		state.pressureDriven = false;
 		state.current = original;
 		state.lastPollRoutable = false;
 		deps.notify(backLine(original), "info");
@@ -359,6 +395,8 @@ export function createFailover(deps: FailoverDeps) {
 	function onManualModelSelect(target: Target): void {
 		state.original = null;
 		state.current = target;
+		state.pinned = true;
+		state.pressureDriven = false;
 		state.lastPollRoutable = false;
 	}
 
@@ -367,7 +405,8 @@ export function createFailover(deps: FailoverDeps) {
 		if (!enabled) state.cancelWait = true;
 	}
 
-	return { state, onPoolExhausted, onTurnStart, onManualModelSelect, setEnabled, onSettledExhausted, onTurnSucceeded };
+	function setPinned(pinned: boolean): void { state.pinned = pinned; }
+	return { state, onPoolExhausted, onTurnStart, onManualModelSelect, setEnabled, setPinned, onSettledExhausted, onTurnSucceeded };
 }
 
 type AssistantLike = { role?: string; stopReason?: string; errorMessage?: string };
@@ -388,7 +427,7 @@ export default function llmFailover(pi: ExtensionAPI) {
 	};
 
 	const core = createFailover({
-		fetchRoute: (model) => fetchRoute(origin, model),
+		fetchRoute: (model, current) => fetchRoute(origin, model, fetch, ROUTE_TIMEOUT_MS, current),
 		setModel: async (target) => {
 			const model = ctxRef?.modelRegistry.find(target.provider, target.model);
 			if (!model) return false;
@@ -457,7 +496,8 @@ export default function llmFailover(pi: ExtensionAPI) {
 
 	pi.on("turn_start", async (_event, ctx) => {
 		ctxRef = ctx;
-		await core.onTurnStart();
+		const model = ctx.model;
+		await core.onTurnStart(model ? { provider: model.provider, model: model.id } : undefined);
 	});
 
 	pi.on("model_select", (event, ctx) => {
@@ -479,8 +519,13 @@ export default function llmFailover(pi: ExtensionAPI) {
 			const s = core.state;
 			const model = ctx.model;
 			const probe = s.original?.model ?? (model?.provider === ANTHROPIC ? model.id : undefined);
+			if (sub === "pin" || sub === "unpin") {
+				core.setPinned(sub === "pin");
+				say(`failover provider ${sub === "pin" ? "pinned" : "unpinned"}`, "info");
+				return;
+			}
 			const lines = [
-				`failover: ${s.enabled ? "on" : "off"}; `
+				`failover: ${s.enabled ? "on" : "off"}; provider ${s.pinned ? "pinned" : "unpinned"}; `
 				+ (s.original ? `switched ${s.original.provider}/${s.original.model} → ${s.current?.provider}/${s.current?.model}`
 					: `on ${model ? `${model.provider}/${model.id}` : "unknown"}`),
 				`oracle: ${origin}/_route?model=${probe ?? "?"}`,

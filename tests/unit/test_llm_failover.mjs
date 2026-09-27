@@ -86,6 +86,30 @@ test('none routable -> single error line, no model change, no repeat', async () 
   assert.equal(noRouteLine([]), '✗ no provider routable — oracle unreachable');
 });
 
+test('turn boundary proactively follows preferred and manual pin disables it', async () => {
+  const preferred = { ...codex(true), pressure: 2e-7 };
+  const { core, calls, tick } = harness({ routes: [
+    { ...answer([anthropic(true), codex(true)]), preferred },
+    { ...answer([anthropic(true), codex(true)]), preferred },
+  ] });
+  tick(RECOVERY_POLL_MS);
+  assert.equal(await core.onTurnStart({ provider: 'anthropic', model: 'claude-fable-5-1' }), true);
+  assert.deepEqual(calls.setModel, [{ provider: 'openai-codex', model: 'gpt-6-astra' }]);
+  assert.match(calls.notify[0][1], /quota pressure/);
+  core.setPinned(true);
+  tick(RECOVERY_POLL_MS);
+  assert.equal(await core.onTurnStart({ provider: 'openai-codex', model: 'gpt-6-astra' }), false);
+  core.setPinned(false);
+  core.onManualModelSelect({ provider: 'deepseek', model: 'deepseek-flash' });
+  assert.equal(core.state.pinned, true);
+});
+
+test('no proactive switch inside the proxy sticky band', async () => {
+  const { core, calls } = harness({ routes: [answer([anthropic(true), codex(true)])] });
+  assert.equal(await core.onTurnStart({ provider: 'anthropic', model: 'claude-fable-5-1' }), false);
+  assert.deepEqual(calls.setModel, []);
+});
+
 test('recovery on two polls >= 60 s apart -> switch back', async () => {
   const { core, calls, tick } = harness({
     routes: [answer([anthropic(false), codex(true), deepseek(false)]),
@@ -206,7 +230,7 @@ test('planWait: earliest of body and oracle, capped', () => {
   assert.equal(unknown.until, null);
   const capped = planWait({ ...base, maxWaitMs: 5 * 60_000, route: null });
   assert.equal(capped.action, 'stop');
-  assert.match(capped.line, /next reset 00:39:59Z \(in 13m\) is past the 5m wait cap/);
+  assert.match(capped.line, /next reset (?:2026-09-26 )?00:39:59Z \(in 13m\) is past the 5m wait cap/);
   const spent = planWait({ ...base, waitingSince: AT_0026 - 7 * 3_600_000, route: null });
   assert.equal(spent.action, 'stop');
   assert.match(spent.line, /after 6h of waiting/);
