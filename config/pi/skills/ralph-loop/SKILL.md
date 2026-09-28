@@ -7,6 +7,8 @@ description: Generate a Ralph PLAN/BUILD loop from an idea or specification. Use
 
 Generated loops must set `RALPH_CLASS` (default `build`; use `mechanical` for lint,
 format, and bulk-edit loops) and export it as `PI_LLM_CLASS` for child pi processes.
+Escalation is opt-in for one run: the human or a goal evaluator may set
+`PI_LLM_CLASS_ESCALATE=1`; the proxy lifts exactly one class tier and records it.
 
 ## Clarify
 
