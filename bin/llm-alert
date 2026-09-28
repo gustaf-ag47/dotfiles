@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+url="${PI_ANTHROPIC_PROXY_URL:-http://127.0.0.1:${CC_PROXY_PORT:-8788}}"
+data=$(curl -fsS --max-time 5 "$url/_usage")
+state=normal
+reason=''
+if jq -e '(.routing.starved // 0) > 0' <<<"$data" >/dev/null; then state=critical; reason='Routing reports starved requests'; fi
+at=$(jq -r '.routing.forecast.first_exhaust.at // empty' <<<"$data")
+if [[ -n "$at" ]]; then
+    exhaust_epoch=$(date -d "$at" +%s 2>/dev/null || echo 0)
+    if (( exhaust_epoch > 0 && exhaust_epoch - $(date +%s) < 7200 )); then state=critical; reason='Quota window exhaust forecast within 2 hours'; fi
+fi
+if [[ "$state" == normal ]] && jq -e '[.tokens[]?.forecast // {} | to_entries[] | select((.key == "7d" or .key == "7d_oi") and .value.forecast == "waste" and ((1-(.value.projected_at_reset // 1))*100 > 30))] | length > 0' <<<"$data" >/dev/null; then state=warning; reason='Forecast waste exceeds 30%'; fi
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/llm-alert"
+mkdir -p "$cache"; chmod 700 "$cache"
+old=$(cat "$cache/state" 2>/dev/null || true)
+if [[ "$state" != "$old" && "$state" != normal ]]; then notify-send "LLM routing $state" "$reason"; fi
+printf '%s\n' "$state" > "$cache/state"
