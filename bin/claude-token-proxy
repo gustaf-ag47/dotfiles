@@ -1320,6 +1320,7 @@ def anthropic_candidate(model: str) -> dict:
         util = chosen["utilization"]
         out.update(quota_left_percent=_pct_left(util * 100) if util is not None else None,
                    reset_at=chosen["reset_at"], account=chosen["fp"])
+        out["pressure"] = chosen.get("pressure")
         return out
     reasons = {r["reason"] for r in rows}
     if not rows or reasons <= {"parked", "forced offline"}:
@@ -1357,6 +1358,9 @@ def codex_candidate(model: str, state: dict) -> dict:
     worst = max(windows, key=lambda w: w["used_percent"])
     out["quota_left_percent"] = _pct_left(worst["used_percent"])
     out["reset_at"] = _epoch_iso(worst.get("reset_at"))
+    reset = numeric(worst.get("reset_at"))
+    seconds = max(60.0, reset - time.time()) if reset is not None else 7 * 86400.0
+    out["pressure"] = max(0.0, 1.0 - worst["used_percent"] / 100.0) / seconds
     blocked = (state.get("models") or {}).get(model) or {}
     if worst["used_percent"] >= 100 or state.get("allowed") is False:
         if codex_on_credits(state) and blocked.get("available") is not False:
@@ -1393,7 +1397,7 @@ def deepseek_candidate(model: str, state: dict) -> dict:
     return out
 
 
-def route_payload(model: str) -> dict | None:
+def route_payload(model: str, current: str | None = None) -> dict | None:
     """Ranked cross-provider candidates for one Claude model, or None when unmapped.
 
     Anthropic first (what pick() would do), then the routes.json order. Pure:
@@ -1413,8 +1417,18 @@ def route_payload(model: str) -> dict | None:
             candidates.append(deepseek_candidate(target, state))
         else:
             candidates.append({"provider": provider, "model": target, "routable": False, "reason": "unknown"})
+    first = next((c for c in candidates if c["routable"]), None)
+    first_codex = next((c for c in candidates if c["provider"] == "openai-codex"), None)
+    eligible = [c for c in candidates if c["routable"] and c["provider"] != "deepseek"
+                and not c.get("on_credits") and isinstance(c.get("pressure"), (int, float))
+                and (c["provider"] != "openai-codex" or c is first_codex)]
+    preferred = max(eligible, key=lambda c: c["pressure"], default=None)
+    current_candidate = next((c for c in eligible if c["provider"] == current), None)
+    if current_candidate and preferred and preferred["provider"] != current:
+        if preferred["pressure"] <= current_candidate["pressure"] * PICK_TOLERANCE:
+            preferred = current_candidate
     return {"model": model, "route": key, "candidates": candidates,
-            "first_routable": next((c for c in candidates if c["routable"]), None),
+            "first_routable": first, "preferred": preferred,
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
@@ -1578,7 +1592,8 @@ class Handler(BaseHTTPRequestHandler):
     def _route_page(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         model = (query.get("model") or [""])[0]
-        payload = route_payload(model)
+        current = (query.get("current") or [None])[0]
+        payload = route_payload(model, current)
         if payload is None:
             self._send_json(404, {"error": "unknown model", "model": model, "routes": sorted(load_routes()),
                                   "routes_file": str(ROUTES_FILE), "routes_error": ROUTES_ERROR})
