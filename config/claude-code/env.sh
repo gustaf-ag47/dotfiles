@@ -19,26 +19,12 @@ _cc_source_if_private() {
 _cc_token_file="${HOME:-}/cctoken"
 _cc_token_cache="${XDG_CACHE_HOME:-${HOME:-}/.cache}/claude-code-token.env"
 
-# Quota-aware selection: claude-token-refresh probes every token in $cctoken
-# and exports the one with the most weekly headroom (rolling over automatically
-# when the active token nears its cap). It caches the pick for 5 min, so this is
-# a cheap file read on most shells and one Haiku-token probe at most every 5 min.
-_cc_apply_refresh() {
-	command -v claude-token-refresh >/dev/null 2>&1 || return 1
-	_cc_out="$(claude-token-refresh --quiet 2>/dev/null)" || return 1
-	[ -n "$_cc_out" ] || return 1
-	eval "$_cc_out"
-	unset _cc_out
-	return 0
-}
-
+# Select from the cached token file or raw cctoken using file reads only;
+# quota-aware selection belongs to the local proxy, not shell startup.
 if [ -n "${HOME:-}" ]; then
-	# 1) Quota-aware refresh (preferred). 2) Last good cached pick (offline).
-	# 3) Raw cctoken as a last resort (note: last export line wins, no quota check).
-	if _cc_apply_refresh; then
-		: "${CLAUDE_CODE_TOKEN_SOURCE:=$_cc_token_file}"
-		export CLAUDE_CODE_TOKEN_SOURCE
-	elif _cc_source_if_private "$_cc_token_cache"; then
+	# 1) Last good cached pick. 2) Raw cctoken as a last resort
+	# (note: last export line wins, no quota check).
+	if _cc_source_if_private "$_cc_token_cache"; then
 		: "${CLAUDE_CODE_TOKEN_SOURCE:=$_cc_token_cache}"
 		export CLAUDE_CODE_TOKEN_SOURCE
 	elif _cc_source_if_private "$_cc_token_file"; then
@@ -70,5 +56,5 @@ elif [ "${ANTHROPIC_BASE_URL:-}" = "$_cc_proxy_url" ]; then
 	unset ANTHROPIC_BASE_URL
 fi
 
-unset -f _cc_source_if_private _cc_apply_refresh 2>/dev/null || true
-unset _cc_file _cc_mode _cc_token_file _cc_token_cache _cc_out _cc_proxy_port _cc_proxy_url
+unset -f _cc_source_if_private 2>/dev/null || true
+unset _cc_file _cc_mode _cc_token_file _cc_token_cache _cc_proxy_port _cc_proxy_url
