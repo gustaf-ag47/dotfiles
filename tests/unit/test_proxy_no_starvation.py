@@ -1,5 +1,8 @@
+import http.client
 import json
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,5 +47,24 @@ class StarvationTests(unittest.TestCase):
     self.assertEqual(proxy.STARVED_LAST['provider'],'openai-codex')
     self.assertEqual(json.loads(proxy.ROUTING_LOG.read_text())['kind'],'starved')
   finally: proxy.STARVED_COUNT,proxy.STARVED_LAST=old
+
+ def test_real_503_with_routable_codex_counts_violation(self):
+  with tempfile.TemporaryDirectory() as d:
+   proxy.CONTROL_DIR=Path(d); proxy.USAGE_STATE_FILE=Path(d)/'usage.json'; proxy.ROUTING_LOG=Path(d)/'routing.log'
+   proxy.STATE.clear(); tok=proxy.Tok('test-token'); proxy.STATE.append(tok)
+   (Path(d)/'force_cooldown').write_text(tok.fp)
+   proxy.PROVIDER_STATE={'openai-codex':{'status':'ok','allowed':True,'windows':[{'name':'primary_window','used_percent':10,'reset_at':time.time()+1000}],'models':{}},'deepseek':{'status':'unavailable'}}
+   old_count,old_last=proxy.STARVED_COUNT,proxy.STARVED_LAST; proxy.STARVED_COUNT=0; proxy.STARVED_LAST=None
+   server=proxy.ThreadingHTTPServer(('127.0.0.1',0),proxy.Handler); threading.Thread(target=server.serve_forever,daemon=True).start()
+   try:
+    conn=http.client.HTTPConnection('127.0.0.1',server.server_address[1],timeout=4)
+    body=json.dumps({'model':'claude-sonnet-5','max_tokens':1,'messages':[]})
+    conn.request('POST','/v1/messages',body,{'content-type':'application/json'})
+    response=conn.getresponse(); response.read(); conn.close()
+    self.assertEqual(response.status,503)
+    self.assertEqual(proxy.STARVED_COUNT,1)
+    self.assertEqual(proxy.STARVED_LAST['provider'],'openai-codex')
+   finally:
+    server.shutdown(); server.server_close(); proxy.STATE.clear(); proxy.STARVED_COUNT,proxy.STARVED_LAST=old_count,old_last
 
 if __name__=='__main__': unittest.main()
