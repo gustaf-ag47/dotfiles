@@ -122,6 +122,8 @@ USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
 # through the symlink so the systemd unit and the checkout agree on the file.
 ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
+CLASSES_FILE = Path(os.environ.get("CC_PROXY_CLASSES")
+                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "classes.json")
 DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
 DEEPSEEK_FALLBACK = os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0") == "1"
 # A client that does its own cross-provider failover (pi's llm-failover extension)
@@ -1234,7 +1236,29 @@ def spread_choice(band: list[Tok], key: str, now: float) -> str:
     return min(band, key=lambda t: (counts[t.fp], -pressure(t, key, now))).fp
 
 
-def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None) -> Tok | None:
+CLASS_ORDER = ["mechanical", "research", "build", "interactive"]
+
+
+def escalated_class(class_name: str, session: str | None) -> str:
+    if class_name not in CLASS_ORDER[:-1]:
+        return class_name
+    target = CLASS_ORDER[CLASS_ORDER.index(class_name) + 1]
+    append_route({"ts": datetime.now(timezone.utc).isoformat(), "kind": "escalate", "class": class_name,
+                  "to": target, "session": session})
+    return target
+
+
+def class_eligible(t, class_name: str | None, bucket: str, now: float) -> bool:
+    if not class_name or bucket != "oi":
+        return True
+    ceiling = load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {})
+    if ceiling.get("no_oi"):
+        return False
+    limit = ceiling.get("oi_max_used")
+    return limit is None or t.u7_oi is None or t.u7_oi <= float(limit)
+
+
+def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None, class_name: str | None = None) -> Tok | None:
     """Choose a token for the weekly bucket this request's model debits.
 
     Eligibility (valid, not cooling, not forced down) and the over-threshold
@@ -1248,6 +1272,7 @@ def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = 
     eligible = [
         t for t in STATE
         if t.valid and t.fp not in exclude and now >= cooldown_deadline(t, model) and t.fp not in forced
+        and class_eligible(t, class_name, bucket_key(model), now)
     ]
 
     if PICK_MODE == "headroom":  # legacy rollback path: exact pre-pressure behavior
@@ -1286,12 +1311,14 @@ def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = 
 ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
 
 
-def rank_pool(model: str, now: float | None = None, session_key: str | None = None) -> dict:
+def rank_pool(model: str, now: float | None = None, session_key: str | None = None, class_name: str | None = None) -> dict:
     """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
     now = time.time() if now is None else now
     key = "base" if PICK_MODE == "headroom" else bucket_key(model)
     forced = forced_cooldown_fps()
-    available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)]
+    class_ok = {t.fp: class_eligible(t, class_name, bucket_key(model), now) for t in STATE}
+    available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)
+                 and class_ok[t.fp]]
     below = [t for t in available if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD
              and (PICK_MODE == "headroom" or (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD)]
     # The threshold is a preference, not a hard ban: pick() retries available
@@ -1303,6 +1330,8 @@ def rank_pool(model: str, now: float | None = None, session_key: str | None = No
             reason = "forced offline"
         elif not t.valid:
             reason = "parked"
+        elif not class_ok[t.fp]:
+            reason = "class ceiling"
         elif now < cooldown_deadline(t, model):
             reason = "cooldown"
         elif below and ((util or 0.0) >= ROTATE_THRESHOLD
@@ -1353,6 +1382,27 @@ def routing_preview() -> dict:
 
 
 # --- Equivalence table + route oracle -----------------------------------------
+
+CLASSES: dict[str, dict] = {}
+CLASSES_MTIME: float | None = None
+CLASSES_ERROR: str | None = None
+
+
+def load_classes() -> dict[str, dict]:
+    global CLASSES, CLASSES_MTIME, CLASSES_ERROR
+    try:
+        mtime = CLASSES_FILE.stat().st_mtime
+        if mtime == CLASSES_MTIME:
+            return CLASSES
+        data = json.loads(CLASSES_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("classes must be an object")
+        CLASSES, CLASSES_MTIME, CLASSES_ERROR = data, mtime, None
+    except (OSError, ValueError, TypeError) as exc:
+        CLASSES_ERROR = exc.__class__.__name__
+        log(f"classes file {CLASSES_FILE} invalid ({CLASSES_ERROR}); keeping previous table")
+    return CLASSES
+
 
 ROUTES: dict[str, list[list[str]]] = {}
 ROUTES_MTIME: float | None = None
@@ -1417,9 +1467,9 @@ def _epoch_iso(value) -> str | None:
         return None
 
 
-def anthropic_candidate(model: str) -> dict:
+def anthropic_candidate(model: str, class_name: str | None = None) -> dict:
     """Anthropic pool viewed through the same dry run pick() would take."""
-    ranking = rank_pool(model)
+    ranking = rank_pool(model, class_name=class_name)
     rows = ranking["ranking"]
     chosen = next((r for r in rows if r["fp"] == ranking["would_pick"]), None)
     out = {"provider": "anthropic", "model": model, "routable": chosen is not None, "reason": None,
@@ -1505,12 +1555,42 @@ def deepseek_candidate(model: str, state: dict) -> dict:
     return out
 
 
-def route_payload(model: str, current: str | None = None) -> dict | None:
+def route_payload(model: str, current: str | None = None, class_name: str | None = None) -> dict | None:
     """Ranked cross-provider candidates for one Claude model, or None when unmapped.
 
     Anthropic first (what pick() would do), then the routes.json order. Pure:
     reads cached provider state and the pool, touches no upstream, mutates nothing.
     """
+    if class_name:
+        classes = load_classes()
+        policy = classes.get(class_name)
+        if policy is None:
+            return None
+        candidates = []
+        for provider, target in policy.get("routes", []):
+            if provider == "anthropic":
+                candidate = anthropic_candidate(target, class_name=class_name)
+                rows = rank_pool(target, class_name=class_name)["ranking"]
+                if not candidate["routable"] and any(r["reason"] == "class ceiling" for r in rows):
+                    candidate["reason"] = "class ceiling"
+            elif provider == "openai-codex":
+                candidate = codex_candidate(target, dict(PROVIDER_STATE.get(provider, {})))
+            elif provider == "deepseek":
+                candidate = deepseek_candidate(target, dict(PROVIDER_STATE.get(provider, {})))
+            else:
+                candidate = {"provider": provider, "model": target, "routable": False, "reason": "unknown"}
+            candidates.append(candidate)
+        routable = [c for c in candidates if c["routable"]]
+        preferred = next((c for c in routable if c["provider"] == "deepseek"), None) if class_name == "mechanical" else None
+        if preferred is None:
+            eligible = [c for c in routable if c["provider"] != "deepseek" and isinstance(c.get("pressure"), (int, float))]
+            preferred = max(eligible, key=lambda c: c["pressure"], default=None)
+            current_candidate = next((c for c in eligible if c["provider"] == current), None)
+            if (current_candidate and preferred and preferred["provider"] != current
+                    and preferred["pressure"] <= current_candidate["pressure"] * PICK_TOLERANCE):
+                preferred = current_candidate
+        return {"class": class_name, "model": None, "route": class_name, "candidates": candidates, "first_routable": next(iter(routable), None),
+                "preferred": preferred, "generated_at": datetime.now(timezone.utc).isoformat()}
     key = route_key(model)
     if key is None:
         return None
@@ -1721,8 +1801,9 @@ class Handler(BaseHTTPRequestHandler):
     def _route_page(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         model = (query.get("model") or [""])[0]
+        class_name = (query.get("class") or [None])[0]
         current = (query.get("current") or [None])[0]
-        payload = route_payload(model, current)
+        payload = route_payload(model, current, class_name)
         if payload is None:
             self._send_json(404, {"error": "unknown model", "model": model, "routes": sorted(load_routes()),
                                   "routes_file": str(ROUTES_FILE), "routes_error": ROUTES_ERROR})
@@ -1751,13 +1832,21 @@ class Handler(BaseHTTPRequestHandler):
         model = request_model(body)
         session_key = session_key_from(self.headers, body)
         paced: set[str] = set()  # tokens already given one burst-429 pause
+        class_name = self.headers.get("x-cc-proxy-class", "interactive")
+        if self.headers.get("x-cc-proxy-class-escalate") == "1":
+            class_name = escalated_class(class_name, session_key)
+        append_route({"ts": datetime.now(timezone.utc).isoformat(), "kind": "class", "class": class_name,
+                      "model": model, "session": session_key})
+        if load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {}).get("no_oi") and FABLE_MODEL_RE.search(model):
+            self._send_api_error(503, f"class {class_name} may not use {model}", "overloaded_error")
+            return
 
         # Every token may burn one extra attempt on a burst pause before failover.
         for _ in range(max(1, valid_count + 1) + valid_count):
             with LOCK:
                 bucket = bucket_key(model)
                 affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket))
-                tok = pick(exclude=tried, model=model, session_key=session_key)
+                tok = pick(exclude=tried, model=model, session_key=session_key, class_name=class_name)
                 previous = affinity_before[0] if affinity_before else None
                 if tok is not None and previous and previous != tok.fp:
                     # A session changed account: the only move that costs a prompt cache.

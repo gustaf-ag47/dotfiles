@@ -33,8 +33,9 @@ pi --model deepseek/deepseek-v4-pro -p 'your task'
   --model deepseek/deepseek-v4-pro --brief docs/handover/my-task.md
 ```
 
-Use Flash for inexpensive bulk work, Pro for harder tasks; verify current model
-capabilities and prices rather than relying on fixed historical estimates.
+Use Flash for inexpensive bulk work, Pro for harder tasks; for delegated cheap work
+prefer `delegate.sh --class mechanical`. Verify current model capabilities and prices
+rather than relying on fixed historical estimates.
 
 ## Loops
 
