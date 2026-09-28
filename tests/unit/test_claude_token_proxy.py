@@ -58,6 +58,16 @@ def iso_in(**delta) -> str:
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
 
 
+class SessionKeyTests(TestCase):
+    def test_session_key_header_metadata_system_and_global_fallbacks(self):
+        body = json.dumps({"metadata": {"user_id": "body-session"}, "system": "prompt"}).encode()
+        self.assertEqual(proxy.session_key_from({"x-cc-proxy-session": "header-session"}, body), "header-session")
+        self.assertEqual(proxy.session_key_from({}, body), "body-session")
+        hashed = proxy.session_key_from({}, json.dumps({"system": "prompt"}).encode())
+        self.assertEqual(hashed, "system:" + proxy.hashlib.sha256(b'"prompt"').hexdigest())
+        self.assertIsNone(proxy.session_key_from({}, b'{"messages": []}'))
+
+
 class PickPolicyTests(TestCase):
     """Selection policy: pressure (EDF-with-headroom), model-aware buckets."""
 
@@ -118,7 +128,7 @@ class PickPolicyTests(TestCase):
         reset = iso_in(days=3)
         slightly_better = self.make("a", u7=0.5, u7_reset=reset)
         previous = self.make("b", u7=0.6, u7_reset=reset)
-        proxy.LAST_PICK["base"] = previous.fp
+        proxy.LAST_PICK[("global", "base")] = (previous.fp, time.time())
         # 0.5/0.4 = 1.25x gap < 1.5 tolerance -> stay for the prompt cache.
         self.assertIs(proxy.pick(model="claude-opus-5"), previous)
         self.assertIsNotNone(slightly_better)
@@ -127,8 +137,58 @@ class PickPolicyTests(TestCase):
         reset = iso_in(days=3)
         much_better = self.make("a", u7=0.1, u7_reset=reset)
         previous = self.make("b", u7=0.9, u7_reset=reset)
-        proxy.LAST_PICK["base"] = previous.fp
+        proxy.LAST_PICK[("global", "base")] = (previous.fp, time.time())
         self.assertIs(proxy.pick(model="claude-opus-5"), much_better)
+
+    def test_two_sessions_spread_across_tokens_within_pressure_band(self):
+        reset = iso_in(days=3)
+        self.make("session-a", u7=0.4, u7_reset=reset, u5=0.2)
+        self.make("session-b", u7=0.4, u7_reset=reset, u5=0.2)
+        first_pick = proxy.pick(model="claude-opus-5", session_key="A")
+        second_pick = proxy.pick(model="claude-opus-5", session_key="B")
+        self.assertIsNot(first_pick, second_pick)
+
+    def test_same_session_sticks_to_its_token(self):
+        reset = iso_in(days=3)
+        self.make("sticky-a", u7=0.4, u7_reset=reset, u5=0.2)
+        self.make("sticky-b", u7=0.4, u7_reset=reset, u5=0.2)
+        first_pick = proxy.pick(model="claude-opus-5", session_key="A")
+        self.assertIs(proxy.pick(model="claude-opus-5", session_key="A"), first_pick)
+
+    def test_session_moves_when_affinity_token_cools_down(self):
+        first = self.make("cooling-session", u7=0.4, u7_reset=iso_in(days=3), u5=0.2)
+        second = self.make("available-session", u7=0.5, u7_reset=iso_in(days=3), u5=0.2)
+        with mock.patch.object(proxy, "PICK_MODE", "pressure"):
+            self.assertIs(proxy.pick(model="claude-opus-5", session_key="sid"), first)
+            first.cooldown_until = time.time() + 600
+            self.assertIs(proxy.pick(model="claude-opus-5", session_key="sid"), second)
+
+    def test_five_hour_threshold_prefers_alternative(self):
+        spent = self.make("5h-spent", u7=0.2, u7_reset=iso_in(days=3), u5=0.99)
+        available = self.make("5h-free", u7=0.3, u7_reset=iso_in(days=3), u5=0.2)
+        self.assertIs(proxy.pick(model="claude-opus-5", session_key="x"), available)
+        self.assertIsNotNone(spent)
+
+    def test_five_hour_pressure_dominates_nearly_spent_window(self):
+        healthy = self.make("healthy-5h", u7=0.2, u7_reset=iso_in(days=3), u5=0.2)
+        nearly_spent = self.make("nearly-spent-5h", u7=0.2, u7_reset=iso_in(days=3), u5=0.8)
+        # Keep both below threshold while making 5h materially different.
+        healthy.u5_reset = iso_in(hours=4)
+        nearly_spent.u5_reset = iso_in(hours=1)
+        self.assertIs(proxy.pick(model="claude-opus-5", session_key="pressure"), healthy)
+
+    def test_preview_picker_parity_for_session_key(self):
+        self.make("parity-a", u7=0.4, u7_reset=iso_in(days=3), u5=0.2)
+        self.make("parity-b", u7=0.5, u7_reset=iso_in(days=3), u5=0.2)
+        preview = proxy.rank_pool("claude-opus-5", session_key="parity")
+        selected = proxy.pick(model="claude-opus-5", session_key="parity")
+        self.assertEqual(preview["would_pick"], selected.fp)
+
+    def test_affinity_entries_expire_after_idle_limit(self):
+        token = self.make("expiry", u7=0.4, u7_reset=iso_in(days=3), u5=0.2)
+        proxy.LAST_PICK[("idle-session", "base")] = (token.fp, time.time() - proxy.AFFINITY_IDLE - 1)
+        proxy._prune_affinity(time.time())
+        self.assertNotIn(("idle-session", "base"), proxy.LAST_PICK)
 
     def test_legacy_headroom_mode_is_bucket_blind(self):
         proxy.PICK_MODE = "headroom"
