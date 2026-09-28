@@ -85,14 +85,14 @@ class WaitForReset(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 agent = Path(directory)
-                (agent / 'auth.json').write_text(json.dumps({'anthropic': {'type': 'api_key', 'key': 'fake-proxy-only'}}))
+                # No auth.json on purpose: anthropic-pool.ts must supply the (placeholder) credential itself.
                 (agent / 'settings.json').write_text(json.dumps({'retry': {'enabled': True, 'maxRetries': 1, 'baseDelayMs': 10}}))
                 env = {k: v for k, v in os.environ.items()
                        if not k.startswith(('ANTHROPIC_', 'CLAUDE_CODE_', 'DEEPSEEK_', 'PI_DOTFILES_', 'PI_FAILOVER_'))}
                 env.update(PI_CODING_AGENT_DIR=directory, PI_OFFLINE='1',
                            PI_ANTHROPIC_PROXY_URL=f'http://127.0.0.1:{server.server_port}', PI_FAILOVER_POLL_SECONDS='0.5')
                 env.update(env_extra)
-                args = [PI, '--no-extensions', '-e', str(ROOT / 'config/pi/anthropic-token-proxy.ts'),
+                args = [PI, '--no-extensions', '-e', str(ROOT / 'config/pi/extensions/anthropic-pool.ts'),
                         '-e', str(ROOT / 'config/pi/extensions/llm-failover.ts'), '--no-session', '--no-context-files',
                         '--no-skills', '--no-tools', '--thinking', 'off', '--model', f'anthropic/{MODEL}', '-p', 'Reply MOCK_OK']
                 result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)

@@ -38,7 +38,7 @@ capabilities and prices rather than relying on fixed historical estimates.
 
 ## Loops
 
-For a loop still using `pi-claude-sub`, explicitly configure its launcher as `pi`
+For a loop still using `pi-claude-sub` (now a `pi` shim), explicitly configure its launcher as `pi`
 and provider/model as DeepSeek. Keep these changes within the loop's documented
 configuration; do not change live services or another lane without authorization.
 Credentials in Pi's normal auth store are available to child Pi processes. A custom
