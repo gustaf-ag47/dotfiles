@@ -1,0 +1,6 @@
+[Unit]
+Description=Launch due quota-aware LLM jobs
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/llm-schedule run-due

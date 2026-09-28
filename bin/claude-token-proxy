@@ -105,6 +105,8 @@ from pathlib import Path
 TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
 UPSTREAM_HOST = "api.anthropic.com"
 ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
+SWEEP_HOURS = float(os.environ.get("CC_PROXY_SWEEP_HOURS", "12"))
+SWEEP_BOOST = float(os.environ.get("CC_PROXY_SWEEP_BOOST", "2.0"))
 PICK_MODE = os.environ.get("CC_PROXY_PICK", "pressure")  # pressure | headroom (legacy)
 PICK_TOLERANCE = float(os.environ.get("CC_PROXY_PICK_TOLERANCE", "1.5"))
 # Fable models are metered on their own weekly bucket (7d_oi =
@@ -897,6 +899,18 @@ def codex(auth: dict) -> dict:
             windows.append({"name": name, "used_percent": numeric(window.get("used_percent")),
                             "window_seconds": numeric(window.get("limit_window_seconds")),
                             "reset_at": numeric(window.get("reset_at"))})
+    for index, extra in enumerate(data.get("additional_rate_limits") or []):
+        if not isinstance(extra, dict):
+            continue
+        rate = extra.get("rate_limit") or extra
+        if not isinstance(rate, dict):
+            continue
+        for name in ("primary_window", "secondary_window"):
+            window = rate.get(name)
+            if isinstance(window, dict) and numeric(window.get("limit_window_seconds")) == 18000:
+                windows.append({"name": f"additional_{index}_{name}",
+                                "used_percent": numeric(window.get("used_percent")),
+                                "window_seconds": 18000, "reset_at": numeric(window.get("reset_at"))})
     if not windows:
         return {"status": "unavailable", "account": claims,
                 "reason": "Subscription endpoint returned no recognized quota windows."}
@@ -1236,6 +1250,22 @@ def five_hour_util(t: Tok, now: float) -> float | None:
     return None if reset is not None and reset <= now else t.u5
 
 
+def sweep_factor(t: Tok, key: str, now: float) -> float:
+    """Boost a wasting weekly window only while its 5h bucket is safe."""
+    reset = bucket_reset(t, key)
+    util = bucket_util(t, key, now)
+    if (reset is None or util is None or not now < reset <= now + SWEEP_HOURS * 3600
+            or (five_hour_util(t, now) or 0.0) >= ROTATE_THRESHOLD):
+        return 1.0
+    window = "7d_oi" if key == "oi" else "7d"
+    fc = forecast(SAMPLES.get(t.fp, {}).get(window, []), util, reset, now)
+    return SWEEP_BOOST if fc["forecast"] == "waste" else 1.0
+
+
+def sweep_threshold(t: Tok, key: str, now: float) -> float:
+    return max(ROTATE_THRESHOLD, .995) if sweep_factor(t, key, now) > 1 else ROTATE_THRESHOLD
+
+
 def pressure(t: Tok, key: str, now: float) -> float:
     """Minimum weekly and 5h headroom per second until the window expires.
 
@@ -1254,7 +1284,7 @@ def pressure(t: Tok, key: str, now: float) -> float:
         return headroom / seconds
     weekly = score(bucket_util(t, key, now), bucket_reset(t, key), 7 * 86400.0)
     five_hour = score(five_hour_util(t, now), t.u5_reset, 5 * 3600.0)
-    return min(weekly, five_hour)
+    return min(weekly, five_hour) * sweep_factor(t, key, now)
 
 
 def _affinity_key(session_key: str | None, bucket: str) -> tuple[str, str]:
@@ -1324,7 +1354,7 @@ def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = 
                                             five_hour_util(t, now) or 0.0))
     else:
         key = bucket_key(model)
-        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD
+        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < sweep_threshold(t, key, now)
                  and (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD]
         pool = below or eligible
         if pool:
@@ -1360,7 +1390,7 @@ def rank_pool(model: str, now: float | None = None, session_key: str | None = No
     class_ok = {t.fp: class_eligible(t, class_name, bucket_key(model), now) for t in STATE}
     available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)
                  and class_ok[t.fp]]
-    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < ROTATE_THRESHOLD
+    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < sweep_threshold(t, key, now)
              and (PICK_MODE == "headroom" or (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD)]
     # The threshold is a preference, not a hard ban: pick() retries available
     # over-threshold accounts when there are no below-threshold candidates.
@@ -1375,13 +1405,14 @@ def rank_pool(model: str, now: float | None = None, session_key: str | None = No
             reason = "class ceiling"
         elif now < cooldown_deadline(t, model):
             reason = "cooldown"
-        elif below and ((util or 0.0) >= ROTATE_THRESHOLD
+        elif below and ((util or 0.0) >= sweep_threshold(t, key, now)
                         or (PICK_MODE != "headroom" and (five_hour_util(t, now) or 0.0) >= ROTATE_THRESHOLD)):
             reason = "over threshold"
         else:
             reason = None
         ranked.append({"fp": t.fp, "eligible": reason is None, "reason": reason,
                        "utilization": util, "reset_at": _bucket_reset_iso(t, key),
+                       "sweep": sweep_factor(t, key, now) > 1,
                        "pressure": pressure(t, key, now) if reason is None else None})
     ranked.sort(key=lambda r: (not r["eligible"], -(r["pressure"] or 0.0)))
     chosen = None
@@ -1557,9 +1588,31 @@ def codex_candidate(model: str, state: dict) -> dict:
     worst = max(windows, key=lambda w: w["used_percent"])
     out["quota_left_percent"] = _pct_left(worst["used_percent"])
     out["reset_at"] = _epoch_iso(worst.get("reset_at"))
-    reset = numeric(worst.get("reset_at"))
-    seconds = max(60.0, reset - time.time()) if reset is not None else 7 * 86400.0
-    out["pressure"] = max(0.0, 1.0 - worst["used_percent"] / 100.0) / seconds
+    now = time.time()
+    def window_pressure(window):
+        reset = numeric(window.get("reset_at"))
+        short = (window.get("window_seconds") == 18000 or
+                 (window.get("name") == "secondary_window" and window.get("window_seconds") is None))
+        duration = 5 * 3600.0 if short else 7 * 86400.0
+        seconds = max(60.0, reset - now) if reset is not None and reset > now else duration
+        result = max(0.0, 1.0 - window["used_percent"] / 100.0) / seconds
+        fc = (state.get("forecast") or {}).get(window.get("name"))
+        if fc is None and reset is not None:
+            name = window.get("name", "window")
+            fc = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []),
+                          window["used_percent"] / 100, reset, now)
+        if (not short and reset is not None and now < reset <= now + SWEEP_HOURS * 3600
+                and isinstance(fc, dict) and fc.get("forecast") == "waste"
+                and all(w["used_percent"] < ROTATE_THRESHOLD * 100 for w in windows
+                        if w.get("window_seconds") == 18000 or
+                        (w.get("name") == "secondary_window" and w.get("window_seconds") is None))):
+            result *= SWEEP_BOOST
+        return result
+    short_windows = [w for w in windows if w.get("window_seconds") == 18000
+                     or (w.get("name") == "secondary_window" and w.get("window_seconds") is None)]
+    weekly = [w for w in windows if w not in short_windows]
+    out["pressure"] = min([window_pressure(w) for w in weekly or windows] +
+                          [window_pressure(w) for w in short_windows])
     blocked = (state.get("models") or {}).get(model) or {}
     if worst["used_percent"] >= 100 or state.get("allowed") is False:
         if codex_on_credits(state) and blocked.get("available") is not False:
@@ -1792,6 +1845,8 @@ def usage_payload() -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tokens": toks,
         "routing": routing,
+        "_samples": {k: {window: points[:1] for window, points in buckets.items()}
+                     for k, buckets in SAMPLES.items()},
         "providers": {"anthropic": anthropic, **providers},
         "routes_file": str(ROUTES_FILE),
         "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses; "
@@ -1919,7 +1974,7 @@ class Handler(BaseHTTPRequestHandler):
                     elif previous in tried or (previous_tok and time.time() < cooldown_deadline(previous_tok, model)):
                         reason = "cooldown"
                     else:
-                        reason = "pressure"
+                        reason = "sweep" if sweep_factor(tok, bucket, time.time()) > 1 else "pressure"
                     log(f"session affinity moved bucket={bucket} reason={reason}")
                     append_route({"ts": datetime.now(timezone.utc).isoformat(), "bucket": bucket,
                                   "from_fp": previous, "to_fp": tok.fp, "reason": reason})

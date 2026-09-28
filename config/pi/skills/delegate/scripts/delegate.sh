@@ -27,12 +27,14 @@
 #   --worktree <branch>  Create a git worktree for <branch> off origin/main and use it as --cwd.
 #   --session <name>   Target tmux session (default: auto-detected).
 #   --no-probe         Skip the model availability probe (faster, riskier).
+#   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
 set -euo pipefail
 
 BRIEF="" TASK="" NAME="" CWD="$PWD" MODEL="${PI_DELEGATE_MODEL:-}" AGENT="pi"
 CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0
-PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0
+PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
+ORIGINAL_ARGS=("$@")
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
 
@@ -44,6 +46,7 @@ while [ $# -gt 0 ]; do
 	--cwd) CWD="${2:?}"; shift 2 ;;
 	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
 	--class) CLASS="${2:?}"; shift 2 ;;
+	--when) WHEN="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
 	--provider) PROVIDER="${2:?}"; shift 2 ;;
 	--worktree) WORKTREE="${2:?}"; shift 2 ;;
@@ -56,7 +59,21 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+case "$WHEN" in now|reset|waste) ;; *) die "--when must be reset, waste or now" ;; esac
 [ -n "$BRIEF" ] || [ -n "$TASK" ] || die "need --brief and/or --task"
+if [ "$WHEN" != now ]; then
+	# Preserve every argument except --when, including --worktree: worktree
+	# creation belongs to the actual launch, not the time of enqueue.
+	cmd=("$0")
+	set -- "${ORIGINAL_ARGS[@]}"
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = --when ]; then shift 2; else cmd+=("$1"); shift; fi
+	done
+	if [ "$DRY" = 1 ]; then printf 'would queue: %q ' "${cmd[@]}"; echo; exit 0; fi
+	command -v llm-schedule >/dev/null || die "llm-schedule not in PATH"
+	llm-schedule add --class "$CLASS" --prefer any -- "${cmd[@]}"
+	exit
+fi
 [ -z "$BRIEF" ] || [ -f "$BRIEF" ] || die "brief not found: $BRIEF"
 command -v tmux >/dev/null || die "tmux not found"
 command -v "$AGENT" >/dev/null || die "$AGENT not in PATH"
