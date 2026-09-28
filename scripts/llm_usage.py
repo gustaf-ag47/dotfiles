@@ -558,12 +558,11 @@ def weekly_report(auth):
             if prior and float(prior[-1][1]) <= .7:
                 had_alternative=True; break
         if had_alternative: avoidable += 1
-    class_events=[e for e in events if e.get('kind')=='class' and e.get('class') not in (None,'interactive')]
-    eligible_models={e.get('model') for e in class_events if isinstance(e.get('model'),str)}
+    # P4 from the proxy's per-class counters: non-interactive classes only.
     opus=total=0
-    for token in tokens:
-        for model,row in (token.get('counters') or {}).get('by_model',{}).items():
-            if model not in eligible_models: continue
+    for class_name,models in (((data.get('routing') or {}).get('class_usage') or {}).items()):
+        if class_name=='interactive': continue
+        for model,row in (models or {}).items():
             count=sum(float(row.get(key,0) or 0) for key in ('input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens'))
             total += count
             if 'opus' in model.lower() or 'fable' in model.lower(): opus += count

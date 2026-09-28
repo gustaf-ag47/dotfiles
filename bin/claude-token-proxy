@@ -312,6 +312,9 @@ FALLBACK_STATE_KEY = "_deepseek_fallback"
 FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model": None,
                   "episode_requests": 0, "requests": 0, "by_model": {}}
 SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
+# P4 accounting: class -> model -> counters (persisted as _class_usage). A counter,
+# not a routing.log line: one event per request swamped `routing.recent`.
+CLASS_USAGE: dict[str, dict[str, dict[str, int]]] = {}
 ROUTING_LOG = CONTROL_DIR / "routing.log"
 MAX_SAMPLES = 200
 RAMP_CONCURRENCY = max(1, int(os.environ.get("CC_PROXY_RAMP_CONCURRENCY", "2")))
@@ -432,6 +435,7 @@ def save_usage_state() -> bool:
         } for t in STATE}
         data["_samples"] = SAMPLES
         data["_deepseek_spend"] = DEEPSEEK_SPEND
+        data["_class_usage"] = CLASS_USAGE
         data["_routing_starved"] = {"count": STARVED_COUNT, "last": STARVED_LAST}
         if FALLBACK["requests"]:
             data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
@@ -502,6 +506,9 @@ def restore_usage_state() -> None:
     if isinstance(starved, dict):
         STARVED_COUNT = int(starved.get("count", 0) or 0)
         STARVED_LAST = starved.get("last")
+    global CLASS_USAGE
+    saved_classes = data.get("_class_usage", {})
+    CLASS_USAGE = saved_classes if isinstance(saved_classes, dict) else {}
     saved_samples = data.get("_samples", {})
     SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
     now = time.time()
@@ -706,13 +713,15 @@ def request_model(body: bytes) -> str:
         return "unknown"
 
 
-def record_request(tok: Tok, model: str) -> None:
+def record_request(tok: Tok, model: str, class_name: str | None = None) -> None:
     tok.requests += 1
     bucket = tok.by_model.setdefault(model, {
         "requests": 0, "input_tokens": 0, "output_tokens": 0,
         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
     })
     bucket["requests"] += 1
+    if class_name:
+        _model_bucket(CLASS_USAGE.setdefault(class_name, {}), model)["requests"] += 1
     with LOCK:
         save_usage_state()
 
@@ -735,7 +744,7 @@ def _model_bucket(by_model: dict, model: str) -> dict:
     })
 
 
-def add_usage(tok: Tok | None, model: str, usage: dict) -> None:
+def add_usage(tok: Tok | None, model: str, usage: dict, class_name: str | None = None) -> None:
     """Record usage reported by a JSON or SSE response, if present.
 
     `tok` is None for a DeepSeek passthrough response; those tokens are
@@ -752,6 +761,10 @@ def add_usage(tok: Tok | None, model: str, usage: dict) -> None:
         bucket = _model_bucket(tok.by_model, model)
     for key, value in values.items():
         bucket[key] += value
+    if class_name:
+        class_bucket = _model_bucket(CLASS_USAGE.setdefault(class_name, {}), model)
+        for key, value in values.items():
+            class_bucket[key] += value
     with LOCK:
         save_usage_state()
 
@@ -1865,6 +1878,7 @@ def usage_payload() -> dict:
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
     routing["starved"] = STARVED_COUNT
     routing["starved_last"] = STARVED_LAST
+    routing["class_usage"] = CLASS_USAGE
     routing["recent"] = recent_routes()
     exhaustions = []
     weekly = []
@@ -2009,8 +2023,7 @@ class Handler(BaseHTTPRequestHandler):
         class_name = self.headers.get("x-cc-proxy-class", "interactive")
         if self.headers.get("x-cc-proxy-class-escalate") == "1":
             class_name = escalated_class(class_name, session_key)
-        append_route({"ts": datetime.now(timezone.utc).isoformat(), "kind": "class", "class": class_name,
-                      "model": model, "session": session_key})
+        self.class_name = class_name
         if load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {}).get("no_oi") and FABLE_MODEL_RE.search(model):
             self._send_api_error(503, f"class {class_name} may not use {model}", "overloaded_error")
             return
@@ -2053,7 +2066,7 @@ class Handler(BaseHTTPRequestHandler):
                 clear_fallback(f"token {tok.fp} pickable")
             try:
                 conn, resp = ramp_upstream(tok, self.command, self.path, fwd, body)
-                record_request(tok, model)
+                record_request(tok, model, class_name)
             except Exception as exc:  # network error -> try next token
                 log(f"{self.command} {endpoint} -> token {tok.fp} ERROR {exc.__class__.__name__}")
                 tried.add(tok.fp)
@@ -2189,6 +2202,7 @@ class Handler(BaseHTTPRequestHandler):
     do_PUT = do_DELETE = do_PATCH = _proxy
 
     def _stream(self, resp, tok: Tok | None, model: str):
+        class_name = getattr(self, "class_name", None)
         content_type = resp.getheader("content-type", "")
         is_json = "text/event-stream" not in content_type.lower()
         captured = bytearray()
@@ -2213,7 +2227,7 @@ class Handler(BaseHTTPRequestHandler):
                     line, sse_remainder = sse_remainder.split(b"\n", 1)
                     usage = usage_from_sse_line(line.rstrip(b"\r"))
                     if usage:
-                        add_usage(tok, model, usage)
+                        add_usage(tok, model, usage, class_name)
             try:
                 self.wfile.write(chunk)
                 self.wfile.flush()
@@ -2222,7 +2236,7 @@ class Handler(BaseHTTPRequestHandler):
         if is_json:
             usage = usage_from_json(bytes(captured))
             if usage:
-                add_usage(tok, model, usage)
+                add_usage(tok, model, usage, class_name)
 
 
 def probe(tok: Tok, note: str = "seed") -> None:
