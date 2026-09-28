@@ -74,6 +74,13 @@ test('setModel refusal falls through to the next routable candidate', async () =
   assert.match(calls.notify[0][1], /^↪ switched to deepseek\/deepseek-v4-pro/);
 });
 
+test('manual provider pin does not disable exhaustion-triggered failover', async () => {
+  const { core, calls } = harness({ routes: [answer([anthropic(false), codex(true), deepseek(false)])] });
+  core.setPinned(true);
+  assert.equal(await core.onPoolExhausted({ provider: 'anthropic', model: 'claude-fable-5-1' }), true);
+  assert.deepEqual(calls.setModel, [{ provider: 'openai-codex', model: 'gpt-6-astra' }]);
+});
+
 test('none routable -> single error line, no model change, no repeat', async () => {
   const cands = [anthropic(false), codex(false), deepseek(false)];
   const { core, calls, tick } = harness({ routes: [answer(cands), answer(cands), answer(cands)] });
@@ -119,8 +126,9 @@ test('pressure-driven switch-back follows preferred anthropic at a later turn bo
   assert.deepEqual(calls.setModel, [
     { provider: 'openai-codex', model: 'gpt-6-astra' }, original,
   ]);
-  assert.match(calls.notify.at(-1)[1], /switched to anthropic\/claude-fable-5-1: quota pressure/);
-  assert.equal(core.state.original, original);
+  assert.deepEqual(calls.notify.at(-1), ['info', '↩ back to anthropic/claude-fable-5-1: pool recovered']);
+  assert.equal(core.state.original, null);
+  assert.equal(core.state.pressureDriven, false);
 });
 
 test('no proactive switch inside the proxy sticky band', async () => {

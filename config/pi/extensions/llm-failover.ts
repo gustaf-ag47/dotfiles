@@ -262,7 +262,7 @@ export function createFailover(deps: FailoverDeps) {
 
 	/** Called with the failed request's provider/model. Returns true when switched. */
 	async function onPoolExhausted(current: Target): Promise<boolean> {
-		if (!state.enabled || state.pinned || current.provider !== ANTHROPIC) return false;
+		if (!state.enabled || current.provider !== ANTHROPIC) return false;
 		const answer = await deps.fetchRoute(current.model);
 		if (!answer) {
 			sayNoRoute([]);
@@ -307,8 +307,15 @@ export function createFailover(deps: FailoverDeps) {
 				const target = { provider: preferred.provider, model: preferred.model };
 				if (await deps.setModel(target)) {
 					state.current = target;
-					const pressure = (c: Candidate | undefined) => typeof c?.pressure === "number" ? c.pressure.toPrecision(2) : "?";
-					deps.notify(`↪ switched to ${target.provider}/${target.model}: quota pressure (${pressure(preferred)} vs ${pressure(previousCandidate)} perishable headroom)`, "info");
+					if (target.provider === state.original?.provider) {
+						const original = state.original;
+						state.original = null;
+						state.pressureDriven = false;
+						deps.notify(backLine(original), "info");
+					} else {
+						const pressure = (c: Candidate | undefined) => typeof c?.pressure === "number" ? c.pressure.toPrecision(2) : "?";
+						deps.notify(`↪ switched to ${target.provider}/${target.model}: quota pressure (${pressure(preferred)} vs ${pressure(previousCandidate)} perishable headroom)`, "info");
+					}
 				}
 			}
 			return false;
