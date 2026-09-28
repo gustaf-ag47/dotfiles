@@ -74,8 +74,11 @@ def snapshot(model):
     for term, bucket in [('anthropic.base.left','u7'),('anthropic.oi.left','u7_oi'),('anthropic.5h.left','u5')]:
         vals = [100*(1-float(t[bucket])) for t in tokens if isinstance(t.get(bucket),(int,float))]
         values[term] = max(vals, default=0)
+    # The oracle keys on Claude model names (and classes); a Codex/DeepSeek model id
+    # is not a route key, so fall back to the like-for-like default.
+    route_model = model if model.startswith('claude-') else 'claude-sonnet-5'
+    route = get(proxy_url()+'/_route?model='+urllib.parse.quote(route_model))
     for provider in ('anthropic','codex','deepseek'):
-        route = get(proxy_url()+'/_route?model='+urllib.parse.quote(model))
         found = next((c for c in route.get('candidates',[]) if c.get('provider') == {'codex':'openai-codex'}.get(provider,provider)), {})
         values[provider+'.routable'] = bool(found.get('routable'))
         if provider == 'codex':

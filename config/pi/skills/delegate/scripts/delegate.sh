@@ -190,7 +190,7 @@ if [ "$PROBE" = "1" ] && command -v llm-wait >/dev/null 2>&1; then
   case "$selected_provider" in openai-codex) wait_provider=codex ;; *) wait_provider="$selected_provider" ;; esac
   if [ -n "$wait_provider" ]; then
     route_model="${MODEL#*/}"
-    if [ "$route_model" = "$MODEL" ]; then route_model="claude-sonnet-5"; fi
+    case "$route_model" in claude-*) ;; *) route_model="claude-sonnet-5" ;; esac
     if llm-wait --until "$wait_provider.routable" --model "$route_model" --max "${PI_DELEGATE_WAIT_MAX:-2h}"; then
       :
     else
