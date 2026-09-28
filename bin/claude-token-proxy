@@ -240,6 +240,17 @@ class Tok:
 
     def snapshot(self) -> dict:
         now = time.time()
+        windows = {"5h": (self.u5, self.u5_reset), "7d": (self.u7, self.u7_reset),
+                   "7d_oi": (self.u7_oi, self.u7_oi_reset)}
+        forecasts = {}
+        for key, (value, reset) in windows.items():
+            quota_key = {"5h": "five_hour", "7d": "seven_day", "7d_oi": "seven_day_overage_included"}[key]
+            quota_window = (self.quota or {}).get(quota_key, {}) if isinstance(self.quota, dict) else {}
+            quota_used = quota_window.get("utilization") if isinstance(quota_window, dict) else None
+            if isinstance(quota_used, (int, float)):
+                value = quota_used / 100 if quota_used > 1 else quota_used
+                reset = quota_window.get("resets_at") or quota_window.get("reset_at") or reset
+            forecasts[key] = forecast(SAMPLES.get(self.fp, {}).get(key, []), value, _iso_epoch(reset), now)
         return {
             "fp": self.fp,
             "label": self.label,
@@ -250,6 +261,7 @@ class Tok:
             "u5_reset": self.u5_reset,
             "u7_reset": self.u7_reset,
             "u7_oi_reset": self.u7_oi_reset,
+            "forecast": forecasts,
             "unified_status": self.unified_status,
             "last_status": self.last_status,
             "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
@@ -291,6 +303,74 @@ PERSISTENCE_ERROR: str | None = None
 FALLBACK_STATE_KEY = "_deepseek_fallback"
 FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model": None,
                   "episode_requests": 0, "requests": 0, "by_model": {}}
+SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
+ROUTING_LOG = CONTROL_DIR / "routing.log"
+MAX_SAMPLES = 200
+
+
+def forecast(samples, utilization, reset_at, now=None):
+    now = time.time() if now is None else now
+    points = sorted(samples or [], key=lambda p: p[0])
+    slope = None
+    if len(points) >= 2 and points[-1][0] - points[0][0] >= 900:
+        slope = (points[-1][1] - points[0][1]) / ((points[-1][0] - points[0][0]) / 3600)
+    projected = None
+    state, exhaust_at = "unknown", None
+    if slope is not None and utilization is not None and reset_at:
+        projected = max(0.0, min(1.0, utilization + slope * max(0, reset_at - now) / 3600))
+        if slope > 0 and utilization < 1 and (1-utilization)/slope * 3600 < reset_at-now:
+            state, exhaust_at = "exhaust", now + (1-utilization)/slope*3600
+        elif projected < .9:
+            state = "waste"
+        else:
+            state = "on_track"
+    return {"burn_per_hour": slope, "projected_at_reset": projected,
+            "forecast": state, "exhaust_at": exhaust_at}
+
+
+def append_route(event):
+    try:
+        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        if ROUTING_LOG.exists() and ROUTING_LOG.stat().st_size >= 1_000_000:
+            ROUTING_LOG.replace(ROUTING_LOG.with_suffix(".log.1"))
+        with ROUTING_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def recent_routes():
+    try:
+        return [json.loads(line) for line in ROUTING_LOG.read_text().splitlines()[-20:]]
+    except (OSError, ValueError):
+        return []
+
+
+def record_external_sample(series_key, bucket, utilization, reset_at=None, now=None):
+    now = time.time() if now is None else now
+    series = SAMPLES.setdefault(series_key, {}).setdefault(bucket, [])
+    reset_epoch = reset_at if isinstance(reset_at, (int, float)) else _iso_epoch(reset_at)
+    if reset_epoch is not None and now >= reset_epoch:
+        series.clear()
+    series.append([now, float(utilization)])
+    del series[:-MAX_SAMPLES]
+
+
+def record_sample(tok):
+    now = time.time()
+    buckets = (("5h", tok.u5, tok.u5_reset), ("7d", tok.u7, tok.u7_reset),
+               ("7d_oi", tok.u7_oi, tok.u7_oi_reset))
+    for name, value, reset in buckets:
+        if value is None:
+            continue
+        series = SAMPLES.setdefault(tok.fp, {}).setdefault(name, [])
+        reset_epoch = _iso_epoch(reset)
+        if reset_epoch is not None and now >= reset_epoch:
+            series.clear()
+        elif reset_epoch is not None and series and series[-1][0] >= reset_epoch:
+            series.clear()
+        series.append([now, float(value)])
+        del series[:-MAX_SAMPLES]
 
 
 def load_usage_state() -> dict:
@@ -316,6 +396,7 @@ def save_usage_state() -> bool:
             "by_model": t.by_model,
             "quota": quota_snapshot(t),
         } for t in STATE}
+        data["_samples"] = SAMPLES
         if FALLBACK["requests"]:
             data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
                                         "by_model": FALLBACK["by_model"]}
@@ -376,6 +457,25 @@ def restore_usage_state() -> None:
         models = saved.get("by_model", {})
         tok.by_model = models if isinstance(models, dict) else {}
         restore_quota(tok, saved.get("quota"))
+    global SAMPLES
+    saved_samples = data.get("_samples", {})
+    SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
+    now = time.time()
+    valid_fps = {tok.fp for tok in STATE}
+    for fingerprint in list(SAMPLES):
+        if (fingerprint not in valid_fps and not fingerprint.startswith("codex:")) or not isinstance(SAMPLES[fingerprint], dict):
+            SAMPLES.pop(fingerprint, None)
+            continue
+        for bucket, points in list(SAMPLES[fingerprint].items()):
+            reset = {"5h": next((t.u5_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d": next((t.u7_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d_oi": next((t.u7_oi_reset for t in STATE if t.fp == fingerprint), None)}.get(bucket)
+            boundary = _iso_epoch(reset)
+            cleaned = [p for p in points if isinstance(p, list) and len(p) == 2
+                       and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))
+                       and p[0] <= now and now-p[0] < 8*86400
+                       and (boundary is None or p[0] > boundary)] if isinstance(points, list) else []
+            SAMPLES[fingerprint][bucket] = cleaned[-MAX_SAMPLES:]
     saved = data.get(FALLBACK_STATE_KEY, {})
     if isinstance(saved, dict):
         FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
@@ -535,6 +635,7 @@ def update_from_headers(tok: Tok, headers) -> None:
     status = headers.get("anthropic-ratelimit-unified-7d-status")
     if status:
         tok.unified_status = status
+    record_sample(tok)
 
 
 def session_key_from(headers, body: bytes) -> str | None:
@@ -871,6 +972,13 @@ def refresh_providers() -> None:
         result = safe_query(provider, auth)
         with LOCK:
             PROVIDER_STATE[provider] = result
+            if provider == "openai-codex" and result.get("status") == "ok":
+                for window in result.get("windows", []):
+                    used = window.get("used_percent")
+                    if isinstance(used, (int, float)):
+                        name = str(window.get("name", "window"))
+                        record_external_sample(f"codex:{name}", name, used / 100, window.get("reset_at"))
+                save_usage_state()
         log(f"provider {provider}: {result['status']}"
             + (f" ({result.get('reason')})" if result["status"] != "ok" else ""))
 
@@ -1513,6 +1621,27 @@ def usage_payload() -> dict:
         }
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
+    routing["recent"] = recent_routes()
+    exhaustions = []
+    weekly = []
+    for token in toks:
+        for window, fc in token.get("forecast", {}).items():
+            if window in ("7d", "7d_oi") and fc.get("projected_at_reset") is not None:
+                weekly.append(100 * max(0.0, 1.0 - fc["projected_at_reset"]))
+            if fc.get("exhaust_at") is not None:
+                exhaustions.append({"fp": token["fp"], "window": window,
+                                    "at": datetime.fromtimestamp(fc["exhaust_at"], timezone.utc).isoformat()})
+    codex_state = providers.get("openai-codex", {})
+    codex_forecasts = {}
+    for item in codex_state.get("windows", []):
+        reset = item.get("reset_at")
+        used = item.get("used_percent")
+        if isinstance(reset, (int, float)) and isinstance(used, (int, float)):
+            name = item.get("name", "window")
+            codex_forecasts[name] = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []), used / 100, reset)
+    codex_state["forecast"] = codex_forecasts
+    routing["forecast"] = {"weekly_waste_percent": round(sum(weekly)/len(weekly), 1) if weekly else None,
+                            "first_exhaust": min(exhaustions, key=lambda x: x["at"]) if exhaustions else None}
     anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
                  "checked_at": int(max(checked)) if checked else None}
     return {
@@ -1626,10 +1755,22 @@ class Handler(BaseHTTPRequestHandler):
         # Every token may burn one extra attempt on a burst pause before failover.
         for _ in range(max(1, valid_count + 1) + valid_count):
             with LOCK:
-                affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket_key(model)))
+                bucket = bucket_key(model)
+                affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket))
                 tok = pick(exclude=tried, model=model, session_key=session_key)
-                if affinity_before and tok and affinity_before[0] != tok.fp and affinity_before[0] in tried:
-                    log(f"session affinity moved bucket={bucket_key(model)} reason=cooldown")
+                previous = affinity_before[0] if affinity_before else None
+                if tok is not None and previous and previous != tok.fp:
+                    # A session changed account: the only move that costs a prompt cache.
+                    previous_tok = next((item for item in STATE if item.fp == previous), None)
+                    if previous in forced_cooldown_fps():
+                        reason = "forced"
+                    elif previous in tried or (previous_tok and time.time() < cooldown_deadline(previous_tok, model)):
+                        reason = "cooldown"
+                    else:
+                        reason = "pressure"
+                    log(f"session affinity moved bucket={bucket} reason={reason}")
+                    append_route({"ts": datetime.now(timezone.utc).isoformat(), "bucket": bucket,
+                                  "from_fp": previous, "to_fp": tok.fp, "reason": reason})
             if tok is None:
                 with LOCK:
                     detail = ", ".join(
@@ -1740,6 +1881,28 @@ class Handler(BaseHTTPRequestHandler):
         conn.close()
         return True
 
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/_event":
+            self._proxy()
+            return
+        try:
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_api_error(403, "loopback only")
+                return
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("expected application/json")
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 4096:
+                raise ValueError("body too large")
+            data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict) or not data.get("kind"):
+                raise ValueError("invalid event")
+            append_route({"ts": datetime.now(timezone.utc).isoformat(), **{
+                key: str(data.get(key, ""))[:100] for key in ("kind", "from", "to", "reason")}})
+            self._send_json(200, {"ok": True})
+        except (ValueError, json.JSONDecodeError):
+            self._send_api_error(400, "invalid JSON event")
+
     def do_GET(self):
         endpoint = self.path.split("?", 1)[0]
         if endpoint in ("/_status", "/_health"):
@@ -1753,7 +1916,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._proxy()
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
+    do_PUT = do_DELETE = do_PATCH = _proxy
 
     def _stream(self, resp, tok: Tok | None, model: str):
         content_type = resp.getheader("content-type", "")

@@ -54,6 +54,27 @@ def report(provider, info):
     return {'schema': 1, 'providers': {provider: {**info, 'checked_at': int(NOW)}}}
 
 
+class ForecastRenderingTests(unittest.TestCase):
+    def test_window_forecast_suffixes(self):
+        base = {'name': 'five_hour', 'used_percent': 40, 'resets_at': NOW + 3600}
+        with patch.object(usage, 'use_color', return_value=False):
+            waste = usage.window_line({**base, 'forecast': {'burn_per_hour': .031, 'forecast': 'waste', 'projected_at_reset': .6}}, NOW)
+            self.assertIn('burn 3.1%/h', waste)
+            self.assertIn('will waste ~40%', waste)
+            exhaust = usage.window_line({**base, 'forecast': {'forecast': 'exhaust', 'exhaust_at': NOW+7200}}, NOW)
+            self.assertIn('exhausts in 2h', exhaust)
+            track = usage.window_line({**base, 'forecast': {'forecast': 'on_track'}}, NOW)
+            self.assertIn('on track', track)
+
+    def test_routing_forecast_line_and_json_payload_passthrough(self):
+        routing = {'buckets': {'base': {'ranking': []}}, 'forecast': {'weekly_waste_percent': 12.5, 'first_exhaust': None},
+                   'recent': [{'ts': '2026-01-01T14:02:00Z', 'bucket': 'base', 'from_fp': 'abc', 'to_fp': 'def', 'reason': 'cooldown'}]}
+        with patch.object(usage, 'use_color', return_value=False):
+            lines = usage.routing_lines(routing, {})
+        self.assertIn('weekly waste 12.5%', '\n'.join(lines))
+        self.assertIn('14:02 base abc→def cooldown', '\n'.join(lines))
+
+
 class JwtClaimsTests(unittest.TestCase):
     def test_valid_token_yields_email_and_plan_only(self):
         self.assertEqual(usage.jwt_claims(JWT), {'email': 'a@b', 'name': 'A B', 'plan': 'plus'})

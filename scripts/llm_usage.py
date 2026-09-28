@@ -103,8 +103,10 @@ def anthropic(_auth):
                 used = value * 100 if value is not None else None
                 source = 'header observation (may be stale)'
             if used is not None or name in ('five_hour', 'seven_day'):
+                forecast_key = {'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d_oi'}.get(name)
                 windows.append({'name': name, 'used_percent': used,
                                 'resets_at': bucket.get('resets_at') or bucket.get('reset_at') or token.get(reset),
+                                'forecast': (token.get('forecast') or {}).get(forecast_key),
                                 'source': source if used is not None else 'unavailable'})
         counters = token.get('counters') or {}
         accounts.append({'account': token.get('fp'), 'label': token.get('label') or '', 'valid': token.get('valid'),
@@ -318,6 +320,19 @@ def window_line(window, now):
     left = max(0.0, min(100.0, 100 - used))
     stale = window.get('source', '').startswith('header')
     tail = f'resets in {until(reset, now)}'
+    fc = window.get('forecast') or {}
+    state = fc.get('forecast')
+    burn = fc.get('burn_per_hour')
+    if isinstance(burn, (int, float)):
+        tail += f' · burn {burn * 100:.1f}%/h'
+    if state == 'waste':
+        projected = fc.get('projected_at_reset')
+        tail += paint(f' · will waste ~{max(0, (1-projected)*100):.0f}%', '33') if isinstance(projected, (int, float)) else paint(' · will waste', '33')
+    elif state == 'exhaust':
+        exhaust_at = fc.get('exhaust_at')
+        tail += paint(' · exhausts in ' + until(to_epoch(exhaust_at), now), '31;1')
+    elif state == 'on_track':
+        tail += paint(' · on track', '32')
     if stale:
         tail += ' ~'
     pct = paint(f'{left:3.0f}% left', '1' if left < 20 else '0')
@@ -359,6 +374,15 @@ def routing_lines(routing, labels):
         return []
     width = max((len(account_name(r['fp'], labels)) for b in routing['buckets'].values() for r in b.get('ranking', [])), default=12)
     lines = ['', paint('routing', '1') + f"  mode={routing.get('mode')} threshold={routing.get('threshold')}"]
+    summary = routing.get('forecast') or {}
+    if summary:
+        waste = summary.get('weekly_waste_percent')
+        first = summary.get('first_exhaust')
+        lines.append('  forecast  weekly waste ' + (f'{waste:.1f}%' if isinstance(waste, (int, float)) else '?') +
+                     (f" · first exhaust {first.get('fp')} {first.get('window')} at {first.get('at')}" if first else ' · no projected exhaust'))
+        for event in routing.get('recent', [])[-3:]:
+            ts = str(event.get('ts', ''))[11:16] or '--:--'
+            lines.append(f"  {ts} {event.get('bucket') or event.get('kind','route')} {event.get('from_fp') or event.get('from')}→{event.get('to_fp') or event.get('to')} {event.get('reason','')}")
     for key, bucket in routing['buckets'].items():
         chosen = bucket.get('would_pick')
         head = paint(account_name(chosen, labels), '32;1') if chosen else paint('NONE ROUTABLE', '31;1')
@@ -406,7 +430,9 @@ def codex_lines(info, now):
     else:
         verdict = paint('LIMIT REACHED', '31;1')
     lines = [f"  {paint(codex_identity(info), '1')}  {verdict}"]
-    lines += [window_line(window, now) for window in info.get('windows', [])]
+    forecasts = info.get('forecast') or {}
+    lines += [window_line({**window, 'forecast': forecasts.get(window.get('name'))}, now)
+              for window in info.get('windows', [])]
     credits = info.get('credits') or {}
     balance = f" (balance {credits['balance']})" if credits.get('balance') is not None else ''
     for slug, row in (info.get('models') or {}).items():
