@@ -343,6 +343,16 @@ def recent_routes():
         return []
 
 
+def record_external_sample(series_key, bucket, utilization, reset_at=None, now=None):
+    now = time.time() if now is None else now
+    series = SAMPLES.setdefault(series_key, {}).setdefault(bucket, [])
+    reset_epoch = reset_at if isinstance(reset_at, (int, float)) else _iso_epoch(reset_at)
+    if reset_epoch is not None and now >= reset_epoch:
+        series.clear()
+    series.append([now, float(utilization)])
+    del series[:-MAX_SAMPLES]
+
+
 def record_sample(tok):
     now = time.time()
     buckets = (("5h", tok.u5, tok.u5_reset), ("7d", tok.u7, tok.u7_reset),
@@ -450,7 +460,7 @@ def restore_usage_state() -> None:
     now = time.time()
     valid_fps = {tok.fp for tok in STATE}
     for fingerprint in list(SAMPLES):
-        if fingerprint not in valid_fps or not isinstance(SAMPLES[fingerprint], dict):
+        if (fingerprint not in valid_fps and not fingerprint.startswith("codex:")) or not isinstance(SAMPLES[fingerprint], dict):
             SAMPLES.pop(fingerprint, None)
             continue
         for bucket, points in list(SAMPLES[fingerprint].items()):
@@ -943,6 +953,13 @@ def refresh_providers() -> None:
         result = safe_query(provider, auth)
         with LOCK:
             PROVIDER_STATE[provider] = result
+            if provider == "openai-codex" and result.get("status") == "ok":
+                for window in result.get("windows", []):
+                    used = window.get("used_percent")
+                    if isinstance(used, (int, float)):
+                        name = str(window.get("name", "window"))
+                        record_external_sample(f"codex:{name}", name, used / 100, window.get("reset_at"))
+                save_usage_state()
         log(f"provider {provider}: {result['status']}"
             + (f" ({result.get('reason')})" if result["status"] != "ok" else ""))
 
@@ -1542,7 +1559,7 @@ def usage_payload() -> dict:
         used = item.get("used_percent")
         if isinstance(reset, (int, float)) and isinstance(used, (int, float)):
             name = item.get("name", "window")
-            codex_forecasts[name] = forecast([], used / 100, reset)
+            codex_forecasts[name] = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []), used / 100, reset)
     codex_state["forecast"] = codex_forecasts
     routing["forecast"] = {"weekly_waste_percent": round(sum(weekly)/len(weekly), 1) if weekly else None,
                             "first_exhaust": min(exhaustions, key=lambda x: x["at"]) if exhaustions else None}
