@@ -40,6 +40,12 @@ class TaskClassesTests(OracleFixture):
         ranked = proxy.rank_pool("claude-fable-5", class_name="build")
         self.assertEqual(ranked["ranking"][0]["reason"], "class ceiling")
 
+    def test_class_rank_preview_matches_pick_for_same_pool(self):
+        tok = self.token()
+        preview = proxy.rank_pool("claude-haiku-4-5", class_name="mechanical")
+        self.assertEqual(preview["would_pick"], proxy.pick(model="claude-haiku-4-5", class_name="mechanical").fp)
+        self.assertEqual(preview["would_pick"], tok.fp)
+
     def test_mechanical_prefers_routable_deepseek_first(self):
         self.token(cooldown=time.time() + 600)
         proxy.PROVIDER_STATE = {"deepseek": deepseek_state(), "openai-codex": codex_state()}
