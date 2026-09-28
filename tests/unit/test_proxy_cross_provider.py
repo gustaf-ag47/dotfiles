@@ -45,10 +45,39 @@ class CrossProviderEDFTests(OracleFixture):
         self.assertNotEqual(result["preferred"]["provider"], "openai-codex")
 
     def test_blocked_codex_is_not_preferred(self):
+        self.token(cooldown=time.time() + 600)
         self.providers(codex_state(models={"gpt-6-luna": {"available": False}}))
         result = proxy.route_payload("claude-opus-5-5")
         self.assertFalse(result["candidates"][1]["routable"])
         self.assertNotEqual((result["preferred"] or {}).get("provider"), "openai-codex")
+
+    def test_credits_routable_codex_is_still_excluded_from_preferred(self):
+        self.token(cooldown=time.time() + 600)
+        state = codex_state(used=100, allowed=False)
+        state["credits"] = {"has_credits": True, "unlimited": False, "overage_limit_reached": False}
+        self.providers(state)
+        result = proxy.route_payload("claude-opus-5-5")
+        self.assertTrue(result["candidates"][1]["routable"])
+        self.assertTrue(result["candidates"][1]["on_credits"])
+        self.assertNotEqual((result["preferred"] or {}).get("provider"), "openai-codex")
+
+    def test_fable_codex_quality_gate_allows_astra_not_sol(self):
+        self.token(cooldown=time.time() + 600)
+        state = codex_state(used=10)
+        routes = {"claude-fable-5-1": [["openai-codex", "gpt-6-astra"],
+                  ["openai-codex", "gpt-6-sol"], ["deepseek", "deepseek-v4-pro"]]}
+        proxy.ROUTES_FILE.write_text(__import__("json").dumps(routes))
+        proxy.ROUTES, proxy.ROUTES_MTIME = {}, None
+        proxy.load_routes()
+        self.providers(state)
+        result = proxy.route_payload("claude-fable-5-1")
+        self.assertEqual(result["preferred"]["model"], "gpt-6-astra")
+        self.assertEqual(result["first_routable"]["model"], "gpt-6-astra")
+        state["models"] = {"gpt-6-astra": {"available": False}}
+        self.providers(state)
+        result = proxy.route_payload("claude-fable-5-1")
+        self.assertEqual(result["first_routable"]["model"], "gpt-6-sol")
+        self.assertNotEqual((result["preferred"] or {}).get("model"), "gpt-6-sol")
 
 
 if __name__ == "__main__":

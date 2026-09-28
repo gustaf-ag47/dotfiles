@@ -104,6 +104,25 @@ test('turn boundary proactively follows preferred and manual pin disables it', a
   assert.equal(core.state.pinned, true);
 });
 
+test('pressure-driven switch-back follows preferred anthropic at a later turn boundary', async () => {
+  const preferredCodex = { ...codex(true), pressure: 2e-7 };
+  const preferredAnthropic = { ...anthropic(true), pressure: 3e-7 };
+  const { core, calls, tick } = harness({ routes: [
+    { ...answer([anthropic(true), codex(true)]), preferred: preferredCodex },
+    { ...answer([anthropic(true), codex(true)]), preferred: preferredAnthropic },
+  ] });
+  tick(RECOVERY_POLL_MS);
+  const original = { provider: 'anthropic', model: 'claude-fable-5-1' };
+  assert.equal(await core.onTurnStart(original), true);
+  tick(RECOVERY_POLL_MS);
+  assert.equal(await core.onTurnStart({ provider: 'openai-codex', model: 'gpt-6-astra' }), false);
+  assert.deepEqual(calls.setModel, [
+    { provider: 'openai-codex', model: 'gpt-6-astra' }, original,
+  ]);
+  assert.match(calls.notify.at(-1)[1], /switched to anthropic\/claude-fable-5-1: quota pressure/);
+  assert.equal(core.state.original, original);
+});
+
 test('no proactive switch inside the proxy sticky band', async () => {
   const { core, calls } = harness({ routes: [answer([anthropic(true), codex(true)])] });
   assert.equal(await core.onTurnStart({ provider: 'anthropic', model: 'claude-fable-5-1' }), false);
@@ -185,6 +204,17 @@ test('fetchRoute: loopback GET with timeout, tolerant of bad answers', async () 
   assert.equal(await fetchRoute('http://127.0.0.1:8788', 'x', async () => { throw new Error('ECONNREFUSED'); }), null);
   const hang = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
   assert.equal(await fetchRoute('http://127.0.0.1:8788', 'x', hang, 10), null);
+});
+
+test('/failover status reports the explicit provider pin', async () => {
+  let command;
+  const notes = [];
+  llmFailover({ on: () => {}, registerCommand: (_name, spec) => { command = spec.handler; }, setModel: async () => true });
+  const ctx = { hasUI: true, ui: { notify: line => notes.push(line) }, model: undefined };
+  await command('pin', ctx);
+  await command('status', ctx);
+  assert.match(notes[0], /provider pinned/);
+  assert.match(notes.at(-1), /provider pinned/);
 });
 
 test('proxy origin follows PI_ANTHROPIC_PROXY_URL / CC_PROXY_PORT', () => {
