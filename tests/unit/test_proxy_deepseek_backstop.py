@@ -5,13 +5,15 @@ import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import mock
+from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
 PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
 proxy = SourceFileLoader("claude_token_proxy_deepseek_tests", str(PROXY_PATH)).load_module()
 
 
-class DeepseekBackstopTests(unittest.TestCase):
+class DeepseekBackstopTests(ProxyIsolationMixin, unittest.TestCase):
+    proxy = proxy
     def test_rewrite_model_changes_only_model(self):
         original = {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]}
         rewritten = json.loads(proxy.rewrite_model(json.dumps(original).encode(), "deepseek-v4-pro"))

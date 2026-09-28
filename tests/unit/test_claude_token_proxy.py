@@ -14,14 +14,17 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main, mock
+from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
 PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
 proxy = SourceFileLoader("claude_token_proxy", str(PROXY_PATH)).load_module()
 
 
-class UsagePersistenceTests(TestCase):
+class UsagePersistenceTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     def setUp(self):
+        super().setUp()
         proxy.STATE.clear()
         proxy.PERSISTENCE_ERROR = None
         self.token = proxy.Tok("test-token")
@@ -58,7 +61,8 @@ def iso_in(**delta) -> str:
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
 
 
-class SessionKeyTests(TestCase):
+class SessionKeyTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     def test_session_key_header_metadata_system_and_global_fallbacks(self):
         body = json.dumps({"metadata": {"user_id": "body-session"}, "system": "prompt"}).encode()
         self.assertEqual(proxy.session_key_from({"x-cc-proxy-session": "header-session"}, body), "header-session")
@@ -68,10 +72,12 @@ class SessionKeyTests(TestCase):
         self.assertIsNone(proxy.session_key_from({}, b'{"messages": []}'))
 
 
-class PickPolicyTests(TestCase):
+class PickPolicyTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     """Selection policy: pressure (EDF-with-headroom), model-aware buckets."""
 
     def setUp(self):
+        super().setUp()
         proxy.STATE.clear()
         proxy.LAST_PICK.clear()
         self._mode = proxy.PICK_MODE
@@ -351,7 +357,8 @@ class PickPolicyTests(TestCase):
         self.assertIs(proxy.pick(exclude={best.fp}, model="claude-opus-5"), last)
 
 
-class CooldownScopeTests(TestCase):
+class CooldownScopeTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     def test_explicit_model_claims_are_scoped(self):
         for claim, scope in (("seven_day_overage_included", "fable"),
                              ("five_hour_overage_included", "fable"),
@@ -402,7 +409,8 @@ class CooldownScopeTests(TestCase):
         self.assertEqual(snapshot["cooldown_remaining"], 0)
 
 
-class Burst429Tests(TestCase):
+class Burst429Tests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     """A spent bucket must rotate; a per-minute burst must just wait."""
 
     def test_account_level_rejected_is_quota(self):
@@ -511,10 +519,12 @@ def deepseek_state(balance="5.00", available=True):
                           "topped_up_balance": balance}], "checked_at": 1}
 
 
-class OracleFixture(TestCase):
+class OracleFixture(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     """Isolated pool, routes file and provider cache for the oracle tests."""
 
     def setUp(self):
+        super().setUp()
         proxy.STATE.clear()
         proxy.LAST_PICK.clear()
         self._dir = TemporaryDirectory()

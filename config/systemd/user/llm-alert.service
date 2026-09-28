@@ -1,0 +1,6 @@
+[Unit]
+Description=Check LLM routing alerts
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/llm-alert

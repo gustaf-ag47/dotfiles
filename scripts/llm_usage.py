@@ -503,9 +503,75 @@ def render(report):
     return '\n'.join(lines)
 
 
+def weekly_report(auth):
+    """Compute conservative rolling-seven-day routing metrics from local telemetry."""
+    data = get_json(local_url() + '/_usage')
+    anthropic_data = (data.get('providers') or {}).get('anthropic') or {}
+    tokens = data.get('tokens') or anthropic_data.get('tokens') or []
+    now = time.time(); cutoff = now - 7 * 86400
+    state_path = Path(data.get('usage_state_file') or (Path(os.environ.get('XDG_CACHE_HOME', Path.home()/'.cache'))/'cc-proxy'/'usage.json'))
+    try: state = json.loads(state_path.read_text())
+    except (OSError, ValueError): state = {}
+    routing_path = Path(data.get('routing_log') or state_path.parent/'routing.log')
+    events = []
+    try:
+        events = [json.loads(line) for line in routing_path.read_text().splitlines() if line.strip()]
+    except (OSError, ValueError): pass
+    def ts(row):
+        try: return datetime.datetime.fromisoformat(str(row.get('ts','')).replace('Z','+00:00')).timestamp()
+        except ValueError: return 0
+    events = [e for e in events if cutoff <= ts(e) <= now]
+    recent = (data.get('routing') or {}).get('recent') or []
+    unique_events={json.dumps(e,sort_keys=True):e for e in events + recent}
+    starved = int((data.get('routing') or {}).get('starved', 0) or 0) + sum(e.get('kind') == 'starved' for e in unique_events.values())
+    windows = {}
+    def forecast_rows(provider, rows):
+        for token in rows:
+            for name, fc in (token.get('forecast') or {}).items():
+                if (name in ('7d','7d_oi','primary_window') and isinstance(fc,dict)):
+                    projected=fc.get('projected_at_reset')
+                    if isinstance(projected,(int,float)):
+                        windows[f'{provider}:{name}']=round(max(0,(1-float(projected))*100),1)
+                    elif fc.get('forecast') == 'waste':
+                        windows[f'{provider}:{name}']=None
+    forecast_rows('anthropic', tokens)
+    codex=(data.get('providers') or {}).get('openai-codex',{})
+    forecast_rows('codex',[{'forecast':codex.get('forecast',{})}])
+    samples=state.get('_samples') if isinstance(state.get('_samples'),dict) else {}
+    avoidable=0
+    for event in events:
+        if event.get('reason') != 'cooldown': continue
+        at=ts(event)
+        exhausted={event.get('from_fp'),event.get('to_fp')}
+        had_alternative=False
+        for fp, buckets in samples.items():
+            if fp in exhausted or not isinstance(buckets,dict): continue
+            points=buckets.get('5h') or []
+            prior=[point for point in points if isinstance(point,list) and len(point)>=2 and 0 <= at-float(point[0]) <= 600]
+            if prior and float(prior[-1][1]) <= .7:
+                had_alternative=True; break
+        if had_alternative: avoidable += 1
+    class_events=[e for e in events if e.get('kind')=='class' and e.get('class') not in (None,'interactive')]
+    eligible_models={e.get('model') for e in class_events if isinstance(e.get('model'),str)}
+    opus=total=0
+    for token in tokens:
+        for model,row in (token.get('counters') or {}).get('by_model',{}).items():
+            if model not in eligible_models: continue
+            count=sum(float(row.get(key,0) or 0) for key in ('input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens'))
+            total += count
+            if 'opus' in model.lower() or 'fable' in model.lower(): opus += count
+    counters=[t.get('counters') or {} for t in tokens]
+    if not counters: counters=[r for r in state.values() if isinstance(r,dict)]
+    counts=[(int(r.get('input_tokens',0) or 0),int(r.get('cache_read_input_tokens',0) or 0),int(r.get('cache_creation_input_tokens',0) or 0)) for r in counters]
+    i,c,cc=(sum(x[n] for x in counts) for n in range(3)); cache=round(100*c/(i+c+cc),1) if i+c+cc else None
+    rendered_windows={key:(f"~{value:.1f}%" if isinstance(value,(int,float)) else 'n/a') for key,value in windows.items()}
+    return {'period_days':7,'P1_starved_requests':starved,'P2_weekly_waste_percent':rendered_windows or 'n/a','P2_note':'~ denotes current forecast projection; reset-time historical forecasts are unavailable from this telemetry shape.','P3_avoidable_5h_stalls':avoidable,'P3_note':'Approximation: cooldown move events are matched to the latest prior 5h sample within 10 minutes; samples do not prove account eligibility.','P4_opus_fable_token_share_percent':round(100*opus/total,1) if total else 'n/a','cache_hit_percent':cache}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--week', action='store_true', help='Report rolling-seven-day routing metrics')
     parser.add_argument('--refresh', action='store_true', help='Bypass the 60-second report cache (does not refresh OAuth)')
     parser.add_argument('--provider', choices=list(ADAPTERS))
     args = parser.parse_args()
@@ -517,6 +583,10 @@ def main():
         auth = {}
     if not isinstance(auth, dict):
         auth = {}
+    if args.week:
+        report = weekly_report(auth)
+        print(json.dumps(report, indent=2) if args.json else '\n'.join(f'{key}: {value}' for key,value in report.items()))
+        return
     providers = [args.provider] if args.provider else list(ADAPTERS)
     identity = str(auth_path.resolve()) + str(auth_path.stat().st_mtime_ns if auth_path.exists() else 0)
     identity += os.environ.get('PI_ANTHROPIC_PROXY_URL', '') + os.environ.get('CC_PROXY_PORT', '') + str(providers)

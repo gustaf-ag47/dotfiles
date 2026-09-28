@@ -148,10 +148,28 @@ done < <(echo "$DATA" | jq -r '.tokens[] | [
     ((.quota // {})|tojson), ((.counters // {})|tojson), ((.model_cooldowns // {})|tojson)
 ] | @tsv')
 
+# Routing alerts are defensive: older proxy versions may not expose these fields.
+first_exhaust=$(echo "$DATA" | jq -r '.routing.forecast.first_exhaust.at // empty')
+starved=$(echo "$DATA" | jq -r 'if (.routing.starved|type) == "number" then .routing.starved else 0 end')
+waste=$(echo "$DATA" | jq -r '[.tokens[]?.forecast // {} | to_entries[] | select(.key == "7d" or .key == "7d_oi") | select(.value.forecast == "waste" and ((1 - (.value.projected_at_reset // 1)) * 100) > 30)] | length')
+now=$(date +%s)
+critical=0
+if [ -n "$first_exhaust" ] && [ "$(date -d "$first_exhaust" +%s 2>/dev/null || echo 0)" -gt 0 ] \
+    && [ "$(( $(date -d "$first_exhaust" +%s) - now ))" -lt 7200 ]; then critical=1; fi
+[ "${starved:-0}" -gt 0 ] && critical=1
+
 if [ -z "$max_weekly" ]; then
     class="error"
     text="CC ?"
     percentage=0
+elif [ "$critical" -eq 1 ]; then
+    class="critical"
+    text="CC ${max_weekly}% !"
+    percentage="$max_weekly"
+elif [ "${waste:-0}" -gt 0 ]; then
+    class="warning"
+    text="CC ${max_weekly}% ~"
+    percentage="$max_weekly"
 elif [ "$max_weekly" -ge 90 ]; then
     class="critical"
     text="CC ${max_weekly}%"
