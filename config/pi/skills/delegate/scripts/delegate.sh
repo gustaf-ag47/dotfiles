@@ -189,7 +189,10 @@ if [ "$PROBE" = "1" ] && command -v llm-wait >/dev/null 2>&1; then
     else
       wait_status=$?
       if [ "$wait_status" = "2" ] && [ "$wait_provider" = "codex" ]; then
-        echo "delegate: Codex quota wait timed out; continuing to the existing probe/fallback"
+        echo "delegate: Codex quota wait timed out; falling back to Anthropic sonnet"
+        MODEL="anthropic/claude-sonnet-5"
+        PROVIDER=anthropic
+        MODEL_ARGS=(--provider "$PROVIDER" --model "claude-sonnet-5")
       else
         die "waiting for $wait_provider routing failed (status $wait_status)"
       fi
