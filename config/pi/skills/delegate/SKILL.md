@@ -70,6 +70,14 @@ committing has done nothing.
 
 ## The feedback loop
 
+**Self-continue (2026-09-28).** Briefed children get a default `PI_DELEGATE_GOAL`; the first
+time the watcher sees the child idle *without* a `PARENT: … done` handshake it sends
+`/goal <condition>` so `goal.ts` keeps the child working (up to `PI_GOAL_MAX_TURNS`, 25)
+instead of stopping after one slice and calling the rest "blocked". Only a second idle
+nudges the parent. Watchers now run as `systemd-run --user` units (fallback `setsid`) because
+`nohup` did not survive the tool-call shell that spawned them — seven delegations in a
+row produced zero nudges.
+
 A delegated child runs to completion and then **sits idle forever**. Nothing wakes the
 parent, so work stops until a human happens to look. Measured 2026-08-29: nine agents
 finished and **22.5 hours passed with zero merges** — every one of them a single nudge

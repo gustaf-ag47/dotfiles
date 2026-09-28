@@ -74,7 +74,13 @@ started_at=$(date +%s)
 deadline=$(( started_at + MAX_HOURS * 3600 ))
 streak=0
 seen_busy=0
+goal_sent=0
 verdict="idle"
+
+# The brief's handshake line; a child that printed it is genuinely finished.
+child_reported_done() {
+	tmux capture-pane -t "$TARGET" -p -S -400 2>/dev/null | grep -qE '^ ?PARENT: .*\b(done|accepted)\b'
+}
 
 while :; do
 	sleep "$POLL_SECS"
@@ -94,6 +100,21 @@ while :; do
 		# inside the startup grace window.
 		if [ "$streak" -ge "$IDLE_STREAK" ] && [ "$elapsed" -ge "$MIN_GRACE" ] &&
 			{ [ "$seen_busy" = "1" ] || pane_started; }; then
+			# Self-continue before bothering the parent: a child that stops after one
+			# slice without a done-handshake gets a /goal (goal.ts keeps it working
+			# until an evaluator confirms the condition, PI_GOAL_MAX_TURNS turns).
+			# Measured 2026-09-28: 7/7 gpt-6-luna delegates stopped after one slice
+			# calling remaining work "blocked"; each cost a parent round-trip.
+			if [ -n "${PI_DELEGATE_GOAL:-}" ] && [ "$goal_sent" = "0" ] && ! child_reported_done; then
+				goal_sent=1
+				tmux send-keys -t "$TARGET" C-u 2>/dev/null || true
+				sleep 0.4
+				tmux send-keys -t "$TARGET" -l -- "/goal ${PI_DELEGATE_GOAL}"
+				sleep 0.6
+				tmux send-keys -t "$TARGET" Enter
+				streak=0
+				continue
+			fi
 			verdict="idle"
 			break
 		fi

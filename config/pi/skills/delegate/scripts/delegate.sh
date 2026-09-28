@@ -297,11 +297,23 @@ fi
 # outside, so a child that crashes, wedges or simply forgets to report is still
 # reported — the loop must not depend on the child's cooperation.
 WATCHER="$(dirname "$0")/watch-child.sh"
+# Default self-continue condition for briefed children (see watch-child.sh).
+if [ -n "$BRIEF" ] && [ -z "${PI_DELEGATE_GOAL:-}" ]; then
+	PI_DELEGATE_GOAL="every numbered item under Your job in ${brief_rel:-$BRIEF} is implemented and committed, every gate named in the brief has been run and is green, the report file named in the brief is written and pushed, and the PARENT handshake line has been printed. Remaining work is never a blocker; only a missing credential or permission is."
+fi
+export PI_DELEGATE_GOAL
 if [ "${NOTIFY:-1}" = "1" ] && [ -x "$WATCHER" ]; then
-	nohup "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" \
-		>/dev/null 2>&1 &
-	disown 2>/dev/null || true
-	NOTIFY_STATE="watching (nudges $PARENT_WINDOW on idle)"
+	# setsid: a parent that spawns from an agent tool-call shell has its whole
+	# process group killed when the call returns; nohup alone did not survive that
+	# (2026-09-28: zero watchers alive after 7 delegations, no nudges ever landed).
+	if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --quiet --collect \
+		--setenv=PI_DELEGATE_GOAL="$PI_DELEGATE_GOAL" --setenv=PI_DELEGATE_MAILBOX="${PI_DELEGATE_MAILBOX:-$HOME/.pi/agent/delegate-mailbox}" \
+		--unit "pi-delegate-watch-${RUN_ID}" "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" 2>/dev/null; then
+		NOTIFY_STATE="watching via systemd unit pi-delegate-watch-${RUN_ID} (nudges $PARENT_WINDOW on idle)"
+	else
+		setsid -f "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" >/dev/null 2>&1 </dev/null
+		NOTIFY_STATE="watching via setsid (nudges $PARENT_WINDOW on idle)"
+	fi
 else
 	NOTIFY_STATE="off"
 fi
