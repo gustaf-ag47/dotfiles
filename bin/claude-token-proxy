@@ -123,6 +123,10 @@ USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
 ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
 DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
+DEEPSEEK_MONTHLY_CAP = float(os.environ.get("CC_PROXY_DEEPSEEK_MONTHLY_CAP", "20"))
+DEEPSEEK_SPEND = {"month": datetime.now(timezone.utc).strftime("%Y-%m"), "start_balance": None, "min_balance": None}
+STARVED_COUNT = 0
+STARVED_LAST = None
 DEEPSEEK_FALLBACK = os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0") == "1"
 # A client that does its own cross-provider failover (pi's llm-failover extension)
 # sends `x-cc-proxy-fallback: none` so an exhausted pool surfaces as the normal
@@ -397,6 +401,8 @@ def save_usage_state() -> bool:
             "quota": quota_snapshot(t),
         } for t in STATE}
         data["_samples"] = SAMPLES
+        data["_deepseek_spend"] = DEEPSEEK_SPEND
+        data["_routing_starved"] = {"count": STARVED_COUNT, "last": STARVED_LAST}
         if FALLBACK["requests"]:
             data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
                                         "by_model": FALLBACK["by_model"]}
@@ -458,6 +464,14 @@ def restore_usage_state() -> None:
         tok.by_model = models if isinstance(models, dict) else {}
         restore_quota(tok, saved.get("quota"))
     global SAMPLES
+    global DEEPSEEK_SPEND, STARVED_COUNT, STARVED_LAST
+    spend = data.get("_deepseek_spend", {})
+    if isinstance(spend, dict):
+        DEEPSEEK_SPEND = {"month": spend.get("month"), "start_balance": spend.get("start_balance"), "min_balance": spend.get("min_balance")}
+    starved = data.get("_routing_starved", {})
+    if isinstance(starved, dict):
+        STARVED_COUNT = int(starved.get("count", 0) or 0)
+        STARVED_LAST = starved.get("last")
     saved_samples = data.get("_samples", {})
     SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
     now = time.time()
@@ -965,6 +979,24 @@ def safe_query(provider: str, auth: dict) -> dict:
     return {**result, "checked_at": int(time.time())}
 
 
+def update_deepseek_spend(balance: float, now: datetime | None = None) -> dict:
+    """Update monthly observed spend; a balance increase represents a top-up."""
+    now = now or datetime.now(timezone.utc)
+    month = now.strftime("%Y-%m")
+    if DEEPSEEK_SPEND.get("month") != month or DEEPSEEK_SPEND.get("start_balance") is None:
+        DEEPSEEK_SPEND.update(month=month, start_balance=balance, min_balance=balance)
+    elif balance > float(DEEPSEEK_SPEND.get("min_balance", balance)):
+        DEEPSEEK_SPEND.update(start_balance=balance, min_balance=balance)
+    else:
+        DEEPSEEK_SPEND["min_balance"] = min(float(DEEPSEEK_SPEND.get("min_balance", balance)), balance)
+    return DEEPSEEK_SPEND
+
+
+def deepseek_month_spend() -> float:
+    start, low = DEEPSEEK_SPEND.get("start_balance"), DEEPSEEK_SPEND.get("min_balance")
+    return max(0.0, float(start) - float(low)) if start is not None and low is not None else 0.0
+
+
 def refresh_providers() -> None:
     """Poll every non-Anthropic provider once; runs off the request path."""
     auth = read_auth()
@@ -972,6 +1004,15 @@ def refresh_providers() -> None:
         result = safe_query(provider, auth)
         with LOCK:
             PROVIDER_STATE[provider] = result
+            if provider == "deepseek" and result.get("status") == "ok":
+                rows = result.get("balances") or []
+                row = next((r for r in rows if r.get("currency") == "USD"), rows[0] if rows else {})
+                try:
+                    balance = float(row.get("total_balance"))
+                    update_deepseek_spend(balance)
+                    save_usage_state()
+                except (TypeError, ValueError):
+                    pass
             if provider == "openai-codex" and result.get("status") == "ok":
                 for window in result.get("windows", []):
                     used = window.get("used_percent")
@@ -1500,6 +1541,8 @@ def deepseek_candidate(model: str, state: dict) -> dict:
         out["reason"] = "unavailable"
     elif balance <= DEEPSEEK_MIN_BALANCE:
         out["reason"] = "balance below floor"
+    elif deepseek_month_spend() >= DEEPSEEK_MONTHLY_CAP:
+        out["reason"] = "monthly cap"
     else:
         out.update(routable=True, reason=None)
     return out
@@ -1541,6 +1584,20 @@ def route_payload(model: str, current: str | None = None) -> dict | None:
 
 
 # --- DeepSeek Anthropic-passthrough (opt-in) ----------------------------------
+
+
+def record_starvation(model: str) -> None:
+    global STARVED_COUNT, STARVED_LAST
+    payload = route_payload(model)
+    first = payload.get("first_routable") if payload else None
+    if not first:
+        return
+    last = {"ts": datetime.now(timezone.utc).isoformat(), "model": model, "provider": first.get("provider")}
+    with LOCK:
+        STARVED_COUNT += 1
+        STARVED_LAST = last
+        save_usage_state()
+    append_route({"kind": "starved", **last})
 
 
 def fallback_target(model: str) -> tuple[str | None, str]:
@@ -1615,12 +1672,15 @@ def usage_payload() -> dict:
         routing["fallback"] = fallback_payload()
         routing["deepseek_fallback"] = {
             "enabled": DEEPSEEK_FALLBACK, "min_balance": DEEPSEEK_MIN_BALANCE,
+            "monthly_cap": DEEPSEEK_MONTHLY_CAP, "monthly_spend": deepseek_month_spend(),
             "requests_total": FALLBACK["requests"], "by_model": FALLBACK["by_model"],
             "note": "opt-in passthrough of Claude Code requests to api.deepseek.com/anthropic when no "
                     "OAuth token is pickable; `fallback` is non-null only during such an episode",
         }
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
+    routing["starved"] = STARVED_COUNT
+    routing["starved_last"] = STARVED_LAST
     routing["recent"] = recent_routes()
     exhaustions = []
     weekly = []
@@ -1631,6 +1691,9 @@ def usage_payload() -> dict:
             if fc.get("exhaust_at") is not None:
                 exhaustions.append({"fp": token["fp"], "window": window,
                                     "at": datetime.fromtimestamp(fc["exhaust_at"], timezone.utc).isoformat()})
+    deepseek_state = providers.get("deepseek", {})
+    deepseek_state["monthly_cap"] = DEEPSEEK_MONTHLY_CAP
+    deepseek_state["monthly_spend"] = deepseek_month_spend()
     codex_state = providers.get("openai-codex", {})
     codex_forecasts = {}
     for item in codex_state.get("windows", []):
@@ -1779,6 +1842,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self._deepseek_fallback(endpoint, fwd, body, model):
                     return
                 log(f"WARNING: request rejected — no token pickable: {detail}")
+                record_starvation(model)
                 self._send_api_error(503, unavailable_message(model), "overloaded_error")
                 return
             with LOCK:
@@ -1877,6 +1941,8 @@ class Handler(BaseHTTPRequestHandler):
             return True
         record_fallback_request(model, target)
         log(f"{self.command} {endpoint} -> deepseek {target} status {resp.status}")
+        if resp.status >= 400:
+            record_starvation(model)
         self._stream(resp, None, model)
         conn.close()
         return True
