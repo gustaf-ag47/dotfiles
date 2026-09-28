@@ -8,6 +8,7 @@ import urllib.request
 import tempfile
 import unittest
 from unittest.mock import patch
+from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 PATH = Path(__file__).resolve().parents[2] / 'bin/claude-token-proxy'
 LOADER = importlib.machinery.SourceFileLoader('proxy_observability_subject', str(PATH))
@@ -16,8 +17,10 @@ proxy = importlib.util.module_from_spec(SPEC)
 LOADER.exec_module(proxy)
 
 
-class LedgerTests(unittest.TestCase):
+class LedgerTests(ProxyIsolationMixin, unittest.TestCase):
+    proxy = proxy
     def setUp(self):
+        super().setUp()
         proxy.SAMPLES.clear()
 
     def test_bounds_and_window_reset(self):
@@ -65,7 +68,8 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(proxy.recent_routes()[-1]['reason'], 'test')
 
 
-class EndpointTests(unittest.TestCase):
+class EndpointTests(ProxyIsolationMixin, unittest.TestCase):
+    proxy = proxy
     @classmethod
     def setUpClass(cls):
         cls.server = proxy.ThreadingHTTPServer(('127.0.0.1', 0), proxy.Handler)
