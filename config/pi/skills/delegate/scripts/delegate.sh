@@ -225,6 +225,15 @@ if [ "$PROBE" = "1" ]; then
 fi
 
 # ── boot the child ──────────────────────────────────────────────────────────
+if command -v llm-usage >/dev/null 2>&1; then
+  capacity_json=$(llm-usage --capacity --json 2>/dev/null) || capacity_json=
+  if [ -n "$capacity_json" ] && command -v python3 >/dev/null 2>&1; then
+    capacity=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["capacity"])' "$capacity_json" 2>/dev/null) || capacity=
+    if [[ "$capacity" =~ ^[0-9]+$ ]] && [ "$capacity" -le 0 ]; then
+      echo 'delegate: WARNING: no additional heavy sessions are safe for the next 2h (5h capacity estimate)' >&2
+    fi
+  fi
+fi
 tmux new-window -t "$SESSION" -n "$NAME" -c "$CWD" -d
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true

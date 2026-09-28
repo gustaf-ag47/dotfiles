@@ -312,6 +312,29 @@ FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model":
 SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
 ROUTING_LOG = CONTROL_DIR / "routing.log"
 MAX_SAMPLES = 200
+RAMP_CONCURRENCY = max(1, int(os.environ.get("CC_PROXY_RAMP_CONCURRENCY", "2")))
+RAMP_SECONDS = max(0, float(os.environ.get("CC_PROXY_RAMP_SECONDS", "60")))
+RAMP_LOCK = threading.Lock()
+RAMPS: dict[str, tuple[float, threading.Semaphore]] = {}
+IN_FLIGHT: dict[str, int] = {}
+
+
+def ramp_upstream(tok, method, path, headers, body):
+    """Gate new upstream calls after a move; never wait under the picker LOCK."""
+    with RAMP_LOCK:
+        until, gate = RAMPS.get(tok.fp, (0, None))
+        if until <= time.time():
+            gate = None
+    acquired = gate.acquire(timeout=5) if gate else False
+    with RAMP_LOCK:
+        IN_FLIGHT[tok.fp] = IN_FLIGHT.get(tok.fp, 0) + 1
+    try:
+        return upstream(method, path, headers, body, tok.token)
+    finally:
+        with RAMP_LOCK:
+            IN_FLIGHT[tok.fp] -= 1
+        if acquired:
+            gate.release()
 
 
 def forecast(samples, utilization, reset_at, now=None):
@@ -335,6 +358,9 @@ def forecast(samples, utilization, reset_at, now=None):
 
 
 def append_route(event):
+    if event.get("from_fp") and event.get("to_fp") and event.get("from_fp") != event.get("to_fp"):
+        with RAMP_LOCK:
+            RAMPS[event["to_fp"]] = (time.time() + RAMP_SECONDS, threading.Semaphore(RAMP_CONCURRENCY))
     try:
         CONTROL_DIR.mkdir(parents=True, exist_ok=True)
         if ROUTING_LOG.exists() and ROUTING_LOG.stat().st_size >= 1_000_000:
@@ -1269,6 +1295,22 @@ def _prune_affinity(now: float) -> None:
         LAST_PICK.popitem(last=False)
 
 
+def five_hour_pressure(t: Tok, now: float) -> float:
+    reset = _iso_epoch(t.u5_reset)
+    seconds = max(60.0, reset - now) if reset is not None and reset > now else 5 * 3600.0
+    return (1.0 - (five_hour_util(t, now) or 0.0)) / seconds
+
+
+def boundary_move(prev: Tok, pool: list[Tok], key: str, now: float, boundary: bool) -> Tok | None:
+    if not boundary or PICK_MODE != "pressure":
+        return None
+    highest = max(five_hour_pressure(t, now) for t in pool)
+    if five_hour_pressure(prev, now) * PICK_TOLERANCE >= highest:
+        return None
+    band = [t for t in pool if t.fp != prev.fp and five_hour_pressure(t, now) * PICK_TOLERANCE >= highest]
+    return next(t for t in band if t.fp == spread_choice(band, key, now))
+
+
 def spread_choice(band: list[Tok], key: str, now: float) -> str:
     """Pick the least-affined token in the tolerance band; pressure breaks ties."""
     counts = {t.fp: sum(1 for (_, bucket), (fp_, touched) in LAST_PICK.items()
@@ -1299,7 +1341,7 @@ def class_eligible(t, class_name: str | None, bucket: str, now: float) -> bool:
     return limit is None or t.u7_oi is None or t.u7_oi <= float(limit)
 
 
-def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None, class_name: str | None = None) -> Tok | None:
+def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None, class_name: str | None = None, boundary: bool = False) -> Tok | None:
     """Choose a token for the weekly bucket this request's model debits.
 
     Eligibility (valid, not cooling, not forced down) and the over-threshold
@@ -1333,8 +1375,10 @@ def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = 
             akey = _affinity_key(session_key, key)
             previous = LAST_PICK.get(akey)
             prev = next((t for t in pool if previous and t.fp == previous[0]), None)
-            if prev is not None and pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now):
-                best = prev
+            if prev is not None:
+                moved = boundary_move(prev, pool, key, now, boundary and session_key is not None)
+                best = moved or (prev if session_key is not None or
+                                 pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now) else best)
             elif previous is None:
                 # Within the tolerance band, spread new sessions across accounts.
                 band = [t for t in pool if pressure(t, key, now) * PICK_TOLERANCE >= pressure(best, key, now)]
@@ -1352,7 +1396,7 @@ def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = 
 ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
 
 
-def rank_pool(model: str, now: float | None = None, session_key: str | None = None, class_name: str | None = None) -> dict:
+def rank_pool(model: str, now: float | None = None, session_key: str | None = None, class_name: str | None = None, messages_len: int | None = None, boundary: bool = False) -> dict:
     """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
     now = time.time() if now is None else now
     key = "base" if PICK_MODE == "headroom" else bucket_key(model)
@@ -1397,9 +1441,14 @@ def rank_pool(model: str, now: float | None = None, session_key: str | None = No
             akey = _affinity_key(session_key, key)
             previous = LAST_PICK.get(akey)
             prev = next((r for r in eligible if previous and r["fp"] == previous[0]), None)
-            sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
-            if sticky:
-                chosen = prev["fp"]
+            if prev is not None:
+                prev_token = next(t for t in available if t.fp == prev["fp"])
+                pool_tokens = [t for t in available if any(r["fp"] == t.fp for r in eligible)]
+                moved = boundary_move(prev_token, pool_tokens, key, now,
+                                      session_key is not None and (boundary or messages_len is not None and messages_len <= 2))
+                chosen = (moved or (prev_token if session_key is not None or
+                                    prev["pressure"] * PICK_TOLERANCE >= best["pressure"] else
+                                    next(t for t in pool_tokens if t.fp == best["fp"]))).fp
             elif previous is None and eligible:
                 band = [r for r in eligible if r["pressure"] * PICK_TOLERANCE >= best["pressure"]]
                 band_tokens = [t for t in available if t.fp in {r["fp"] for r in band}]
@@ -1749,6 +1798,8 @@ def usage_payload() -> dict:
     with LOCK:
         toks = [t.snapshot() for t in STATE]
         routing = routing_preview()
+        routing["active_sessions"] = len({session for (session, _), (_, touched) in LAST_PICK.items()
+                                          if session != "global" and time.time() - touched <= 900})
         routing["fallback"] = fallback_payload()
         routing["deepseek_fallback"] = {
             "enabled": DEEPSEEK_FALLBACK, "min_balance": DEEPSEEK_MIN_BALANCE,
@@ -1894,6 +1945,11 @@ class Handler(BaseHTTPRequestHandler):
         endpoint = self.path.split("?", 1)[0]
         model = request_model(body)
         session_key = session_key_from(self.headers, body)
+        try:
+            messages_len = len(json.loads(body).get("messages", []))
+        except (ValueError, AttributeError, TypeError):
+            messages_len = None
+        boundary = (messages_len is not None and messages_len <= 2) or self.headers.get("x-cc-proxy-boundary") == "1"
         paced: set[str] = set()  # tokens already given one burst-429 pause
         class_name = self.headers.get("x-cc-proxy-class", "interactive")
         if self.headers.get("x-cc-proxy-class-escalate") == "1":
@@ -1909,7 +1965,7 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 bucket = bucket_key(model)
                 affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket))
-                tok = pick(exclude=tried, model=model, session_key=session_key, class_name=class_name)
+                tok = pick(exclude=tried, model=model, session_key=session_key, class_name=class_name, boundary=boundary)
                 previous = affinity_before[0] if affinity_before else None
                 if tok is not None and previous and previous != tok.fp:
                     # A session changed account: the only move that costs a prompt cache.
@@ -1918,6 +1974,10 @@ class Handler(BaseHTTPRequestHandler):
                         reason = "forced"
                     elif previous in tried or (previous_tok and time.time() < cooldown_deadline(previous_tok, model)):
                         reason = "cooldown"
+                    elif (previous_tok and boundary and
+                          five_hour_pressure(previous_tok, time.time()) * PICK_TOLERANCE <
+                          five_hour_pressure(tok, time.time())):
+                        reason = "5h"
                     else:
                         reason = "pressure"
                     log(f"session affinity moved bucket={bucket} reason={reason}")
@@ -1937,7 +1997,7 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 clear_fallback(f"token {tok.fp} pickable")
             try:
-                conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
+                conn, resp = ramp_upstream(tok, self.command, self.path, fwd, body)
                 record_request(tok, model)
             except Exception as exc:  # network error -> try next token
                 log(f"{self.command} {endpoint} -> token {tok.fp} ERROR {exc.__class__.__name__}")

@@ -11,6 +11,8 @@ import json
 import os
 from pathlib import Path
 import re
+import statistics
+import math
 import tempfile
 import time
 import urllib.error
@@ -573,10 +575,36 @@ def weekly_report(auth):
     return {'period_days':7,'P1_starved_requests':starved,'P2_weekly_waste_percent':rendered_windows or 'n/a','P2_note':'~ denotes current forecast projection; reset-time historical forecasts are unavailable from this telemetry shape.','P3_avoidable_5h_stalls':avoidable,'P3_note':'Approximation: cooldown move events are matched to the latest prior 5h sample within 10 minutes; samples do not prove account eligibility.','P4_opus_fable_token_share_percent':round(100*opus/total,1) if total else 'n/a','cache_hit_percent':cache}
 
 
+def capacity_report(data, horizon=2):
+    """Conservative estimate from observed 5h slopes; unknown slopes have no proven capacity."""
+    tokens = data.get('tokens') or []
+    active = max(1, int((data.get('routing') or {}).get('active_sessions') or 0))
+    burns = [v for t in tokens if t.get('valid', True)
+             if (v := numeric(((t.get('forecast') or {}).get('5h') or {}).get('burn_per_hour'))) is not None and v > 0]
+    per_session = statistics.median(burns) / active if burns else None
+    accounts = {}
+    for t in tokens:
+        quota = (t.get('quota') or {}).get('five_hour') or {}
+        used = numeric(quota.get('utilization'))
+        if used is not None and used > 1:
+            used /= 100
+        else:
+            used = numeric(t.get('u5'))
+        reset = to_epoch(quota.get('resets_at') or quota.get('reset_at') or t.get('u5_reset'))
+        headroom = max(0, 1 - used) if used is not None and (reset is None or reset > time.time()) else None
+        count = (max(0, math.floor(headroom / (per_session * horizon)))
+                 if headroom is not None and per_session and t.get('valid', True) else 0)
+        accounts[t.get('fp', 'unknown')] = count
+    return {'capacity': sum(accounts.values()), 'horizon': horizon, 'accounts': accounts,
+            'per_session_burn': per_session, 'active_sessions': active if burns else 0}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--week', action='store_true', help='Report rolling-seven-day routing metrics')
+    parser.add_argument('--capacity', action='store_true', help='Estimate additional 5h heavy-session capacity')
+    parser.add_argument('--horizon', type=float, default=2, help='Capacity planning horizon in hours (default: 2)')
     parser.add_argument('--refresh', action='store_true', help='Bypass the 60-second report cache (does not refresh OAuth)')
     parser.add_argument('--provider', choices=list(ADAPTERS))
     args = parser.parse_args()
@@ -588,6 +616,14 @@ def main():
         auth = {}
     if not isinstance(auth, dict):
         auth = {}
+    if args.capacity:
+        if args.horizon <= 0 or not math.isfinite(args.horizon):
+            parser.error('--horizon must be a positive finite number')
+        result = capacity_report(get_json(local_url() + '/_usage'), args.horizon)
+        accounts = ', '.join(f'{fp} {count}' for fp, count in result['accounts'].items())
+        print(json.dumps(result) if args.json else
+              f"capacity: {result['capacity']} more heavy sessions are safe for the next {args.horizon:g}h (accounts: {accounts})")
+        return
     if args.week:
         report = weekly_report(auth)
         print(json.dumps(report, indent=2) if args.json else '\n'.join(f'{key}: {value}' for key,value in report.items()))
