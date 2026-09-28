@@ -6,12 +6,17 @@ Pressure is `min((1-weekly_utilization)/weekly_seconds_to_reset, (1-five_hour_ut
 
 ## Verification
 
-- `python3 -m unittest tests.unit.test_claude_token_proxy tests.unit.test_llm_usage`: **93 tests, OK**.
-- `make test-unit`: **107 tests, OK (1 skipped)**.
-- Existing tests were preserved. No new dedicated tests for all requested affinity cases were added; this remains a review limitation.
-- Live verification was not performed: no requests were made to the live Anthropic service, so two-session account routing and journal evidence are unavailable. No user service was restarted.
+- `python3 -m unittest tests.unit.test_claude_token_proxy tests.unit.test_llm_usage`: **100 tests, OK**.
+- `make test-unit`: **114 tests, OK (1 skipped)**.
+- Added seven dedicated tests covering two-session spreading, same-session stickiness, cooldown movement, 5h threshold preference, 5h-pressure dominance, preview/picker parity with session key, and affinity expiry.
+- Live check used a separate worktree instance on port 8790 (`CCTOKEN_FILE=$HOME/cctoken`, isolated scratch cache); the system service on 8788 was untouched. Three `claude-haiku-4-5`, `max_tokens:1` Messages requests returned HTTP 200. Log evidence:
+  ```text
+  POST /v1/messages -> token ccb67338fbdb model=claude-haiku-4-5 ... status 200  # session A
+  POST /v1/messages -> token a5de118c98c0 model=claude-haiku-4-5 ... status 200  # session B
+  POST /v1/messages -> token ccb67338fbdb model=claude-haiku-4-5 ... status 200  # session A again
+  ```
 - Hot-spot concurrency ramp remains future work; omitted because it is not necessary to session-level spreading and would exceed the requested small change.
 
 ## Outstanding
 
-This change is not fully verified: live evidence and dedicated test coverage remain outstanding. Please review before merge.
+Concurrency hot-spot ramp remains future work; affinity now spreads newly opened sessions without introducing a coordination ramp.
