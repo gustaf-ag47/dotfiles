@@ -150,7 +150,7 @@ done < <(echo "$DATA" | jq -r '.tokens[] | [
 
 # Routing alerts are defensive: older proxy versions may not expose these fields.
 first_exhaust=$(echo "$DATA" | jq -r '.routing.forecast.first_exhaust.at // empty')
-starved=$(echo "$DATA" | jq -r '.routing.starved // 0')
+starved=$(echo "$DATA" | jq -r 'if (.routing.starved|type) == "number" then .routing.starved else 0 end')
 waste=$(echo "$DATA" | jq -r '[.tokens[]?.forecast // {} | to_entries[] | select(.key == "7d" or .key == "7d_oi") | select(.value.forecast == "waste" and ((1 - (.value.projected_at_reset // 1)) * 100) > 30)] | length')
 now=$(date +%s)
 critical=0

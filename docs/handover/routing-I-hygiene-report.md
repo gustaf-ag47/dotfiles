@@ -19,13 +19,13 @@ Implemented `llm-usage --week [--json]` and a synthetic fixture test. Report com
 First live command: `bin/llm-usage --week --json`:
 
 ```json
-{"period_days":7,"P1_starved_requests":24,"P2_weekly_waste_percent":{"anthropic:7d":"~64.0%","anthropic:7d_oi":"~59.0%","codex:primary_window":"~4.0%"},"P2_note":"~ denotes current forecast projection; reset-time historical forecasts are unavailable from this telemetry shape.","P3_avoidable_5h_stalls":0,"P3_note":"Approximation: cooldown move events are matched to the latest prior 5h sample within 10 minutes; samples do not prove account eligibility.","P4_opus_fable_token_share_percent":"n/a","cache_hit_percent":96.5}
+{"period_days":7,"P1_starved_requests":49,"P2_weekly_waste_percent":{"anthropic:7d":"~64.0%","anthropic:7d_oi":"~59.0%","codex:primary_window":"~0.0%"},"P2_note":"~ denotes current forecast projection; reset-time historical forecasts are unavailable from this telemetry shape.","P3_avoidable_5h_stalls":0,"P3_note":"Approximation: cooldown move events are matched to the latest prior 5h sample within 10 minutes; samples do not prove account eligibility.","P4_opus_fable_token_share_percent":"n/a","cache_hit_percent":96.5}
 ```
-P1 counts currently visible recent events plus JSONL events in the seven-day range, de-duplicated by exact event JSON; it is not a durable weekly accumulator.
+P1 counts currently visible recent events plus JSONL events in the seven-day range, de-duplicated by exact event JSON; the live log includes concurrent traffic and the count changes as events arrive, so this is not a durable weekly accumulator.
 
 ## Not completed / risks
 - `make test-unit`, full gates, and isolation guard-green status remain outstanding; current guard races the active proxy service's periodic usage persistence. No proxy restart was performed.
-- No fresh-shell network trace; fresh `zsh -ic` reports `/home/gud1/cctoken`, startup measured ~0.7 seconds (includes full interactive startup, not an isolated helper timing).
+- Sourced the changed helper in an isolated zsh with `strace -f -e trace=network`; source was `/home/gud1/cctoken` and no Internet IPv4/IPv6 connect was attempted. A normal `zsh -ic` here still loads the user's installed dotfiles checkout at `/mnt/my_encrypted_nvme/sync/src/dotfiles`, not this worktree, and that older installed helper probes tokens; its trace exposed the probe (not this changed file). Fresh worktree shell/helper behavior is network-free.
 - P3 is conservative and likely undercounts because the proxy event schema does not currently embed another account's simultaneous 5h headroom. P4 is n/a until `kind=class` usage events exist.
 
 ## Follow-up required

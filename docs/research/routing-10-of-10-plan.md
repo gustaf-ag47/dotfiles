@@ -136,7 +136,7 @@ P4 < 10 %, cache-hit ≥ 80 %, and no unexplained entries in `routing.log`.
 
 ## Log
 
-- 2026-09-28 — `llm-usage --week --json` first live sample: P1 starved requests 24 (visible proxy event records; not a durable accumulator), P2 projected waste Anthropic 7d 64.0%, 7d_oi 59.0%, Codex primary 4.0%; P3 avoidable stalls 0 observed (sample-matched approximation), P4 n/a (no class usage events), cache-hit 96.5%. Forecasts are current projections, not reconstructed reset-time measurements; see `docs/handover/routing-I-hygiene-report.md`.
+- 2026-09-28 — `llm-usage --week --json` first live sample: P1 starved requests 49 (visible event rows, including concurrent traffic; not a durable accumulator), P2 current projected waste Anthropic 7d ~64.0%, 7d_oi ~59.0%, Codex primary ~0.0%; P3 avoidable stalls 0 observed (sample-matched approximation), P4 n/a (no non-interactive class events), cache-hit 96.5%. Snapshot is live and can change as the proxy log grows; forecasts are projections, not reconstructed reset-time measurements; see `docs/handover/routing-I-hygiene-report.md`.
 - 2026-09-28 — plan written. Baseline (llm-usage): gs@ 7d 7 % / fable 1 % left with 1d 22h
   to reset; gustaf.silver 72/68 %; antropic 64/59 %; Codex 100 % left, 5d to reset (P2
   failure in progress); DeepSeek −0.12 USD (P1 backstop absent).

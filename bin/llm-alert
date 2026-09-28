@@ -4,7 +4,7 @@ url="${PI_ANTHROPIC_PROXY_URL:-http://127.0.0.1:${CC_PROXY_PORT:-8788}}"
 data=$(curl -fsS --max-time 5 "$url/_usage")
 state=normal
 reason=''
-if jq -e '(.routing.starved // 0) > 0' <<<"$data" >/dev/null; then state=critical; reason='Routing reports starved requests'; fi
+if jq -e '((if (.routing.starved|type) == "number" then .routing.starved else 0 end) > 0)' <<<"$data" >/dev/null; then state=critical; reason='Routing reports starved requests'; fi
 at=$(jq -r '.routing.forecast.first_exhaust.at // empty' <<<"$data")
 if [[ -n "$at" ]]; then
     exhaust_epoch=$(date -d "$at" +%s 2>/dev/null || echo 0)
