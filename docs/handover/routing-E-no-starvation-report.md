@@ -19,7 +19,7 @@ Date: 2026-09-28. Branch: `feat/routing-e-no-starvation`.
 
 ## Isolated live wait check
 
-Port **8790 was already occupied** by an existing `python3 bin/claude-token-proxy --port 8790 --token-file /home/gud1/cctoken` process. Attempting to start the requested isolated process failed with `OSError: [Errno 98] Address already in use`; I did not modify or stop that process. I performed the same isolated check on 8791, with `CCTOKEN_FILE=$HOME/cctoken` and a separate `XDG_CACHE_HOME` at `/mnt/my_encrypted_nvme/sync/tmp/pi-scratch/routing-e/cache2`:
+The first attempt encountered an existing listener on 8790 (`OSError: [Errno 98] Address already in use`); after that process exited, I successfully started the required separate instance on **8790**, with `CCTOKEN_FILE=$HOME/cctoken` and separate `XDG_CACHE_HOME=/mnt/my_encrypted_nvme/sync/tmp/pi-scratch/routing-e/cache-8790`:
 
 ```text
 llm-wait: waiting for anthropic.routable; earliest known reset: unknown
@@ -28,7 +28,14 @@ EXIT=2
 llm-wait: predicate satisfied for claude-sonnet-5
 ```
 
-The three fingerprints (`ccb67338fbdb`, `82a293204226`, `a5de118c98c0`) were written to that isolated instance's `force_cooldown`, then the file was removed. The temporary 8791 process was stopped. No 8788 service/cache was touched. Exact-port 8790 live check remains unverified because of the port collision above.
+The three fingerprints (`ccb67338fbdb`, `82a293204226`, `a5de118c98c0`) were written to that isolated instance's `force_cooldown`, then the file was removed. The temporary 8790 process was stopped. No 8788 service/cache was touched. Actual output:
+
+```text
+llm-wait: waiting for anthropic.routable; earliest known reset: unknown
+llm-wait: timed out
+WAIT_EXIT=2
+llm-wait: predicate satisfied for claude-sonnet-5
+```
 
 ## Commits
 
