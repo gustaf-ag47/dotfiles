@@ -9,7 +9,9 @@
 //      never sees it, and `/model anthropic/…` works mid-session.
 //   2. anthropic-token-proxy.ts: baseUrl → proxy; `x-cc-proxy-fallback: none` so
 //      an exhausted pool surfaces as an error llm-failover.ts can act on instead
-//      of being silently served (and billed) by DeepSeek.
+//      of being silently served (and billed) by DeepSeek. `x-cc-proxy-session`
+//      names this pi session so the proxy can keep it on one account (prompt
+//      cache) while spreading concurrent sessions across accounts.
 //   3. anthropic-oauth-claude-code-identity.ts: Anthropic rejects OAuth requests
 //      that carry pi's harness prompt as a second system block, so keep only the
 //      Claude Code identity in `system` and move the harness prompt into the
@@ -27,6 +29,7 @@ export const ANTHROPIC = "anthropic";
 export const PLACEHOLDER_KEY = "sk-ant-oat01-proxy-injects-the-real-credential";
 export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 export const STATUS_TIMEOUT_MS = 1_500;
+export const SESSION_HEADER = "x-cc-proxy-session";
 
 /** Proxy origin from the environment, or null when the operator opted out of the pool. */
 export function proxyOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -66,6 +69,15 @@ export function moveHarnessPromptIntoFirstMessage(payload: unknown): Payload | n
 	return next;
 }
 
+/** Stable per-session key for proxy affinity; never includes user content. */
+export function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } }, fallback: string): string {
+	try {
+		const id = ctx.sessionManager?.getSessionId?.();
+		if (typeof id === "string" && id) return `pi-${id}`;
+	} catch { /* fall through */ }
+	return fallback;
+}
+
 /** One-line verdict for the startup check; null means nothing to say. */
 export function statusLine(status: { available?: number; tokens?: unknown[] } | null, origin: string): string | null {
 	if (status === null) return `⚠ anthropic pool: claude-token-proxy not reachable at ${origin} — Anthropic models will fail; Codex/DeepSeek unaffected (systemctl --user start claude-token-proxy)`;
@@ -95,6 +107,14 @@ export default function anthropicPool(pi: ExtensionAPI) {
 		baseUrl: origin,
 		apiKey: PLACEHOLDER_KEY,
 		headers: { "x-cc-proxy-fallback": "none" },
+	});
+
+	// One key per pi session (falls back to one per process). Sent only to the
+	// proxy: the anthropic provider is the only one whose baseUrl is the proxy.
+	const processKey = `pi-${process.pid}-${Date.now().toString(36)}`;
+	pi.on("before_provider_headers", (event, ctx: ExtensionContext) => {
+		if (ctx.model?.provider !== ANTHROPIC) return;
+		event.headers[SESSION_HEADER] = sessionKey(ctx, processKey);
 	});
 
 	pi.on("before_provider_request", (event, ctx: ExtensionContext) => {

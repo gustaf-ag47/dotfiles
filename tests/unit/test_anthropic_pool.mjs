@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import anthropicPool, {
-  ANTHROPIC, CLAUDE_CODE_IDENTITY, PLACEHOLDER_KEY, fetchStatus, moveHarnessPromptIntoFirstMessage,
-  proxyOrigin, statusLine,
+  ANTHROPIC, CLAUDE_CODE_IDENTITY, PLACEHOLDER_KEY, SESSION_HEADER, fetchStatus, moveHarnessPromptIntoFirstMessage,
+  proxyOrigin, sessionKey, statusLine,
 } from '../../config/pi/extensions/anthropic-pool.ts';
 
 const oauthPayload = (messages) => ({
@@ -113,4 +113,18 @@ test('session_start warns only for anthropic sessions and only when unhealthy', 
   } finally {
     if (saved === undefined) delete process.env.PI_ANTHROPIC_PROXY_URL; else process.env.PI_ANTHROPIC_PROXY_URL = saved;
   }
+});
+
+test('session header: anthropic only, stable per session, process fallback', () => {
+  const { handlers } = fakePi();
+  const sm = { getSessionId: () => 'abc' };
+  const h1 = {}; handlers.before_provider_headers({ headers: h1 }, { model: { provider: ANTHROPIC }, sessionManager: sm });
+  const h2 = {}; handlers.before_provider_headers({ headers: h2 }, { model: { provider: ANTHROPIC }, sessionManager: sm });
+  assert.equal(h1[SESSION_HEADER], 'pi-abc');
+  assert.equal(h2[SESSION_HEADER], 'pi-abc');
+  const h3 = {}; handlers.before_provider_headers({ headers: h3 }, { model: { provider: 'openai-codex' }, sessionManager: sm });
+  assert.equal(h3[SESSION_HEADER], undefined);
+  const h4 = {}; handlers.before_provider_headers({ headers: h4 }, { model: { provider: ANTHROPIC } });
+  assert.match(h4[SESSION_HEADER], /^pi-\d+-/);
+  assert.equal(sessionKey({ sessionManager: { getSessionId: () => { throw new Error('x'); } } }, 'fb'), 'fb');
 });
