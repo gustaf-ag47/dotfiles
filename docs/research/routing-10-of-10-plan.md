@@ -140,3 +140,12 @@ P4 < 10 %, cache-hit ≥ 80 %, and no unexplained entries in `routing.log`.
 - 2026-09-28 — plan written. Baseline (llm-usage): gs@ 7d 7 % / fable 1 % left with 1d 22h
   to reset; gustaf.silver 72/68 %; antropic 64/59 %; Codex 100 % left, 5d to reset (P2
   failure in progress); DeepSeek −0.12 USD (P1 backstop absent).
+- 2026-09-28 (later) — Phases 0–4 implemented and live on the proxy (tasks A–I merged on
+  `feat/pi-wait-for-quota-reset`, 154 Python + 35 TS tests). First `llm-usage --week`
+  baseline after cleaning leaked test rows: P1 = 0, P3 = 0, cache-hit 96.5 %, P2 Codex ~0 %
+  (Anthropic windows scored at their next reset), P4 n/a until class events accrue.
+  `/_route?class=build` → codex/gpt-6-sol, `?class=mechanical` → codex/gpt-6-luna; base
+  bucket `preferred` = codex (spending the week that was expiring). Open: F4 (needs two
+  weeks of `--week`), E3 (second Codex sub?), I4 (academy fleet), nit: `--capacity` prints
+  0 instead of "unknown" before burn samples exist. Operator steps pending: DeepSeek top-up
+  wizard; `systemctl --user enable --now llm-alert.timer llm-schedule.timer`.
