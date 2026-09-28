@@ -5,6 +5,8 @@ description: Generate a Ralph PLAN/BUILD loop from an idea or specification. Use
 
 # Ralph loop
 
+Generated loops should invoke `llm-wait` before each iteration for the selected provider's `.routable` predicate, and again after a proxy 503, rather than exiting on transient quota exhaustion. Bound waits with `--max` and let the operator choose the next action on timeout.
+
 ## Clarify
 
 Read repository guidance, current git status, existing Ralph runners, architecture docs, and relevant implementation before choosing paths or commands. Treat previous conversation decisions as answered questions.

@@ -119,7 +119,9 @@ plus a startup grace window (`PI_DELEGATE_MIN_GRACE_SECS`, default 45s). Without
 reports "finished" during startup, which is the same mistake as calling a not-yet-ready
 TUI ready.
 
-Knobs: `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20), `PI_DELEGATE_IDLE_STREAK`
+Before probing, the launcher waits for a selected provider to become routable via `llm-wait`. Set `PI_DELEGATE_WAIT_MAX` (default `2h`) to bound that wait; a timed-out Codex wait proceeds to the existing alternate-model/probe fallback path.
+
+Knobs: `PI_DELEGATE_WAIT_MAX` (2h), `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20), `PI_DELEGATE_IDLE_STREAK`
 (3), `PI_DELEGATE_MIN_GRACE_SECS` (45), `PI_DELEGATE_WATCH_HOURS` (12). `--no-notify`
 disables it.
 

@@ -176,6 +176,27 @@ EOF
 	exit 0
 fi
 
+# Wait for the selected provider to become routable before spending a probe request.
+if [ "$PROBE" = "1" ] && command -v llm-wait >/dev/null 2>&1; then
+  selected_provider="$PROVIDER"
+  if [ -z "$selected_provider" ] && [[ "$MODEL" == */* ]]; then selected_provider="${MODEL%%/*}"; fi
+  case "$selected_provider" in openai-codex) wait_provider=codex ;; *) wait_provider="$selected_provider" ;; esac
+  if [ -n "$wait_provider" ]; then
+    route_model="${MODEL#*/}"
+    if [ "$route_model" = "$MODEL" ]; then route_model="claude-sonnet-5"; fi
+    if llm-wait --until "$wait_provider.routable" --model "$route_model" --max "${PI_DELEGATE_WAIT_MAX:-2h}"; then
+      :
+    else
+      wait_status=$?
+      if [ "$wait_status" = "2" ] && [ "$wait_provider" = "codex" ]; then
+        echo "delegate: Codex quota wait timed out; continuing to the existing probe/fallback"
+      else
+        die "waiting for $wait_provider routing failed (status $wait_status)"
+      fi
+    fi
+  fi
+fi
+
 # ── probe the model: an exhausted quota pool dies instantly and silently ─────
 if [ "$PROBE" = "1" ]; then
 	printf 'delegate: probing %s ... ' "$MODEL"
