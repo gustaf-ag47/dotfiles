@@ -8,6 +8,39 @@ from tests.unit import test_claude_token_proxy as proxy_tests
 proxy = proxy_tests.proxy
 
 
+class SweepTests(OracleFixture):
+    def test_sweep_boosts_pick_and_preview_without_5h_stall(self):
+        now = time.time()
+        a = self.token(u7=.60)
+        b = self.token(name="other-token", u7=.20)
+        a.u7_reset = b.u7_reset = proxy.datetime.fromtimestamp(now + 3600, proxy.timezone.utc).isoformat()
+        a.u5 = b.u5 = .1
+        a.u5_reset = b.u5_reset = proxy.datetime.fromtimestamp(now + 3600, proxy.timezone.utc).isoformat()
+        proxy.SAMPLES[a.fp] = {"7d": [[now - 3600, .58], [now, .60]]}
+        proxy.SWEEP_BOOST = 4
+        self.addCleanup(setattr, proxy, "SWEEP_BOOST", 2.0)
+        self.assertEqual(proxy.sweep_factor(a, "base", now), 4)
+        self.assertEqual(proxy.sweep_factor(b, "base", now), 1)
+        preview = proxy.rank_pool("claude-opus-5", now)
+        self.assertTrue(next(r for r in preview["ranking"] if r["fp"] == a.fp)["sweep"])
+        self.assertEqual(preview["would_pick"], proxy.pick(model="claude-opus-5").fp)
+        a.u5 = .99
+        self.assertEqual(proxy.sweep_factor(a, "base", now), 1)
+
+    def test_codex_short_window_limits_weekly_sweep(self):
+        now = time.time()
+        state = codex_state(used=40)
+        state["windows"][0].update(reset_at=now + 3600, window_seconds=604800)
+        state["windows"].append({"name": "secondary_window", "used_percent": 95,
+                                 "reset_at": now + 1800, "window_seconds": 18000})
+        state["forecast"] = {"primary_window": {"forecast": "waste"}}
+        candidate = proxy.codex_candidate("gpt-6-luna", state)
+        self.assertAlmostEqual(candidate["pressure"], min(.6 / 3600 * 2, .05 / 1800))
+        state["windows"][1]["used_percent"] = 99
+        candidate = proxy.codex_candidate("gpt-6-luna", state)
+        self.assertAlmostEqual(candidate["pressure"], min(.6 / 3600, .01 / 1800))
+
+
 class CrossProviderEDFTests(OracleFixture):
     def providers(self, state):
         proxy.PROVIDER_STATE = {"openai-codex": state, "deepseek": deepseek_state()}
