@@ -1,27 +1,57 @@
-# Routing D observability — implementation report
+# Routing D observability — report
 
-## Status: blocked / partial
+## Schema and implementation
 
-This branch adds an initial bounded per-token sample ledger, persisted as `_samples` in `usage.json`, a pure slope/forecast helper, routing-log append/rotation helpers, forecast fields on token snapshots, recent-route/routing-summary placeholders, and a loopback-only `POST /_event`. Token values are not included in telemetry. The `/_event` schema accepts `{kind, from, to, reason}`.
+- `usage.json["_samples"][fingerprint]["5h"|"7d"|"7d_oi"]`: bounded (200) `[epoch_seconds, utilization_fraction]` points. Sampled on header observations; restored history is validated, aged out after eight days, limited to present fingerprints, and reset-crossing history is dropped. `usage.json` remains atomic best-effort persistence.
+- Each `tokens[]` row has `forecast[window]` with `burn_per_hour` (fraction/hour, null without two observations spanning 15 minutes), `projected_at_reset` (fraction, clamped 0–1), `forecast` (`waste|exhaust|on_track|unknown`), and numeric epoch `exhaust_at` or null. Quota API utilization supersedes header utilization when available.
+- `providers.openai-codex.forecast[window-name]` exposes the same fields, using Codex window utilization/reset. Codex has no locally observed time series, so its slope is currently unknown (and forecast unknown) until a ledger source exists.
+- `routing.forecast` has `weekly_waste_percent` (mean predicted unused 7d/7d_oi headroom for windows with usable forecasts; null if unavailable) and `first_exhaust` (`{fp, window, at}` ISO timestamp or null). `routing.recent` is the last 20 JSONL events.
+- Routing switch events are appended to `$XDG_CACHE_HOME/cc-proxy/routing.log`; at 1 MB it rotates to `routing.log.1`. Account selection changes are logged per bucket with fingerprint-only `from_fp`/`to_fp`, timestamp, and known `cooldown`/`forced`/`pressure` reason. `POST /_event` accepts JSON `{kind, from, to, reason}` from loopback only; bounded values are appended to the same log.
+- `llm-usage` carries `/_usage` fields through its JSON report and renders burn/waste/exhaust/on-track suffixes when supplied, plus pool forecast and three recent route entries.
 
-The requested end-to-end work is **not complete**. In particular, account-to-account route change detection is not wired; samples are not yet validated/pruned robustly on restore; Codex forecast and pool weekly-waste/first-exhaust calculations are absent; the `llm-usage` rendering/JSON additions and synthetic observability tests are absent; no live second-instance check was performed. Do not rely on the placeholder pool forecast values.
+### Sibling A integration snippet
 
-## Suggested sibling A extension call
-
-At the provider-switch site in `config/pi/extensions/llm-failover.ts`, after deciding the switch and without awaiting/blocking failover, post to the local proxy:
+At the extension provider-switch decision, fire-and-forget after the decision (do not make failover depend on telemetry):
 
 ```ts
 void fetch(`${proxyUrl}/_event`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "provider_switch", from: previousProvider, to: nextProvider, reason }) }).catch(() => {});
 ```
 
-## Validation
+## Gates
 
-- `python3 -m py_compile bin/claude-token-proxy`: pass.
-- `python3 -m unittest tests.unit.test_claude_token_proxy tests.unit.test_llm_usage`: pass (93 tests).
-- `tests.unit.test_proxy_observability`: not created; required gate incomplete.
-- `make test-unit`: not run.
-- Live check: not run.
+- `python3 -m unittest tests.unit.test_claude_token_proxy tests.unit.test_proxy_observability tests.unit.test_llm_usage`: **pass**, 100 tests.
+- `make test-unit`: **pass**, 114 tests, 1 existing integration test skipped.
 
-## Live output
+## Second-instance live check
 
-Unavailable: no second instance was started. The required `/_usage` curl and `llm-usage` output remain to be captured after completion.
+Started an isolated `Handler` instance on `127.0.0.1:8790`, initialized with a synthetic token (no OAuth refresh, no live service restart); cache root was `$(pi-scratch dir routing-d)/cache`.
+
+`curl -s localhost:8790/_usage | jq '.routing.forecast, .routing.recent'`:
+
+```json
+{
+  "weekly_waste_percent": null,
+  "first_exhaust": null
+}
+[]
+```
+
+`PI_ANTHROPIC_PROXY_URL=http://127.0.0.1:8790 XDG_CACHE_HOME=... bin/llm-usage --provider anthropic --refresh`:
+
+```text
+LLM usage left   (checked 08:20:32)
+
+anthropic
+  5d77358bce3d  UNKNOWN · awaiting fresh reading
+    5h        ????????????????????   ?% left
+    7d        ????????????????????   ?% left
+
+routing  mode=pressure threshold=0.98
+  forecast  weekly waste ? · no projected exhaust
+  opus/sonnet (7d)   → 5d77358bce3d
+      ● 5d77358bce3d    ?% left  pressure 1.65
+  fable (7d fable)   → 5d77358bce3d
+      ● 5d77358bce3d    ?% left  pressure 1.65
+```
+
+The synthetic instance intentionally has no quota observations, hence null pool forecast.

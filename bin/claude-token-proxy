@@ -238,8 +238,15 @@ class Tok:
         now = time.time()
         windows = {"5h": (self.u5, self.u5_reset), "7d": (self.u7, self.u7_reset),
                    "7d_oi": (self.u7_oi, self.u7_oi_reset)}
-        forecasts = {key: forecast(SAMPLES.get(self.fp, {}).get(key, []), value, _iso_epoch(reset), now)
-                     for key, (value, reset) in windows.items()}
+        forecasts = {}
+        for key, (value, reset) in windows.items():
+            quota_key = {"5h": "five_hour", "7d": "seven_day", "7d_oi": "seven_day_overage_included"}[key]
+            quota_window = (self.quota or {}).get(quota_key, {}) if isinstance(self.quota, dict) else {}
+            quota_used = quota_window.get("utilization") if isinstance(quota_window, dict) else None
+            if isinstance(quota_used, (int, float)):
+                value = quota_used / 100 if quota_used > 1 else quota_used
+                reset = quota_window.get("resets_at") or quota_window.get("reset_at") or reset
+            forecasts[key] = forecast(SAMPLES.get(self.fp, {}).get(key, []), value, _iso_epoch(reset), now)
         return {
             "fp": self.fp,
             "label": self.label,
@@ -295,6 +302,7 @@ FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model":
 SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
 ROUTING_LOG = CONTROL_DIR / "routing.log"
 MAX_SAMPLES = 200
+LAST_ROUTE: dict[str, str] = {}
 
 
 def forecast(samples, utilization, reset_at, now=None):
@@ -323,7 +331,7 @@ def append_route(event):
         if ROUTING_LOG.exists() and ROUTING_LOG.stat().st_size >= 1_000_000:
             ROUTING_LOG.replace(ROUTING_LOG.with_suffix(".log.1"))
         with ROUTING_LOG.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(event, separators=(",", ":")) + "\\n")
+            stream.write(json.dumps(event, separators=(",", ":")) + "\n")
     except OSError:
         pass
 
@@ -343,7 +351,10 @@ def record_sample(tok):
         if value is None:
             continue
         series = SAMPLES.setdefault(tok.fp, {}).setdefault(name, [])
-        if reset and series and series[-1][0] > float(reset):
+        reset_epoch = _iso_epoch(reset)
+        if reset_epoch is not None and now >= reset_epoch:
+            series.clear()
+        elif reset_epoch is not None and series and series[-1][0] >= reset_epoch:
             series.clear()
         series.append([now, float(value)])
         del series[:-MAX_SAMPLES]
@@ -436,6 +447,22 @@ def restore_usage_state() -> None:
     global SAMPLES
     saved_samples = data.get("_samples", {})
     SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
+    now = time.time()
+    valid_fps = {tok.fp for tok in STATE}
+    for fingerprint in list(SAMPLES):
+        if fingerprint not in valid_fps or not isinstance(SAMPLES[fingerprint], dict):
+            SAMPLES.pop(fingerprint, None)
+            continue
+        for bucket, points in list(SAMPLES[fingerprint].items()):
+            reset = {"5h": next((t.u5_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d": next((t.u7_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d_oi": next((t.u7_oi_reset for t in STATE if t.fp == fingerprint), None)}.get(bucket)
+            boundary = _iso_epoch(reset)
+            cleaned = [p for p in points if isinstance(p, list) and len(p) == 2
+                       and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))
+                       and p[0] <= now and now-p[0] < 8*86400
+                       and (boundary is None or p[0] > boundary)] if isinstance(points, list) else []
+            SAMPLES[fingerprint][bucket] = cleaned[-MAX_SAMPLES:]
     saved = data.get(FALLBACK_STATE_KEY, {})
     if isinstance(saved, dict):
         FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
@@ -1499,7 +1526,26 @@ def usage_payload() -> dict:
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
     routing["recent"] = recent_routes()
-    routing["forecast"] = {"weekly_waste_percent": None, "first_exhaust": None}
+    exhaustions = []
+    weekly = []
+    for token in toks:
+        for window, fc in token.get("forecast", {}).items():
+            if window in ("7d", "7d_oi") and fc.get("projected_at_reset") is not None:
+                weekly.append(100 * max(0.0, 1.0 - fc["projected_at_reset"]))
+            if fc.get("exhaust_at") is not None:
+                exhaustions.append({"fp": token["fp"], "window": window,
+                                    "at": datetime.fromtimestamp(fc["exhaust_at"], timezone.utc).isoformat()})
+    codex_state = providers.get("openai-codex", {})
+    codex_forecasts = {}
+    for item in codex_state.get("windows", []):
+        reset = item.get("reset_at")
+        used = item.get("used_percent")
+        if isinstance(reset, (int, float)) and isinstance(used, (int, float)):
+            name = item.get("name", "window")
+            codex_forecasts[name] = forecast([], used / 100, reset)
+    codex_state["forecast"] = codex_forecasts
+    routing["forecast"] = {"weekly_waste_percent": round(sum(weekly)/len(weekly), 1) if weekly else None,
+                            "first_exhaust": min(exhaustions, key=lambda x: x["at"]) if exhaustions else None}
     anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
                  "checked_at": int(max(checked)) if checked else None}
     return {
@@ -1612,6 +1658,20 @@ class Handler(BaseHTTPRequestHandler):
         for _ in range(max(1, valid_count + 1) + valid_count):
             with LOCK:
                 tok = pick(exclude=tried, model=model)
+                if tok is not None:
+                    bucket = bucket_key(model)
+                    previous = LAST_ROUTE.get(bucket)
+                    if previous and previous != tok.fp:
+                        previous_tok = next((item for item in STATE if item.fp == previous), None)
+                        if previous in forced_cooldown_fps():
+                            reason = "forced"
+                        elif previous_tok and time.time() < cooldown_deadline(previous_tok, model):
+                            reason = "cooldown"
+                        else:
+                            reason = "pressure"
+                        append_route({"ts": datetime.now(timezone.utc).isoformat(), "bucket": bucket,
+                                      "from_fp": previous, "to_fp": tok.fp, "reason": reason})
+                    LAST_ROUTE[bucket] = tok.fp
             if tok is None:
                 with LOCK:
                     detail = ", ".join(
@@ -1724,12 +1784,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if urllib.parse.urlsplit(self.path).path != "/_event":
-            self._send_api_error(404, "not found")
+            self._proxy()
             return
         try:
             if self.client_address[0] not in ("127.0.0.1", "::1"):
                 self._send_api_error(403, "loopback only")
                 return
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("expected application/json")
             length = int(self.headers.get("Content-Length", "0"))
             if length > 4096:
                 raise ValueError("body too large")
@@ -1755,7 +1817,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._proxy()
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
+    do_PUT = do_DELETE = do_PATCH = _proxy
 
     def _stream(self, resp, tok: Tok | None, model: str):
         content_type = resp.getheader("content-type", "")
