@@ -58,6 +58,16 @@ def iso_in(**delta) -> str:
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
 
 
+class SessionKeyTests(TestCase):
+    def test_session_key_header_metadata_system_and_global_fallbacks(self):
+        body = json.dumps({"metadata": {"user_id": "body-session"}, "system": "prompt"}).encode()
+        self.assertEqual(proxy.session_key_from({"x-cc-proxy-session": "header-session"}, body), "header-session")
+        self.assertEqual(proxy.session_key_from({}, body), "body-session")
+        hashed = proxy.session_key_from({}, json.dumps({"system": "prompt"}).encode())
+        self.assertEqual(hashed, "system:" + proxy.hashlib.sha256(b'"prompt"').hexdigest())
+        self.assertIsNone(proxy.session_key_from({}, b'{"messages": []}'))
+
+
 class PickPolicyTests(TestCase):
     """Selection policy: pressure (EDF-with-headroom), model-aware buckets."""
 
@@ -118,7 +128,7 @@ class PickPolicyTests(TestCase):
         reset = iso_in(days=3)
         slightly_better = self.make("a", u7=0.5, u7_reset=reset)
         previous = self.make("b", u7=0.6, u7_reset=reset)
-        proxy.LAST_PICK["base"] = previous.fp
+        proxy.LAST_PICK[("global", "base")] = (previous.fp, time.time())
         # 0.5/0.4 = 1.25x gap < 1.5 tolerance -> stay for the prompt cache.
         self.assertIs(proxy.pick(model="claude-opus-5"), previous)
         self.assertIsNotNone(slightly_better)
@@ -127,7 +137,7 @@ class PickPolicyTests(TestCase):
         reset = iso_in(days=3)
         much_better = self.make("a", u7=0.1, u7_reset=reset)
         previous = self.make("b", u7=0.9, u7_reset=reset)
-        proxy.LAST_PICK["base"] = previous.fp
+        proxy.LAST_PICK[("global", "base")] = (previous.fp, time.time())
         self.assertIs(proxy.pick(model="claude-opus-5"), much_better)
 
     def test_two_sessions_spread_across_tokens_within_pressure_band(self):

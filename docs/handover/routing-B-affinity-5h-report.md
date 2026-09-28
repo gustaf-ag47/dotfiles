@@ -6,8 +6,8 @@ Pressure is `min((1-weekly_utilization)/weekly_seconds_to_reset, (1-five_hour_ut
 
 ## Verification
 
-- `python3 -m unittest tests.unit.test_claude_token_proxy tests.unit.test_llm_usage`: **100 tests, OK**.
-- `make test-unit`: **114 tests, OK (1 skipped)**.
+- `python3 -m unittest tests.unit.test_claude_token_proxy tests.unit.test_llm_usage`: **101 tests, OK**.
+- `make test-unit`: **115 tests, OK (1 skipped)**.
 - Added seven dedicated tests covering two-session spreading, same-session stickiness, cooldown movement, 5h threshold preference, 5h-pressure dominance, preview/picker parity with session key, and affinity expiry.
 - Live check used a separate worktree instance on port 8790 (`CCTOKEN_FILE=$HOME/cctoken`, isolated scratch cache); the system service on 8788 was untouched. Three `claude-haiku-4-5`, `max_tokens:1` Messages requests returned HTTP 200. Log evidence:
   ```text
