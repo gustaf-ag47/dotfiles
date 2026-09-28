@@ -31,6 +31,7 @@
 set -euo pipefail
 
 BRIEF="" TASK="" NAME="" CWD="$PWD" MODEL="${PI_DELEGATE_MODEL:-}" AGENT="pi"
+CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0
 PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
@@ -41,7 +42,8 @@ while [ $# -gt 0 ]; do
 	--task) TASK="${2:?}"; shift 2 ;;
 	--name) NAME="${2:?}"; shift 2 ;;
 	--cwd) CWD="${2:?}"; shift 2 ;;
-	--model) MODEL="${2:?}"; shift 2 ;;
+	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
+	--class) CLASS="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
 	--provider) PROVIDER="${2:?}"; shift 2 ;;
 	--worktree) WORKTREE="${2:?}"; shift 2 ;;
@@ -158,6 +160,11 @@ while tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$NAME"; do
 done
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if [ "$MODEL_EXPLICIT" = "0" ]; then
+	ROUTE_URL="http://127.0.0.1:${CC_PROXY_PORT:-8788}/_route?class=${CLASS}"
+	MODEL="$(curl -fsS "$ROUTE_URL" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d.get("preferred") or d.get("first_routable") or {}; print(p.get("provider","")+"/"+p.get("model", ""))' || true)"
+	[ -n "$MODEL" ] || MODEL="${PI_DELEGATE_MODEL:-openai-codex/gpt-6-luna}"
+fi
 MODEL_ARGS=()
 [ -z "$PROVIDER" ] || MODEL_ARGS+=(--provider "$PROVIDER")
 [ -z "$MODEL" ] || MODEL_ARGS+=(--model "$MODEL")
@@ -221,7 +228,7 @@ fi
 tmux new-window -t "$SESSION" -n "$NAME" -c "$CWD" -d
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
-CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID")
+CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS")
 # tmux's server environment may predate this shell/profile. Pass only the
 # explicitly selected profile/offline settings, never credentials in argv.
 [ -z "${PI_CODING_AGENT_DIR:-}" ] || CHILD_ENV+=("PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR")

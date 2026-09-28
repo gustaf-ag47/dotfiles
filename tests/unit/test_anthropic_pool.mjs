@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import anthropicPool, {
-  ANTHROPIC, CLAUDE_CODE_IDENTITY, PLACEHOLDER_KEY, SESSION_HEADER, fetchStatus, moveHarnessPromptIntoFirstMessage,
+  ANTHROPIC, CLAUDE_CODE_IDENTITY, CLASS_HEADER, PLACEHOLDER_KEY, SESSION_HEADER, fetchStatus, moveHarnessPromptIntoFirstMessage,
   proxyOrigin, sessionKey, statusLine,
 } from '../../config/pi/extensions/anthropic-pool.ts';
 
@@ -115,6 +115,26 @@ test('session_start warns only for anthropic sessions and only when unhealthy', 
   }
 });
 
+test('class and escalation headers are sent only to Anthropic', () => {
+  const oldClass = process.env.PI_LLM_CLASS;
+  const oldEscalate = process.env.PI_LLM_CLASS_ESCALATE;
+  process.env.PI_LLM_CLASS = 'build';
+  process.env.PI_LLM_CLASS_ESCALATE = '1';
+  try {
+    const { handlers } = fakePi();
+    const headers = {};
+    handlers.before_provider_headers({ headers }, { model: { provider: ANTHROPIC } });
+    assert.equal(headers[CLASS_HEADER], 'build');
+    assert.equal(headers['x-cc-proxy-class-escalate'], '1');
+    const other = {};
+    handlers.before_provider_headers({ headers: other }, { model: { provider: 'openai-codex' } });
+    assert.equal(other[CLASS_HEADER], undefined);
+  } finally {
+    if (oldClass === undefined) delete process.env.PI_LLM_CLASS; else process.env.PI_LLM_CLASS = oldClass;
+    if (oldEscalate === undefined) delete process.env.PI_LLM_CLASS_ESCALATE; else process.env.PI_LLM_CLASS_ESCALATE = oldEscalate;
+  }
+});
+
 test('session header: anthropic only, stable per session, process fallback', () => {
   const { handlers } = fakePi();
   const sm = { getSessionId: () => 'abc' };
@@ -122,8 +142,10 @@ test('session header: anthropic only, stable per session, process fallback', () 
   const h2 = {}; handlers.before_provider_headers({ headers: h2 }, { model: { provider: ANTHROPIC }, sessionManager: sm });
   assert.equal(h1[SESSION_HEADER], 'pi-abc');
   assert.equal(h2[SESSION_HEADER], 'pi-abc');
+  assert.equal(h1[CLASS_HEADER], 'interactive');
   const h3 = {}; handlers.before_provider_headers({ headers: h3 }, { model: { provider: 'openai-codex' }, sessionManager: sm });
   assert.equal(h3[SESSION_HEADER], undefined);
+  assert.equal(h3[CLASS_HEADER], undefined);
   const h4 = {}; handlers.before_provider_headers({ headers: h4 }, { model: { provider: ANTHROPIC } });
   assert.match(h4[SESSION_HEADER], /^pi-\d+-/);
   assert.equal(sessionKey({ sessionManager: { getSessionId: () => { throw new Error('x'); } } }, 'fb'), 'fb');

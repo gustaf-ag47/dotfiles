@@ -30,6 +30,7 @@ export const PLACEHOLDER_KEY = "sk-ant-oat01-proxy-injects-the-real-credential";
 export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 export const STATUS_TIMEOUT_MS = 1_500;
 export const SESSION_HEADER = "x-cc-proxy-session";
+export const CLASS_HEADER = "x-cc-proxy-class";
 
 /** Proxy origin from the environment, or null when the operator opted out of the pool. */
 export function proxyOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -115,6 +116,8 @@ export default function anthropicPool(pi: ExtensionAPI) {
 	pi.on("before_provider_headers", (event, ctx: ExtensionContext) => {
 		if (ctx.model?.provider !== ANTHROPIC) return;
 		event.headers[SESSION_HEADER] = sessionKey(ctx, processKey);
+		event.headers[CLASS_HEADER] = process.env.PI_LLM_CLASS || "interactive";
+		if (process.env.PI_LLM_CLASS_ESCALATE === "1") event.headers["x-cc-proxy-class-escalate"] = "1";
 	});
 
 	pi.on("before_provider_request", (event, ctx: ExtensionContext) => {
