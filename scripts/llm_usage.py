@@ -370,10 +370,12 @@ def account_name(fp, labels):
 
 
 def routing_lines(routing, labels):
-    if not isinstance(routing, dict) or not routing.get('buckets'):
+    if not isinstance(routing, dict):
         return []
     width = max((len(account_name(r['fp'], labels)) for b in routing['buckets'].values() for r in b.get('ranking', [])), default=12)
     lines = ['', paint('routing', '1') + f"  mode={routing.get('mode')} threshold={routing.get('threshold')}"]
+    count = routing.get('starved', 0)
+    lines.append('  starved this week: ' + paint(str(count), '31;1' if count else '32') )
     summary = routing.get('forecast') or {}
     if summary:
         waste = summary.get('weekly_waste_percent')
@@ -464,6 +466,9 @@ def deepseek_lines(info, _now):
     funded = info.get('available') is not False and any(total is not None and total > 0 for total in totals)
     verdict = paint('READY', '32;1') if funded else paint('EXHAUSTED', '31;1')
     lines = [f"  {paint(info.get('label') or '?', '1')}  {verdict}"]
+    if isinstance(info.get('monthly_cap'), (int, float)):
+        spent, cap = info.get('monthly_spend', 0), info['monthly_cap']
+        lines.append(f"  cap ${spent:.2f}/${cap:.2f}" + (paint(' (reached)', '31;1') if spent >= cap else ''))
     for row, total in zip(balances, totals):
         ok = total is not None and total > 0 and info.get('available') is not False
         amount = f"{row.get('total_balance')} {row.get('currency')}"

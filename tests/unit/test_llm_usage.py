@@ -323,6 +323,15 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(result['deepseek']['status'], 'ok')
         self.assertNotIn('secret-value', str(result))
 
+    def test_deepseek_monthly_cap_and_starvation_render(self):
+        lines, _ = usage.deepseek_lines({'label': 'test', 'available': True, 'balances': [],
+                                        'monthly_spend': 5, 'monthly_cap': 20}, time.time())
+        self.assertIn('cap $5.00/$20.00', '\n'.join(lines))
+        with patch.object(usage, 'use_color', return_value=True):
+            rendered = usage.routing_lines({'buckets': {}, 'starved': 2}, {})
+        self.assertIn('starved this week: ', '\n'.join(rendered))
+        self.assertIn('31;1m2', '\n'.join(rendered))
+
     def test_remote_proxy_is_rejected(self):
         with patch.dict(usage.os.environ, {'PI_ANTHROPIC_PROXY_URL': 'http://example.com'}):
             with self.assertRaises(ValueError):
