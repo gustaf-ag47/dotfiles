@@ -127,6 +127,13 @@ rec="$MAILBOX/${ts//:/-}_${RUN_ID}.md"
 	echo "- verdict: **$verdict**"
 	echo "- cost: ${cost:-unknown}"
 	echo "- at: $ts"
+	if [ -n "$CHILD_CWD" ] && [ -f "$CHILD_CWD/scripts/reap-finished-work.sh" ]; then
+		echo
+		echo '## Finished-work dry-run'
+		echo '```'
+		timeout 90 bash "$CHILD_CWD/scripts/reap-finished-work.sh" --dry-run || echo 'reaper unavailable'
+		echo '```'
+	fi
 	echo
 	echo '## Last output'
 	echo '```'
