@@ -1,0 +1,10 @@
+[Unit]
+Description=Check LLM routing alerts every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Unit=llm-alert.service
+
+[Install]
+WantedBy=timers.target

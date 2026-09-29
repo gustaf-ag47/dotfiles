@@ -11,6 +11,8 @@ import json
 import os
 from pathlib import Path
 import re
+import statistics
+import math
 import tempfile
 import time
 import urllib.error
@@ -103,8 +105,10 @@ def anthropic(_auth):
                 used = value * 100 if value is not None else None
                 source = 'header observation (may be stale)'
             if used is not None or name in ('five_hour', 'seven_day'):
+                forecast_key = {'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d_oi'}.get(name)
                 windows.append({'name': name, 'used_percent': used,
                                 'resets_at': bucket.get('resets_at') or bucket.get('reset_at') or token.get(reset),
+                                'forecast': (token.get('forecast') or {}).get(forecast_key),
                                 'source': source if used is not None else 'unavailable'})
         counters = token.get('counters') or {}
         accounts.append({'account': token.get('fp'), 'label': token.get('label') or '', 'valid': token.get('valid'),
@@ -309,13 +313,28 @@ def window_line(window, now):
     used = window.get('used_percent')
     reset = to_epoch(window.get('resets_at') or window.get('reset_at'))
     label = window_label(window)
+    if reset is not None and reset <= now:
+        # Reset passed since the last reading: assume a fresh window (what the
+        # proxy's router assumes too) until the next response confirms it.
+        return f'    {label:<9} {bar(100)} {paint("~100% left", "32")}  window reset; unconfirmed'
     if used is None:
         return f'    {label:<9} {"?" * BAR_WIDTH}   ?% left'
     left = max(0.0, min(100.0, 100 - used))
     stale = window.get('source', '').startswith('header')
-    if reset is not None and reset <= now and stale:
-        return f'    {label:<9} {bar(100)} {paint("100% left", "32"):>9}   window reset since last reading'
     tail = f'resets in {until(reset, now)}'
+    fc = window.get('forecast') or {}
+    state = fc.get('forecast')
+    burn = fc.get('burn_per_hour')
+    if isinstance(burn, (int, float)):
+        tail += f' · burn {burn * 100:.1f}%/h'
+    if state == 'waste':
+        projected = fc.get('projected_at_reset')
+        tail += paint(f' · will waste ~{max(0, (1-projected)*100):.0f}%', '33') if isinstance(projected, (int, float)) else paint(' · will waste', '33')
+    elif state == 'exhaust':
+        exhaust_at = fc.get('exhaust_at')
+        tail += paint(' · exhausts in ' + until(to_epoch(exhaust_at), now), '31;1')
+    elif state == 'on_track':
+        tail += paint(' · on track', '32')
     if stale:
         tail += ' ~'
     pct = paint(f'{left:3.0f}% left', '1' if left < 20 else '0')
@@ -330,9 +349,18 @@ def account_status(group, now):
     cooldown = to_epoch(group.get('cooldown_until'))
     if cooldown and cooldown > now:
         return paint(f'COOLDOWN {until(cooldown, now)}', '31;1')
-    exhausted = [w for w in group.get('windows', []) if (w.get('used_percent') or 0) >= 100]
-    if exhausted:
+    # Expired observations cannot establish current exhaustion.
+    exhausted = [w for w in group.get('windows', [])
+                 if (w.get('used_percent') or 0) >= 100
+                 and not ((r := to_epoch(w.get('resets_at') or w.get('reset_at'))) is not None and r <= now)]
+    if any(w['name'] == 'five_hour' for w in exhausted):
         return paint('EXHAUSTED', '31;1')
+    if exhausted or any((to_epoch(r) or 0) > now for r in group.get('model_cooldowns', {}).values()):
+        return paint('PARTIAL · model/bucket limited', '33;1')
+    if not any(w.get('used_percent') is not None
+               and (to_epoch(w.get('resets_at') or w.get('reset_at')) or 0) > now
+               for w in group.get('windows', [])):
+        return paint('UNKNOWN · awaiting fresh reading', '33;1')
     return paint('READY', '32;1')
 
 
@@ -344,10 +372,21 @@ def account_name(fp, labels):
 
 
 def routing_lines(routing, labels):
-    if not isinstance(routing, dict) or not routing.get('buckets'):
+    if not isinstance(routing, dict):
         return []
     width = max((len(account_name(r['fp'], labels)) for b in routing['buckets'].values() for r in b.get('ranking', [])), default=12)
     lines = ['', paint('routing', '1') + f"  mode={routing.get('mode')} threshold={routing.get('threshold')}"]
+    count = routing.get('starved', 0)
+    lines.append('  starved this week: ' + paint(str(count), '31;1' if count else '32') )
+    summary = routing.get('forecast') or {}
+    if summary:
+        waste = summary.get('weekly_waste_percent')
+        first = summary.get('first_exhaust')
+        lines.append('  forecast  weekly waste ' + (f'{waste:.1f}%' if isinstance(waste, (int, float)) else '?') +
+                     (f" · first exhaust {first.get('fp')} {first.get('window')} at {first.get('at')}" if first else ' · no projected exhaust'))
+        for event in routing.get('recent', [])[-3:]:
+            ts = str(event.get('ts', ''))[11:16] or '--:--'
+            lines.append(f"  {ts} {event.get('bucket') or event.get('kind','route')} {event.get('from_fp') or event.get('from')}→{event.get('to_fp') or event.get('to')} {event.get('reason','')}")
     for key, bucket in routing['buckets'].items():
         chosen = bucket.get('would_pick')
         head = paint(account_name(chosen, labels), '32;1') if chosen else paint('NONE ROUTABLE', '31;1')
@@ -372,7 +411,8 @@ def anthropic_lines(info, now):
     for group in info.get('accounts', []):
         lines.append(f"  {paint(account_name(group['account'], labels), '1')}  {account_status(group, now)}")
         for model, reset in group.get('model_cooldowns', {}).items():
-            lines.append(f"    {paint(f'{model} cooldown {until(to_epoch(reset), now)}', '31')}")
+            if (to_epoch(reset) or 0) > now:
+                lines.append(f"    {paint(f'{model} cooldown {until(to_epoch(reset), now)}', '31')}")
         for window in group.get('windows', []):
             stale |= window.get('source', '').startswith('header')
             lines.append(window_line(window, now))
@@ -394,7 +434,9 @@ def codex_lines(info, now):
     else:
         verdict = paint('LIMIT REACHED', '31;1')
     lines = [f"  {paint(codex_identity(info), '1')}  {verdict}"]
-    lines += [window_line(window, now) for window in info.get('windows', [])]
+    forecasts = info.get('forecast') or {}
+    lines += [window_line({**window, 'forecast': forecasts.get(window.get('name'))}, now)
+              for window in info.get('windows', [])]
     credits = info.get('credits') or {}
     balance = f" (balance {credits['balance']})" if credits.get('balance') is not None else ''
     for slug, row in (info.get('models') or {}).items():
@@ -426,6 +468,9 @@ def deepseek_lines(info, _now):
     funded = info.get('available') is not False and any(total is not None and total > 0 for total in totals)
     verdict = paint('READY', '32;1') if funded else paint('EXHAUSTED', '31;1')
     lines = [f"  {paint(info.get('label') or '?', '1')}  {verdict}"]
+    if isinstance(info.get('monthly_cap'), (int, float)):
+        spent, cap = info.get('monthly_spend', 0), info['monthly_cap']
+        lines.append(f"  cap ${spent:.2f}/${cap:.2f}" + (paint(' (reached)', '31;1') if spent >= cap else ''))
     for row, total in zip(balances, totals):
         ok = total is not None and total > 0 and info.get('available') is not False
         amount = f"{row.get('total_balance')} {row.get('currency')}"
@@ -465,9 +510,100 @@ def render(report):
     return '\n'.join(lines)
 
 
+def weekly_report(auth):
+    """Compute conservative rolling-seven-day routing metrics from local telemetry."""
+    data = get_json(local_url() + '/_usage')
+    anthropic_data = (data.get('providers') or {}).get('anthropic') or {}
+    tokens = data.get('tokens') or anthropic_data.get('tokens') or []
+    now = time.time(); cutoff = now - 7 * 86400
+    state_path = Path(data.get('usage_state_file') or (Path(os.environ.get('XDG_CACHE_HOME', Path.home()/'.cache'))/'cc-proxy'/'usage.json'))
+    try: state = json.loads(state_path.read_text())
+    except (OSError, ValueError): state = {}
+    routing_path = Path(data.get('routing_log') or state_path.parent/'routing.log')
+    events = []
+    try:
+        events = [json.loads(line) for line in routing_path.read_text().splitlines() if line.strip()]
+    except (OSError, ValueError): pass
+    def ts(row):
+        try: return datetime.datetime.fromisoformat(str(row.get('ts','')).replace('Z','+00:00')).timestamp()
+        except ValueError: return 0
+    events = [e for e in events if cutoff <= ts(e) <= now]
+    recent = (data.get('routing') or {}).get('recent') or []
+    unique_events={json.dumps(e,sort_keys=True):e for e in events + recent}
+    starved = int((data.get('routing') or {}).get('starved', 0) or 0) + sum(e.get('kind') == 'starved' for e in unique_events.values())
+    windows = {}
+    def forecast_rows(provider, rows):
+        for token in rows:
+            for name, fc in (token.get('forecast') or {}).items():
+                if (name in ('7d','7d_oi','primary_window') and isinstance(fc,dict)):
+                    projected=fc.get('projected_at_reset')
+                    if isinstance(projected,(int,float)):
+                        windows[f'{provider}:{name}']=round(max(0,(1-float(projected))*100),1)
+                    elif fc.get('forecast') == 'waste':
+                        windows[f'{provider}:{name}']=None
+    forecast_rows('anthropic', tokens)
+    codex=(data.get('providers') or {}).get('openai-codex',{})
+    forecast_rows('codex',[{'forecast':codex.get('forecast',{})}])
+    samples=state.get('_samples') if isinstance(state.get('_samples'),dict) else {}
+    avoidable=0
+    for event in events:
+        if event.get('reason') != 'cooldown': continue
+        at=ts(event)
+        exhausted={event.get('from_fp'),event.get('to_fp')}
+        had_alternative=False
+        for fp, buckets in samples.items():
+            if fp in exhausted or not isinstance(buckets,dict): continue
+            points=buckets.get('5h') or []
+            prior=[point for point in points if isinstance(point,list) and len(point)>=2 and 0 <= at-float(point[0]) <= 600]
+            if prior and float(prior[-1][1]) <= .7:
+                had_alternative=True; break
+        if had_alternative: avoidable += 1
+    # P4 from the proxy's per-class counters: non-interactive classes only.
+    opus=total=0
+    for class_name,models in (((data.get('routing') or {}).get('class_usage') or {}).items()):
+        if class_name=='interactive': continue
+        for model,row in (models or {}).items():
+            count=sum(float(row.get(key,0) or 0) for key in ('input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens'))
+            total += count
+            if 'opus' in model.lower() or 'fable' in model.lower(): opus += count
+    counters=[t.get('counters') or {} for t in tokens]
+    if not counters: counters=[r for r in state.values() if isinstance(r,dict)]
+    counts=[(int(r.get('input_tokens',0) or 0),int(r.get('cache_read_input_tokens',0) or 0),int(r.get('cache_creation_input_tokens',0) or 0)) for r in counters]
+    i,c,cc=(sum(x[n] for x in counts) for n in range(3)); cache=round(100*c/(i+c+cc),1) if i+c+cc else None
+    rendered_windows={key:(f"~{value:.1f}%" if isinstance(value,(int,float)) else 'n/a') for key,value in windows.items()}
+    return {'period_days':7,'P1_starved_requests':starved,'P2_weekly_waste_percent':rendered_windows or 'n/a','P2_note':'~ denotes current forecast projection; reset-time historical forecasts are unavailable from this telemetry shape.','P3_avoidable_5h_stalls':avoidable,'P3_note':'Approximation: cooldown move events are matched to the latest prior 5h sample within 10 minutes; samples do not prove account eligibility.','P4_opus_fable_token_share_percent':round(100*opus/total,1) if total else 'n/a','cache_hit_percent':cache}
+
+
+def capacity_report(data, horizon=2):
+    """Conservative estimate from observed 5h slopes; unknown slopes have no proven capacity."""
+    tokens = data.get('tokens') or []
+    active = max(1, int((data.get('routing') or {}).get('active_sessions') or 0))
+    burns = [v for t in tokens if t.get('valid', True)
+             if (v := numeric(((t.get('forecast') or {}).get('5h') or {}).get('burn_per_hour'))) is not None and v > 0]
+    per_session = statistics.median(burns) / active if burns else None
+    accounts = {}
+    for t in tokens:
+        quota = (t.get('quota') or {}).get('five_hour') or {}
+        used = numeric(quota.get('utilization'))
+        if used is not None and used > 1:
+            used /= 100
+        else:
+            used = numeric(t.get('u5'))
+        reset = to_epoch(quota.get('resets_at') or quota.get('reset_at') or t.get('u5_reset'))
+        headroom = max(0, 1 - used) if used is not None and (reset is None or reset > time.time()) else None
+        count = (max(0, math.floor(headroom / (per_session * horizon)))
+                 if headroom is not None and per_session and t.get('valid', True) else 0)
+        accounts[t.get('fp', 'unknown')] = count
+    return {'capacity': sum(accounts.values()), 'horizon': horizon, 'accounts': accounts,
+            'per_session_burn': per_session, 'active_sessions': active if burns else 0}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--week', action='store_true', help='Report rolling-seven-day routing metrics')
+    parser.add_argument('--capacity', action='store_true', help='Estimate additional 5h heavy-session capacity')
+    parser.add_argument('--horizon', type=float, default=2, help='Capacity planning horizon in hours (default: 2)')
     parser.add_argument('--refresh', action='store_true', help='Bypass the 60-second report cache (does not refresh OAuth)')
     parser.add_argument('--provider', choices=list(ADAPTERS))
     args = parser.parse_args()
@@ -479,6 +615,18 @@ def main():
         auth = {}
     if not isinstance(auth, dict):
         auth = {}
+    if args.capacity:
+        if args.horizon <= 0 or not math.isfinite(args.horizon):
+            parser.error('--horizon must be a positive finite number')
+        result = capacity_report(get_json(local_url() + '/_usage'), args.horizon)
+        accounts = ', '.join(f'{fp} {count}' for fp, count in result['accounts'].items())
+        print(json.dumps(result) if args.json else
+              f"capacity: {result['capacity']} more heavy sessions are safe for the next {args.horizon:g}h (accounts: {accounts})")
+        return
+    if args.week:
+        report = weekly_report(auth)
+        print(json.dumps(report, indent=2) if args.json else '\n'.join(f'{key}: {value}' for key,value in report.items()))
+        return
     providers = [args.provider] if args.provider else list(ADAPTERS)
     identity = str(auth_path.resolve()) + str(auth_path.stat().st_mtime_ns if auth_path.exists() else 0)
     identity += os.environ.get('PI_ANTHROPIC_PROXY_URL', '') + os.environ.get('CC_PROXY_PORT', '') + str(providers)

@@ -14,14 +14,17 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main, mock
+from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
 PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
 proxy = SourceFileLoader("claude_token_proxy", str(PROXY_PATH)).load_module()
 
 
-class UsagePersistenceTests(TestCase):
+class UsagePersistenceTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     def setUp(self):
+        super().setUp()
         proxy.STATE.clear()
         proxy.PERSISTENCE_ERROR = None
         self.token = proxy.Tok("test-token")
@@ -58,10 +61,23 @@ def iso_in(**delta) -> str:
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
 
 
-class PickPolicyTests(TestCase):
+class SessionKeyTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
+    def test_session_key_header_metadata_system_and_global_fallbacks(self):
+        body = json.dumps({"metadata": {"user_id": "body-session"}, "system": "prompt"}).encode()
+        self.assertEqual(proxy.session_key_from({"x-cc-proxy-session": "header-session"}, body), "header-session")
+        self.assertEqual(proxy.session_key_from({}, body), "body-session")
+        hashed = proxy.session_key_from({}, json.dumps({"system": "prompt"}).encode())
+        self.assertEqual(hashed, "system:" + proxy.hashlib.sha256(b'"prompt"').hexdigest())
+        self.assertIsNone(proxy.session_key_from({}, b'{"messages": []}'))
+
+
+class PickPolicyTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     """Selection policy: pressure (EDF-with-headroom), model-aware buckets."""
 
     def setUp(self):
+        super().setUp()
         proxy.STATE.clear()
         proxy.LAST_PICK.clear()
         self._mode = proxy.PICK_MODE
@@ -118,7 +134,7 @@ class PickPolicyTests(TestCase):
         reset = iso_in(days=3)
         slightly_better = self.make("a", u7=0.5, u7_reset=reset)
         previous = self.make("b", u7=0.6, u7_reset=reset)
-        proxy.LAST_PICK["base"] = previous.fp
+        proxy.LAST_PICK[("global", "base")] = (previous.fp, time.time())
         # 0.5/0.4 = 1.25x gap < 1.5 tolerance -> stay for the prompt cache.
         self.assertIs(proxy.pick(model="claude-opus-5"), previous)
         self.assertIsNotNone(slightly_better)
@@ -127,8 +143,58 @@ class PickPolicyTests(TestCase):
         reset = iso_in(days=3)
         much_better = self.make("a", u7=0.1, u7_reset=reset)
         previous = self.make("b", u7=0.9, u7_reset=reset)
-        proxy.LAST_PICK["base"] = previous.fp
+        proxy.LAST_PICK[("global", "base")] = (previous.fp, time.time())
         self.assertIs(proxy.pick(model="claude-opus-5"), much_better)
+
+    def test_two_sessions_spread_across_tokens_within_pressure_band(self):
+        reset = iso_in(days=3)
+        self.make("session-a", u7=0.4, u7_reset=reset, u5=0.2)
+        self.make("session-b", u7=0.4, u7_reset=reset, u5=0.2)
+        first_pick = proxy.pick(model="claude-opus-5", session_key="A")
+        second_pick = proxy.pick(model="claude-opus-5", session_key="B")
+        self.assertIsNot(first_pick, second_pick)
+
+    def test_same_session_sticks_to_its_token(self):
+        reset = iso_in(days=3)
+        self.make("sticky-a", u7=0.4, u7_reset=reset, u5=0.2)
+        self.make("sticky-b", u7=0.4, u7_reset=reset, u5=0.2)
+        first_pick = proxy.pick(model="claude-opus-5", session_key="A")
+        self.assertIs(proxy.pick(model="claude-opus-5", session_key="A"), first_pick)
+
+    def test_session_moves_when_affinity_token_cools_down(self):
+        first = self.make("cooling-session", u7=0.4, u7_reset=iso_in(days=3), u5=0.2)
+        second = self.make("available-session", u7=0.5, u7_reset=iso_in(days=3), u5=0.2)
+        with mock.patch.object(proxy, "PICK_MODE", "pressure"):
+            self.assertIs(proxy.pick(model="claude-opus-5", session_key="sid"), first)
+            first.cooldown_until = time.time() + 600
+            self.assertIs(proxy.pick(model="claude-opus-5", session_key="sid"), second)
+
+    def test_five_hour_threshold_prefers_alternative(self):
+        spent = self.make("5h-spent", u7=0.2, u7_reset=iso_in(days=3), u5=0.99)
+        available = self.make("5h-free", u7=0.3, u7_reset=iso_in(days=3), u5=0.2)
+        self.assertIs(proxy.pick(model="claude-opus-5", session_key="x"), available)
+        self.assertIsNotNone(spent)
+
+    def test_five_hour_pressure_dominates_nearly_spent_window(self):
+        healthy = self.make("healthy-5h", u7=0.2, u7_reset=iso_in(days=3), u5=0.2)
+        nearly_spent = self.make("nearly-spent-5h", u7=0.2, u7_reset=iso_in(days=3), u5=0.8)
+        # Keep both below threshold while making 5h materially different.
+        healthy.u5_reset = iso_in(hours=4)
+        nearly_spent.u5_reset = iso_in(hours=1)
+        self.assertIs(proxy.pick(model="claude-opus-5", session_key="pressure"), healthy)
+
+    def test_preview_picker_parity_for_session_key(self):
+        self.make("parity-a", u7=0.4, u7_reset=iso_in(days=3), u5=0.2)
+        self.make("parity-b", u7=0.5, u7_reset=iso_in(days=3), u5=0.2)
+        preview = proxy.rank_pool("claude-opus-5", session_key="parity")
+        selected = proxy.pick(model="claude-opus-5", session_key="parity")
+        self.assertEqual(preview["would_pick"], selected.fp)
+
+    def test_affinity_entries_expire_after_idle_limit(self):
+        token = self.make("expiry", u7=0.4, u7_reset=iso_in(days=3), u5=0.2)
+        proxy.LAST_PICK[("idle-session", "base")] = (token.fp, time.time() - proxy.AFFINITY_IDLE - 1)
+        proxy._prune_affinity(time.time())
+        self.assertNotIn(("idle-session", "base"), proxy.LAST_PICK)
 
     def test_legacy_headroom_mode_is_bucket_blind(self):
         proxy.PICK_MODE = "headroom"
@@ -162,6 +228,48 @@ class PickPolicyTests(TestCase):
         with mock.patch.object(proxy.time, "time", return_value=1000):
             self.assertIsNone(proxy.pick(exclude={available.fp}))
 
+    def test_full_bucket_is_fresh_again_once_its_reset_has_passed(self):
+        # An exhausted account stops receiving traffic, so its utilization header
+        # is never refreshed. Past reset_at the reading is void, not "over threshold".
+        expired = self.make("expired", u7=1.0, u7_reset=iso_in(hours=-3))
+        partly = self.make("partly", u7=0.5, u7_reset=iso_in(days=6))
+        self.assertIsNone(proxy.bucket_util(expired, "base"))
+        row = next(r for r in proxy.rank_pool("claude-opus-5")["ranking"] if r["fp"] == expired.fp)
+        self.assertTrue(row["eligible"])
+        self.assertIsNone(row["utilization"])
+        self.assertIs(proxy.pick(model="claude-opus-5"), expired)
+        # A window that has not reset yet keeps its reading.
+        self.assertEqual(proxy.bucket_util(partly, "base"), 0.5)
+
+    def test_preview_matches_picker_for_threshold_fallback_and_legacy_mode(self):
+        self.make("a", u7=0.99, u7_reset=iso_in(days=2), u7_oi=0.1)
+        self.make("b", u7=1.0, u7_reset=iso_in(hours=-1), u7_oi=0.9)
+        for mode in ("pressure", "headroom"):
+            proxy.PICK_MODE = mode
+            for model in ("claude-opus-5", "claude-fable-5"):
+                preview = proxy.rank_pool(model)
+                self.assertEqual(preview["would_pick"], proxy.pick(model=model).fp)
+        proxy.STATE.pop()
+        for mode in ("pressure", "headroom"):
+            proxy.PICK_MODE = mode
+            self.assertEqual(proxy.rank_pool("claude-opus-5")["would_pick"], proxy.pick(model="claude-opus-5").fp)
+
+    def test_watch_loop_refreshes_idle_tokens_with_expired_readings(self):
+        idle = self.make("idle", u7=0.3, u7_reset=iso_in(days=2), u5=0.9)
+        idle.u5_reset = iso_in(hours=-1)
+        fresh = self.make("fresh", u7=0.3, u7_reset=iso_in(days=2), u5=0.1)
+        fresh.u5_reset = iso_in(hours=1)
+        now = time.time()
+        self.assertTrue(proxy.readings_expired(idle, now))
+        self.assertFalse(proxy.readings_expired(fresh, now))
+        # A probe that cannot refresh the bucket (e.g. 7d_oi) leaves it unknown.
+        idle.u7_oi, idle.u7_oi_reset = 0.98, iso_in(hours=-1)
+        proxy.void_expired_readings(idle, now)
+        self.assertIsNone(idle.u5)
+        self.assertIsNone(idle.u7_oi)
+        self.assertEqual(idle.u7, 0.3)
+        self.assertFalse(proxy.readings_expired(idle, now))
+
     def test_over_threshold_without_cooldown_remains_pickable(self):
         # Header observations may be stale; the threshold remains a preference,
         # unlike an explicit upstream cooldown.
@@ -187,9 +295,10 @@ class PickPolicyTests(TestCase):
         response = mock.Mock(status=429, headers=Message())
         connection = mock.Mock()
         with mock.patch.object(proxy.time, "time", return_value=1000), \
-                mock.patch.object(proxy, "save_usage_state"), \
+                mock.patch.object(proxy, "USAGE_STATE_FILE", proxy.CONTROL_DIR / "usage.json"), \
                 mock.patch.object(proxy, "upstream", return_value=(connection, response)) as upstream:
             handler._proxy()
+            self.assertEqual(proxy.load_usage_state()[available.fp]["quota"]["cooldown_until"], 1060)
 
         self.assertEqual(upstream.call_count, 1)
         self.assertEqual(upstream.call_args.args[4], available.token)
@@ -248,7 +357,8 @@ class PickPolicyTests(TestCase):
         self.assertIs(proxy.pick(exclude={best.fp}, model="claude-opus-5"), last)
 
 
-class CooldownScopeTests(TestCase):
+class CooldownScopeTests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     def test_explicit_model_claims_are_scoped(self):
         for claim, scope in (("seven_day_overage_included", "fable"),
                              ("five_hour_overage_included", "fable"),
@@ -299,7 +409,8 @@ class CooldownScopeTests(TestCase):
         self.assertEqual(snapshot["cooldown_remaining"], 0)
 
 
-class Burst429Tests(TestCase):
+class Burst429Tests(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     """A spent bucket must rotate; a per-minute burst must just wait."""
 
     def test_account_level_rejected_is_quota(self):
@@ -408,10 +519,12 @@ def deepseek_state(balance="5.00", available=True):
                           "topped_up_balance": balance}], "checked_at": 1}
 
 
-class OracleFixture(TestCase):
+class OracleFixture(ProxyIsolationMixin, TestCase):
+    proxy = proxy
     """Isolated pool, routes file and provider cache for the oracle tests."""
 
     def setUp(self):
+        super().setUp()
         proxy.STATE.clear()
         proxy.LAST_PICK.clear()
         self._dir = TemporaryDirectory()
@@ -527,11 +640,15 @@ class RouteRankingTests(OracleFixture):
         self.assertTrue(proxy.route_payload("claude-opus-5-5")["candidates"][1]["routable"])
 
     def test_deepseek_below_floor_leaves_nothing_routable(self):
-        self.token(u7=0.99)  # over threshold -> exhausted
+        # A lone over-threshold account is still what pick() would serve, so the
+        # preview must say so; only an upstream cooldown makes anthropic unroutable.
+        lone = self.token(u7=0.99)
         self.providers(codex_state(used=100), deepseek_state(balance="0.50"))
+        self.assertEqual(proxy.route_payload("claude-opus-5-5")["first_routable"]["account"], lone.fp)
+        lone.cooldown_until = time.time() + 600
         out = proxy.route_payload("claude-opus-5-5")
         self.assertIsNone(out["first_routable"])
-        self.assertEqual([c["reason"] for c in out["candidates"]], ["exhausted", "exhausted", "balance below floor"])
+        self.assertEqual([c["reason"] for c in out["candidates"]], ["cooldown", "exhausted", "balance below floor"])
         self.providers(codex_state(used=100), deepseek_state(balance="-0.12", available=False))
         self.assertEqual(proxy.route_payload("claude-opus-5-5")["candidates"][2]["reason"], "unavailable")
 
@@ -648,6 +765,34 @@ class OracleHttpTests(OracleFixture):
         self.assertEqual(data["providers"]["anthropic"]["tokens"], data["tokens"])
         self.assertEqual(data["providers"]["openai-codex"]["status"], "ok")
         self.assert_no_secrets(body)
+
+    def test_cli_end_to_end_with_expired_headers_and_restart(self):
+        import subprocess
+        import sys
+        tok = proxy.STATE[0]
+        tok.label = "expired@example.test"
+        tok.u5, tok.u5_reset = 1.01, iso_in(hours=-1)
+        tok.u7, tok.u7_reset = 1.0, iso_in(hours=-1)
+        tok.u7_oi, tok.u7_oi_reset = 0.98, iso_in(days=2)
+        proxy.USAGE_STATE_FILE = proxy.CONTROL_DIR / "usage.json"
+        self.assertTrue(proxy.save_usage_state())
+        replacement = proxy.Tok(tok.token)
+        replacement.label = tok.label
+        proxy.STATE[:] = [replacement]
+        proxy.restore_usage_state()
+        self.assertEqual(replacement.u7_oi, 0.98)
+        env = dict(os.environ, PI_ANTHROPIC_PROXY_URL=f"http://127.0.0.1:{self.server.server_address[1]}",
+                   XDG_CACHE_HOME=str(proxy.CONTROL_DIR), PI_CODING_AGENT_DIR=str(proxy.CONTROL_DIR))
+        cli = Path(__file__).resolve().parents[2] / "scripts/llm_usage.py"
+        result = subprocess.run([sys.executable, str(cli), "--provider", "anthropic", "--refresh"],
+                                env=env, capture_output=True, text=True, timeout=10, check=True)
+        self.assertIn("~100% left", result.stdout)
+        self.assertIn("window reset; unconfirmed", result.stdout)
+        self.assertNotIn("EXHAUSTED", result.stdout)
+        self.assertNotIn("NONE ROUTABLE", result.stdout)
+        self.assert_no_secrets(result.stdout)
+        data = json.loads(self.get("/_usage")[1])
+        self.assertEqual(data["routing"]["buckets"]["base"]["would_pick"], replacement.fp)
 
     def test_route_endpoint(self):
         status, body = self.get("/_route?model=claude-opus-5-5-20260901")
@@ -882,6 +1027,35 @@ class DeepseekPassthroughTests(OracleFixture):
         self.assertIsNone(usage["routing"]["fallback"])
         self.assertFalse(proxy.FALLBACK["active"])
         self.assertEqual(usage["routing"]["deepseek_fallback"]["requests_total"], 1)  # ledger survives
+
+    def test_quota_observations_survive_restart(self):
+        # The haiku seed probe never reports 7d_oi, so a restart must not
+        # forget that an account is fable-exhausted (or in cooldown).
+        tok = self.token(u7=0.5)
+        tok.u7_oi, tok.u7_oi_reset = 0.98, iso_in(days=2)
+        tok.cooldown_until = time.time() + 600
+        tok.model_cooldowns = {"opus": time.time() + 300, "sonnet": time.time() - 5}
+        self.assertTrue(proxy.save_usage_state())
+        saved_oi_reset = tok.u7_oi_reset
+        tok.u7 = tok.u7_oi = tok.u7_reset = tok.u7_oi_reset = None
+        tok.cooldown_until, tok.model_cooldowns = 0.0, {}
+        proxy.restore_usage_state()
+        self.assertEqual(tok.u7_oi, 0.98)
+        self.assertEqual(tok.u7_oi_reset, saved_oi_reset)
+        self.assertGreater(tok.cooldown_until, time.time())
+        self.assertIn("opus", tok.model_cooldowns)
+        self.assertNotIn("sonnet", tok.model_cooldowns)  # expired cooldowns are dropped
+        tok.cooldown_until = 0.0  # cooldown outranks threshold; check the fable reading itself
+        self.token(name="other")  # threshold preference only applies with alternatives
+        row = next(r for r in proxy.rank_pool("claude-fable-5")["ranking"] if r["fp"] == tok.fp)
+        self.assertEqual(row["reason"], "over threshold")
+
+    def test_restore_does_not_override_live_headers(self):
+        tok = self.token(u7=0.9)
+        self.assertTrue(proxy.save_usage_state())
+        tok.u7 = 0.1  # a fresher observation arrived before restore ran
+        proxy.restore_usage_state()
+        self.assertEqual(tok.u7, 0.1)
 
     def test_counters_survive_restart(self):
         proxy.FALLBACK["requests"] = 3

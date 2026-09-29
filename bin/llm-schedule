@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Tiny persistent queue for quota-aware, detached LLM work."""
+import argparse
+from datetime import datetime, timezone
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import uuid
+
+DATA = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "llm-schedule"
+STATE = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "llm-schedule"
+URL = os.environ.get("PI_ANTHROPIC_PROXY_URL", f"http://127.0.0.1:{os.environ.get('CC_PROXY_PORT', '8788')}").rstrip("/")
+
+
+def stamp(value):
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def get(path):
+    with urllib.request.urlopen(URL + path, timeout=4) as response:
+        return json.load(response)
+
+
+def reason(job, route, usage, now):
+    preferred = job["prefer"]
+    candidates = route.get("candidates", [])
+    allowed = {"anthropic", "openai-codex"} if preferred == "any" else {preferred if preferred == "anthropic" else "openai-codex"}
+    if not any(c.get("routable") and c.get("provider") in allowed for c in candidates):
+        return ("not-before" if job.get("not_before") is not None and now >= job["not_before"]
+                and any(c.get("routable") for c in candidates) else None)
+    windows = []
+    if "anthropic" in allowed:
+        for token in usage.get("tokens", []):
+            if not token.get("valid", True):
+                continue
+            for key in ("7d", "7d_oi"):
+                windows.append((token.get("u" + key[0] + ("_oi" if key.endswith("oi") else "")),
+                                token.get("u7_oi_reset" if key.endswith("oi") else "u7_reset"),
+                                (token.get("forecast") or {}).get(key, {}),
+                                ((usage.get("_samples") or {}).get(token.get("fp"), {}) or {}).get(key, [])))
+    if "openai-codex" in allowed:
+        codex = usage.get("providers", {}).get("openai-codex", {})
+        for window in codex.get("windows", []):
+            if window.get("window_seconds") == 18000:
+                continue
+            name = window.get("name")
+            windows.append((window.get("used_percent", 100) / 100,
+                            window.get("reset_at"), (codex.get("forecast") or {}).get(name, {}),
+                            ((usage.get("_samples") or {}).get("codex:" + str(name), {}) or {}).get(name, [])))
+    for util, reset, fc, samples in windows:
+        # The advertised reset is the *next* reset. Detect a recent reset from
+        # the sample rollover, not by subtracting a hard-coded week from it.
+        if (util is not None and util < .1 and stamp(reset) is not None
+                and 0 <= now - (stamp(reset) - 7 * 86400) < 1800
+                and samples and samples[0][0] >= stamp(reset) - 7 * 86400):
+            return "reset"
+        projected = fc.get("projected_at_reset")
+        if fc.get("forecast") == "waste" and projected is not None and projected <= .8:
+            return "waste"
+    if job.get("not_before") is not None and now >= job["not_before"] and any(
+            c.get("routable") for c in candidates):
+        return "not-before"
+    return None
+
+
+def launch(job, slug):
+    STATE.mkdir(parents=True, exist_ok=True)
+    log = STATE / (slug + ".log")
+    env = os.environ.copy()
+    env.update(job["env"])
+    env["PI_LLM_CLASS"] = job["class"]
+    if shutil.which("systemd-run") and not os.environ.get("LLM_SCHEDULE_NO_SYSTEMD"):
+        try:
+            subprocess.run(["systemd-run", "--user", "--unit", "llm-job-" + slug,
+                            "--working-directory", job["cwd"], "--property", "StandardOutput=append:" + str(log),
+                            "--property", "StandardError=append:" + str(log),
+                            *[arg for key, value in job["env"].items() for arg in ("--setenv", key + "=" + value)],
+                            "--setenv", "PI_LLM_CLASS=" + job["class"], "--", *job["cmd"]],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+            return
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    with log.open("ab") as output:
+        subprocess.Popen(job["cmd"], cwd=job["cwd"], env=env, stdin=subprocess.DEVNULL,
+                         stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="action", required=True)
+    add = sub.add_parser("add")
+    add.add_argument("--class", dest="class_name", default="build")
+    add.add_argument("--prefer", choices=("anthropic", "codex", "any"), default="any")
+    add.add_argument("--not-before")
+    add.add_argument("cmd", nargs=argparse.REMAINDER)
+    sub.add_parser("list")
+    rm = sub.add_parser("rm")
+    rm.add_argument("job")
+    sub.add_parser("run-due")
+    args = parser.parse_args()
+    queue = DATA / "queue"
+    done = DATA / "done"
+    queue.mkdir(parents=True, exist_ok=True)
+    if args.action == "add":
+        cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
+        if not cmd:
+            parser.error("add needs -- <command…>")
+        before = stamp(args.not_before) if args.not_before else None
+        if args.not_before and before is None:
+            parser.error("invalid --not-before ISO timestamp")
+        slug = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + re.sub(r"[^a-z0-9-]", "-", Path(cmd[0]).name.lower())[:20] + "-" + uuid.uuid4().hex[:6]
+        job = {"cmd": cmd, "cwd": os.getcwd(), "env": {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "PI_ANTHROPIC_PROXY_URL", "CC_PROXY_PORT")},
+               "class": args.class_name, "prefer": args.prefer, "created": time.time(), "not_before": before}
+        (queue / (slug + ".job")).write_text(json.dumps(job) + "\n")
+        print(slug)
+    elif args.action == "list":
+        for path in sorted(queue.glob("*.job")):
+            print(path.stem, path.read_text().strip())
+    elif args.action == "rm":
+        path = queue / (args.job + ".job")
+        path.unlink()
+    else:
+        # A lock prevents two timer ticks starting the same command twice.
+        with (DATA / "run.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for path in sorted(queue.glob("*.job")):
+                try:
+                    job = json.loads(path.read_text())
+                    route = get("/_route?class=" + urllib.parse.quote(job["class"]))
+                    usage = get("/_usage")
+                    why = reason(job, route, usage, time.time())
+                    if not why:
+                        continue
+                    launch(job, path.stem)
+                    done.mkdir(parents=True, exist_ok=True)
+                    job["start_reason"] = why
+                    job["started"] = time.time()
+                    (done / path.name).write_text(json.dumps(job) + "\n")
+                    path.unlink()
+                    print(path.stem, why)
+                except (OSError, ValueError, KeyError) as exc:
+                    print(f"llm-schedule: {path.name}: {exc}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

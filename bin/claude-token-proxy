@@ -63,7 +63,10 @@ Token selection (see docs/research/claude-token-rotation-oss.md): CC_PROXY_PICK
 (`pressure` default — spend perishable weekly quota first, model-aware bucket;
 `headroom` — legacy lowest-7d-utilization) and CC_PROXY_PICK_TOLERANCE (default
 1.5 — stickiness band that keeps the previous token, and its prompt cache,
-unless another token's pressure is this many times better).
+unless another token's pressure is this many times better). Pressure is
+`min(7d headroom / seconds to 7d reset, 5h headroom / seconds to 5h reset)`;
+unknown utilization/reset means full headroom and a full window. Threshold preference
+applies to both the model's weekly bucket and the 5h bucket.
 429 pacing: CC_PROXY_BURST_WAIT_MAX (default 15s) — a 429 that does not mark a
 spent bucket is a per-minute burst limit, so the proxy waits out Retry-After (up
 to this cap) and retries the SAME token once instead of rotating; rotating would
@@ -83,6 +86,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import OrderedDict
 import hashlib
 import http.client
 import json
@@ -101,6 +105,8 @@ from pathlib import Path
 TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
 UPSTREAM_HOST = "api.anthropic.com"
 ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
+SWEEP_HOURS = float(os.environ.get("CC_PROXY_SWEEP_HOURS", "12"))
+SWEEP_BOOST = float(os.environ.get("CC_PROXY_SWEEP_BOOST", "2.0"))
 PICK_MODE = os.environ.get("CC_PROXY_PICK", "pressure")  # pressure | headroom (legacy)
 PICK_TOLERANCE = float(os.environ.get("CC_PROXY_PICK_TOLERANCE", "1.5"))
 # Fable models are metered on their own weekly bucket (7d_oi =
@@ -118,7 +124,13 @@ USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
 # through the symlink so the systemd unit and the checkout agree on the file.
 ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
+CLASSES_FILE = Path(os.environ.get("CC_PROXY_CLASSES")
+                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "classes.json")
 DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
+DEEPSEEK_MONTHLY_CAP = float(os.environ.get("CC_PROXY_DEEPSEEK_MONTHLY_CAP", "20"))
+DEEPSEEK_SPEND = {"month": datetime.now(timezone.utc).strftime("%Y-%m"), "start_balance": None, "min_balance": None}
+STARVED_COUNT = 0
+STARVED_LAST = None
 DEEPSEEK_FALLBACK = os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0") == "1"
 # A client that does its own cross-provider failover (pi's llm-failover extension)
 # sends `x-cc-proxy-fallback: none` so an exhausted pool surfaces as the normal
@@ -236,6 +248,17 @@ class Tok:
 
     def snapshot(self) -> dict:
         now = time.time()
+        windows = {"5h": (self.u5, self.u5_reset), "7d": (self.u7, self.u7_reset),
+                   "7d_oi": (self.u7_oi, self.u7_oi_reset)}
+        forecasts = {}
+        for key, (value, reset) in windows.items():
+            quota_key = {"5h": "five_hour", "7d": "seven_day", "7d_oi": "seven_day_overage_included"}[key]
+            quota_window = (self.quota or {}).get(quota_key, {}) if isinstance(self.quota, dict) else {}
+            quota_used = quota_window.get("utilization") if isinstance(quota_window, dict) else None
+            if isinstance(quota_used, (int, float)):
+                value = quota_used / 100 if quota_used > 1 else quota_used
+                reset = quota_window.get("resets_at") or quota_window.get("reset_at") or reset
+            forecasts[key] = forecast(SAMPLES.get(self.fp, {}).get(key, []), value, _iso_epoch(reset), now)
         return {
             "fp": self.fp,
             "label": self.label,
@@ -246,6 +269,7 @@ class Tok:
             "u5_reset": self.u5_reset,
             "u7_reset": self.u7_reset,
             "u7_oi_reset": self.u7_oi_reset,
+            "forecast": forecasts,
             "unified_status": self.unified_status,
             "last_status": self.last_status,
             "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
@@ -287,6 +311,103 @@ PERSISTENCE_ERROR: str | None = None
 FALLBACK_STATE_KEY = "_deepseek_fallback"
 FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model": None,
                   "episode_requests": 0, "requests": 0, "by_model": {}}
+SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
+# P4 accounting: class -> model -> counters (persisted as _class_usage). A counter,
+# not a routing.log line: one event per request swamped `routing.recent`.
+CLASS_USAGE: dict[str, dict[str, dict[str, int]]] = {}
+ROUTING_LOG = CONTROL_DIR / "routing.log"
+MAX_SAMPLES = 200
+RAMP_CONCURRENCY = max(1, int(os.environ.get("CC_PROXY_RAMP_CONCURRENCY", "2")))
+RAMP_SECONDS = max(0, float(os.environ.get("CC_PROXY_RAMP_SECONDS", "60")))
+RAMP_LOCK = threading.Lock()
+RAMPS: dict[str, tuple[float, threading.Semaphore]] = {}
+IN_FLIGHT: dict[str, int] = {}
+
+
+def ramp_upstream(tok, method, path, headers, body):
+    """Gate new upstream calls after a move; never wait under the picker LOCK."""
+    with RAMP_LOCK:
+        until, gate = RAMPS.get(tok.fp, (0, None))
+        if until <= time.time():
+            gate = None
+    acquired = gate.acquire(timeout=5) if gate else False
+    with RAMP_LOCK:
+        IN_FLIGHT[tok.fp] = IN_FLIGHT.get(tok.fp, 0) + 1
+    try:
+        return upstream(method, path, headers, body, tok.token)
+    finally:
+        with RAMP_LOCK:
+            IN_FLIGHT[tok.fp] -= 1
+        if acquired:
+            gate.release()
+
+
+def forecast(samples, utilization, reset_at, now=None):
+    now = time.time() if now is None else now
+    points = sorted(samples or [], key=lambda p: p[0])
+    slope = None
+    if len(points) >= 2 and points[-1][0] - points[0][0] >= 900:
+        slope = (points[-1][1] - points[0][1]) / ((points[-1][0] - points[0][0]) / 3600)
+    projected = None
+    state, exhaust_at = "unknown", None
+    if slope is not None and utilization is not None and reset_at:
+        projected = max(0.0, min(1.0, utilization + slope * max(0, reset_at - now) / 3600))
+        if slope > 0 and utilization < 1 and (1-utilization)/slope * 3600 < reset_at-now:
+            state, exhaust_at = "exhaust", now + (1-utilization)/slope*3600
+        elif projected < .9:
+            state = "waste"
+        else:
+            state = "on_track"
+    return {"burn_per_hour": slope, "projected_at_reset": projected,
+            "forecast": state, "exhaust_at": exhaust_at}
+
+
+def append_route(event):
+    if event.get("from_fp") and event.get("to_fp") and event.get("from_fp") != event.get("to_fp"):
+        with RAMP_LOCK:
+            RAMPS[event["to_fp"]] = (time.time() + RAMP_SECONDS, threading.Semaphore(RAMP_CONCURRENCY))
+    try:
+        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        if ROUTING_LOG.exists() and ROUTING_LOG.stat().st_size >= 1_000_000:
+            ROUTING_LOG.replace(ROUTING_LOG.with_suffix(".log.1"))
+        with ROUTING_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def recent_routes():
+    try:
+        return [json.loads(line) for line in ROUTING_LOG.read_text().splitlines()[-20:]]
+    except (OSError, ValueError):
+        return []
+
+
+def record_external_sample(series_key, bucket, utilization, reset_at=None, now=None):
+    now = time.time() if now is None else now
+    series = SAMPLES.setdefault(series_key, {}).setdefault(bucket, [])
+    reset_epoch = reset_at if isinstance(reset_at, (int, float)) else _iso_epoch(reset_at)
+    if reset_epoch is not None and now >= reset_epoch:
+        series.clear()
+    series.append([now, float(utilization)])
+    del series[:-MAX_SAMPLES]
+
+
+def record_sample(tok):
+    now = time.time()
+    buckets = (("5h", tok.u5, tok.u5_reset), ("7d", tok.u7, tok.u7_reset),
+               ("7d_oi", tok.u7_oi, tok.u7_oi_reset))
+    for name, value, reset in buckets:
+        if value is None:
+            continue
+        series = SAMPLES.setdefault(tok.fp, {}).setdefault(name, [])
+        reset_epoch = _iso_epoch(reset)
+        if reset_epoch is not None and now >= reset_epoch:
+            series.clear()
+        elif reset_epoch is not None and series and series[-1][0] >= reset_epoch:
+            series.clear()
+        series.append([now, float(value)])
+        del series[:-MAX_SAMPLES]
 
 
 def load_usage_state() -> dict:
@@ -310,7 +431,12 @@ def save_usage_state() -> bool:
             "cache_read_input_tokens": t.cache_read_input_tokens,
             "cache_creation_input_tokens": t.cache_creation_input_tokens,
             "by_model": t.by_model,
+            "quota": quota_snapshot(t),
         } for t in STATE}
+        data["_samples"] = SAMPLES
+        data["_deepseek_spend"] = DEEPSEEK_SPEND
+        data["_class_usage"] = CLASS_USAGE
+        data["_routing_starved"] = {"count": STARVED_COUNT, "last": STARVED_LAST}
         if FALLBACK["requests"]:
             data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
                                         "by_model": FALLBACK["by_model"]}
@@ -329,6 +455,38 @@ def save_usage_state() -> bool:
     return True
 
 
+# Header observations survive restarts. The seed probe is a haiku call, so it
+# refreshes 5h/7d but never the 7d_oi (fable) bucket; without this a restart
+# forgets that an account is fable-exhausted and "unknown = full headroom"
+# ranks it first. Cooldowns are kept so a restart cannot bypass upstream backoff.
+QUOTA_FIELDS = ("u5", "u7", "u7_oi", "u5_reset", "u7_reset", "u7_oi_reset", "unified_status")
+
+
+def quota_snapshot(t: Tok) -> dict:
+    snap = {key: getattr(t, key) for key in QUOTA_FIELDS}
+    snap["cooldown_until"] = t.cooldown_until
+    snap["model_cooldowns"] = t.model_cooldowns
+    return snap
+
+
+def restore_quota(tok: Tok, saved: dict, now: float | None = None) -> None:
+    """Only fill fields that are still unknown; live headers always win."""
+    if not isinstance(saved, dict):
+        return
+    now = time.time() if now is None else now
+    for key in QUOTA_FIELDS:
+        if getattr(tok, key) is None and saved.get(key) is not None:
+            setattr(tok, key, saved[key])
+    cooldown = saved.get("cooldown_until")
+    if isinstance(cooldown, (int, float)) and cooldown > now:
+        tok.cooldown_until = max(tok.cooldown_until, float(cooldown))
+    scoped = saved.get("model_cooldowns")
+    if isinstance(scoped, dict):
+        for scope, until in scoped.items():
+            if isinstance(until, (int, float)) and until > now:
+                tok.model_cooldowns[scope] = max(tok.model_cooldowns.get(scope, 0.0), float(until))
+
+
 def restore_usage_state() -> None:
     data = load_usage_state()
     for tok in STATE:
@@ -338,6 +496,37 @@ def restore_usage_state() -> None:
             setattr(tok, key, int(saved.get(key, 0) or 0))
         models = saved.get("by_model", {})
         tok.by_model = models if isinstance(models, dict) else {}
+        restore_quota(tok, saved.get("quota"))
+    global SAMPLES
+    global DEEPSEEK_SPEND, STARVED_COUNT, STARVED_LAST
+    spend = data.get("_deepseek_spend", {})
+    if isinstance(spend, dict):
+        DEEPSEEK_SPEND = {"month": spend.get("month"), "start_balance": spend.get("start_balance"), "min_balance": spend.get("min_balance")}
+    starved = data.get("_routing_starved", {})
+    if isinstance(starved, dict):
+        STARVED_COUNT = int(starved.get("count", 0) or 0)
+        STARVED_LAST = starved.get("last")
+    global CLASS_USAGE
+    saved_classes = data.get("_class_usage", {})
+    CLASS_USAGE = saved_classes if isinstance(saved_classes, dict) else {}
+    saved_samples = data.get("_samples", {})
+    SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
+    now = time.time()
+    valid_fps = {tok.fp for tok in STATE}
+    for fingerprint in list(SAMPLES):
+        if (fingerprint not in valid_fps and not fingerprint.startswith("codex:")) or not isinstance(SAMPLES[fingerprint], dict):
+            SAMPLES.pop(fingerprint, None)
+            continue
+        for bucket, points in list(SAMPLES[fingerprint].items()):
+            reset = {"5h": next((t.u5_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d": next((t.u7_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d_oi": next((t.u7_oi_reset for t in STATE if t.fp == fingerprint), None)}.get(bucket)
+            boundary = _iso_epoch(reset)
+            cleaned = [p for p in points if isinstance(p, list) and len(p) == 2
+                       and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))
+                       and p[0] <= now and now-p[0] < 8*86400
+                       and (boundary is None or p[0] > boundary)] if isinstance(points, list) else []
+            SAMPLES[fingerprint][bucket] = cleaned[-MAX_SAMPLES:]
     saved = data.get(FALLBACK_STATE_KEY, {})
     if isinstance(saved, dict):
         FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
@@ -497,6 +686,23 @@ def update_from_headers(tok: Tok, headers) -> None:
     status = headers.get("anthropic-ratelimit-unified-7d-status")
     if status:
         tok.unified_status = status
+    record_sample(tok)
+
+
+def session_key_from(headers, body: bytes) -> str | None:
+    """Derive conversation affinity from explicit header, metadata, then system prompt."""
+    session_key = headers.get("x-cc-proxy-session")
+    try:
+        payload = json.loads(body)
+        if not session_key and isinstance(payload, dict):
+            metadata = payload.get("metadata")
+            session_key = metadata.get("user_id") if isinstance(metadata, dict) else None
+            if not session_key and payload.get("system"):
+                system = json.dumps(payload["system"], sort_keys=True, separators=(",", ":"))
+                session_key = "system:" + hashlib.sha256(system.encode()).hexdigest()
+    except (TypeError, ValueError, UnicodeDecodeError):
+        pass
+    return session_key
 
 
 def request_model(body: bytes) -> str:
@@ -507,13 +713,15 @@ def request_model(body: bytes) -> str:
         return "unknown"
 
 
-def record_request(tok: Tok, model: str) -> None:
+def record_request(tok: Tok, model: str, class_name: str | None = None) -> None:
     tok.requests += 1
     bucket = tok.by_model.setdefault(model, {
         "requests": 0, "input_tokens": 0, "output_tokens": 0,
         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
     })
     bucket["requests"] += 1
+    if class_name:
+        _model_bucket(CLASS_USAGE.setdefault(class_name, {}), model)["requests"] += 1
     with LOCK:
         save_usage_state()
 
@@ -536,7 +744,7 @@ def _model_bucket(by_model: dict, model: str) -> dict:
     })
 
 
-def add_usage(tok: Tok | None, model: str, usage: dict) -> None:
+def add_usage(tok: Tok | None, model: str, usage: dict, class_name: str | None = None) -> None:
     """Record usage reported by a JSON or SSE response, if present.
 
     `tok` is None for a DeepSeek passthrough response; those tokens are
@@ -553,6 +761,10 @@ def add_usage(tok: Tok | None, model: str, usage: dict) -> None:
         bucket = _model_bucket(tok.by_model, model)
     for key, value in values.items():
         bucket[key] += value
+    if class_name:
+        class_bucket = _model_bucket(CLASS_USAGE.setdefault(class_name, {}), model)
+        for key, value in values.items():
+            class_bucket[key] += value
     with LOCK:
         save_usage_state()
 
@@ -726,6 +938,18 @@ def codex(auth: dict) -> dict:
             windows.append({"name": name, "used_percent": numeric(window.get("used_percent")),
                             "window_seconds": numeric(window.get("limit_window_seconds")),
                             "reset_at": numeric(window.get("reset_at"))})
+    for index, extra in enumerate(data.get("additional_rate_limits") or []):
+        if not isinstance(extra, dict):
+            continue
+        rate = extra.get("rate_limit") or extra
+        if not isinstance(rate, dict):
+            continue
+        for name in ("primary_window", "secondary_window"):
+            window = rate.get(name)
+            if isinstance(window, dict) and numeric(window.get("limit_window_seconds")) == 18000:
+                windows.append({"name": f"additional_{index}_{name}",
+                                "used_percent": numeric(window.get("used_percent")),
+                                "window_seconds": 18000, "reset_at": numeric(window.get("reset_at"))})
     if not windows:
         return {"status": "unavailable", "account": claims,
                 "reason": "Subscription endpoint returned no recognized quota windows."}
@@ -810,6 +1034,24 @@ def safe_query(provider: str, auth: dict) -> dict:
     return {**result, "checked_at": int(time.time())}
 
 
+def update_deepseek_spend(balance: float, now: datetime | None = None) -> dict:
+    """Update monthly observed spend; a balance increase represents a top-up."""
+    now = now or datetime.now(timezone.utc)
+    month = now.strftime("%Y-%m")
+    if DEEPSEEK_SPEND.get("month") != month or DEEPSEEK_SPEND.get("start_balance") is None:
+        DEEPSEEK_SPEND.update(month=month, start_balance=balance, min_balance=balance)
+    elif balance > float(DEEPSEEK_SPEND.get("min_balance", balance)):
+        DEEPSEEK_SPEND.update(start_balance=balance, min_balance=balance)
+    else:
+        DEEPSEEK_SPEND["min_balance"] = min(float(DEEPSEEK_SPEND.get("min_balance", balance)), balance)
+    return DEEPSEEK_SPEND
+
+
+def deepseek_month_spend() -> float:
+    start, low = DEEPSEEK_SPEND.get("start_balance"), DEEPSEEK_SPEND.get("min_balance")
+    return max(0.0, float(start) - float(low)) if start is not None and low is not None else 0.0
+
+
 def refresh_providers() -> None:
     """Poll every non-Anthropic provider once; runs off the request path."""
     auth = read_auth()
@@ -817,6 +1059,22 @@ def refresh_providers() -> None:
         result = safe_query(provider, auth)
         with LOCK:
             PROVIDER_STATE[provider] = result
+            if provider == "deepseek" and result.get("status") == "ok":
+                rows = result.get("balances") or []
+                row = next((r for r in rows if r.get("currency") == "USD"), rows[0] if rows else {})
+                try:
+                    balance = float(row.get("total_balance"))
+                    update_deepseek_spend(balance)
+                    save_usage_state()
+                except (TypeError, ValueError):
+                    pass
+            if provider == "openai-codex" and result.get("status") == "ok":
+                for window in result.get("windows", []):
+                    used = window.get("used_percent")
+                    if isinstance(used, (int, float)):
+                        name = str(window.get("name", "window"))
+                        record_external_sample(f"codex:{name}", name, used / 100, window.get("reset_at"))
+                save_usage_state()
         log(f"provider {provider}: {result['status']}"
             + (f" ({result.get('reason')})" if result["status"] != "ok" else ""))
 
@@ -954,21 +1212,24 @@ def watchdog(path: str) -> None:
             next_usage = now + USAGE_INTERVAL
         with LOCK:
             stale = [t for t in STATE
-                     if not t.valid and now - t.last_revalidate >= REVALIDATE_INTERVAL]
+                     if (not t.valid or readings_expired(t, now)) and now - t.last_revalidate >= REVALIDATE_INTERVAL]
         for tok in stale:
-            probe(tok, note="revalidate")
-            if tok.valid:
+            was_valid = tok.valid
+            probe(tok, note="refresh" if was_valid else "revalidate")
+            if tok.valid and not was_valid:
                 log(f"token {tok.name()} recovered — back in rotation")
+            with LOCK:
+                void_expired_readings(tok, time.time())
 
 
-# Sticky pick per bucket: re-picking a different token for a continuing
-# conversation discards the upstream prompt cache, so we only move when the
-# pressure gap is worth it.
-LAST_PICK: dict[str, str] = {}
+# Session affinity: bounded LRU; timestamps also expire idle conversations.
+AFFINITY_MAX = 1000
+AFFINITY_IDLE = 6 * 3600
+LAST_PICK: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
 
 
 def _iso_epoch(value: str | None) -> float | None:
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         return datetime.fromisoformat(value).timestamp()
@@ -981,16 +1242,71 @@ def bucket_key(model: str) -> str:
     return "oi" if FABLE_MODEL_RE.search(model or "") else "base"
 
 
-def bucket_util(t: Tok, key: str) -> float | None:
-    return t.u7_oi if key == "oi" else t.u7
-
-
 def bucket_reset(t: Tok, key: str) -> float | None:
     return _iso_epoch(t.u7_oi_reset if key == "oi" else t.u7_reset)
 
 
+def bucket_util(t: Tok, key: str, now: float | None = None) -> float | None:
+    """Last observed weekly utilization, or None once that window has reset.
+
+    Utilization comes from response headers, so an account that stopped
+    receiving traffic keeps its last reading forever. Once the window's reset
+    time has passed the reading is void: treating it as unknown (full headroom)
+    lets the account back into rotation so the next response refreshes it.
+    Without this, a token that hit 100% is "over threshold" for good.
+    """
+    now = time.time() if now is None else now
+    reset = bucket_reset(t, key)
+    if reset is not None and reset <= now:
+        return None
+    return t.u7_oi if key == "oi" else t.u7
+
+
+def readings_expired(t: Tok, now: float) -> bool:
+    """A window reset since the last header observation, so its reading is void.
+
+    Idle tokens never receive traffic, so the watch loop re-probes them to
+    replace the void reading instead of guessing until they are picked again.
+    """
+    return any(reset is not None and reset <= now
+               for reset in (_iso_epoch(t.u5_reset), _iso_epoch(t.u7_reset), _iso_epoch(t.u7_oi_reset)))
+
+
+def void_expired_readings(t: Tok, now: float) -> None:
+    """Drop readings a probe could not refresh (haiku responses carry no 7d_oi).
+
+    Unknown is the honest state and stops the watch loop re-probing forever.
+    """
+    for util, reset in (("u5", "u5_reset"), ("u7", "u7_reset"), ("u7_oi", "u7_oi_reset")):
+        epoch = _iso_epoch(getattr(t, reset))
+        if epoch is not None and epoch <= now:
+            setattr(t, util, None)
+            setattr(t, reset, None)
+
+
+def five_hour_util(t: Tok, now: float) -> float | None:
+    reset = _iso_epoch(t.u5_reset)
+    return None if reset is not None and reset <= now else t.u5
+
+
+def sweep_factor(t: Tok, key: str, now: float) -> float:
+    """Boost a wasting weekly window only while its 5h bucket is safe."""
+    reset = bucket_reset(t, key)
+    util = bucket_util(t, key, now)
+    if (reset is None or util is None or not now < reset <= now + SWEEP_HOURS * 3600
+            or (five_hour_util(t, now) or 0.0) >= ROTATE_THRESHOLD):
+        return 1.0
+    window = "7d_oi" if key == "oi" else "7d"
+    fc = forecast(SAMPLES.get(t.fp, {}).get(window, []), util, reset, now)
+    return SWEEP_BOOST if fc["forecast"] == "waste" else 1.0
+
+
+def sweep_threshold(t: Tok, key: str, now: float) -> float:
+    return max(ROTATE_THRESHOLD, .995) if sweep_factor(t, key, now) > 1 else ROTATE_THRESHOLD
+
+
 def pressure(t: Tok, key: str, now: float) -> float:
-    """Perishable-quota score: weekly headroom per second until it expires.
+    """Minimum weekly and 5h headroom per second until the window expires.
 
     Quota that is about to reset is free to spend (it vanishes either way),
     while a distant reset makes the same headroom precious. Highest pressure
@@ -1000,13 +1316,75 @@ def pressure(t: Tok, key: str, now: float) -> float:
     week out, matching the legacy convention of trying unknown tokens early
     and letting the failover path correct us.
     """
-    headroom = 1.0 - (bucket_util(t, key) or 0.0)
-    reset = bucket_reset(t, key)
-    seconds = max(60.0, reset - now) if reset is not None and reset > now else 7 * 86400.0
-    return headroom / seconds
+    def score(util, reset, duration):
+        headroom = 1.0 - (util or 0.0)
+        epoch = _iso_epoch(reset)
+        seconds = max(60.0, epoch - now) if epoch is not None and epoch > now else duration
+        return headroom / seconds
+    weekly = score(bucket_util(t, key, now), bucket_reset(t, key), 7 * 86400.0)
+    five_hour = score(five_hour_util(t, now), t.u5_reset, 5 * 3600.0)
+    return min(weekly, five_hour) * sweep_factor(t, key, now)
 
 
-def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
+def _affinity_key(session_key: str | None, bucket: str) -> tuple[str, str]:
+    return (session_key or "global", bucket)
+
+
+def _prune_affinity(now: float) -> None:
+    for key, (_, touched) in list(LAST_PICK.items()):
+        if now - touched > AFFINITY_IDLE:
+            del LAST_PICK[key]
+    while len(LAST_PICK) > AFFINITY_MAX:
+        LAST_PICK.popitem(last=False)
+
+
+def five_hour_pressure(t: Tok, now: float) -> float:
+    reset = _iso_epoch(t.u5_reset)
+    seconds = max(60.0, reset - now) if reset is not None and reset > now else 5 * 3600.0
+    return (1.0 - (five_hour_util(t, now) or 0.0)) / seconds
+
+
+def boundary_move(prev: Tok, pool: list[Tok], key: str, now: float, boundary: bool) -> Tok | None:
+    if not boundary or PICK_MODE != "pressure":
+        return None
+    highest = max(five_hour_pressure(t, now) for t in pool)
+    if five_hour_pressure(prev, now) * PICK_TOLERANCE >= highest:
+        return None
+    band = [t for t in pool if t.fp != prev.fp and five_hour_pressure(t, now) * PICK_TOLERANCE >= highest]
+    return next(t for t in band if t.fp == spread_choice(band, key, now))
+
+
+def spread_choice(band: list[Tok], key: str, now: float) -> str:
+    """Pick the least-affined token in the tolerance band; pressure breaks ties."""
+    counts = {t.fp: sum(1 for (_, bucket), (fp_, touched) in LAST_PICK.items()
+                        if bucket == key and fp_ == t.fp and now - touched <= AFFINITY_IDLE)
+              for t in band}
+    return min(band, key=lambda t: (counts[t.fp], -pressure(t, key, now))).fp
+
+
+CLASS_ORDER = ["mechanical", "research", "build", "interactive"]
+
+
+def escalated_class(class_name: str, session: str | None) -> str:
+    if class_name not in CLASS_ORDER[:-1]:
+        return class_name
+    target = CLASS_ORDER[CLASS_ORDER.index(class_name) + 1]
+    append_route({"ts": datetime.now(timezone.utc).isoformat(), "kind": "escalate", "class": class_name,
+                  "to": target, "session": session})
+    return target
+
+
+def class_eligible(t, class_name: str | None, bucket: str, now: float) -> bool:
+    if not class_name or bucket != "oi":
+        return True
+    ceiling = load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {})
+    if ceiling.get("no_oi"):
+        return False
+    limit = ceiling.get("oi_max_used")
+    return limit is None or t.u7_oi is None or t.u7_oi <= float(limit)
+
+
+def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None, class_name: str | None = None, boundary: bool = False) -> Tok | None:
     """Choose a token for the weekly bucket this request's model debits.
 
     Eligibility (valid, not cooling, not forced down) and the over-threshold
@@ -1020,25 +1398,37 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
     eligible = [
         t for t in STATE
         if t.valid and t.fp not in exclude and now >= cooldown_deadline(t, model) and t.fp not in forced
+        and class_eligible(t, class_name, bucket_key(model), now)
     ]
 
     if PICK_MODE == "headroom":  # legacy rollback path: exact pre-pressure behavior
-        below = [t for t in eligible if (t.u7 or 0.0) < ROTATE_THRESHOLD]
+        below = [t for t in eligible if (bucket_util(t, "base", now) or 0.0) < ROTATE_THRESHOLD]
         pool = below or eligible
         if pool:
-            return min(pool, key=lambda t: (t.u7 if t.u7 is not None else 0.0,
-                                            t.u5 if t.u5 is not None else 0.0))
+            return min(pool, key=lambda t: (bucket_util(t, "base", now) or 0.0,
+                                            five_hour_util(t, now) or 0.0))
     else:
         key = bucket_key(model)
-        below = [t for t in eligible if (bucket_util(t, key) or 0.0) < ROTATE_THRESHOLD]
+        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < sweep_threshold(t, key, now)
+                 and (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD]
         pool = below or eligible
         if pool:
             best = max(pool, key=lambda t: pressure(t, key, now))
-            prev_fp = LAST_PICK.get(key)
-            prev = next((t for t in pool if t.fp == prev_fp), None)
-            if prev is not None and pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now):
-                best = prev
-            LAST_PICK[key] = best.fp
+            _prune_affinity(now)
+            akey = _affinity_key(session_key, key)
+            previous = LAST_PICK.get(akey)
+            prev = next((t for t in pool if previous and t.fp == previous[0]), None)
+            if prev is not None:
+                moved = boundary_move(prev, pool, key, now, boundary and session_key is not None)
+                best = moved or (prev if session_key is not None or
+                                 pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now) else best)
+            elif previous is None:
+                # Within the tolerance band, spread new sessions across accounts.
+                band = [t for t in pool if pressure(t, key, now) * PICK_TOLERANCE >= pressure(best, key, now)]
+                best = next(t for t in band if t.fp == spread_choice(band, key, now))
+            LAST_PICK[akey] = (best.fp, now)
+            LAST_PICK.move_to_end(akey)
+            _prune_affinity(now)
             return best
     # No eligible account remains. Never bypass an upstream cooldown: doing so
     # defeats backoff and retries exhausted accounts on every incoming request.
@@ -1049,36 +1439,69 @@ def pick(exclude=frozenset(), model: str = "unknown") -> Tok | None:
 ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
 
 
-def rank_pool(model: str, now: float | None = None) -> dict:
+def rank_pool(model: str, now: float | None = None, session_key: str | None = None, class_name: str | None = None, messages_len: int | None = None, boundary: bool = False) -> dict:
     """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
     now = time.time() if now is None else now
-    key = bucket_key(model)
+    key = "base" if PICK_MODE == "headroom" else bucket_key(model)
     forced = forced_cooldown_fps()
+    class_ok = {t.fp: class_eligible(t, class_name, bucket_key(model), now) for t in STATE}
+    available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)
+                 and class_ok[t.fp]]
+    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < sweep_threshold(t, key, now)
+             and (PICK_MODE == "headroom" or (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD)]
+    # The threshold is a preference, not a hard ban: pick() retries available
+    # over-threshold accounts when there are no below-threshold candidates.
     ranked = []
     for t in STATE:
-        util = bucket_util(t, key)
+        util = bucket_util(t, key, now)
         if t.fp in forced:
             reason = "forced offline"
         elif not t.valid:
             reason = "parked"
+        elif not class_ok[t.fp]:
+            reason = "class ceiling"
         elif now < cooldown_deadline(t, model):
             reason = "cooldown"
-        elif (util or 0.0) >= ROTATE_THRESHOLD:
+        elif below and ((util or 0.0) >= sweep_threshold(t, key, now)
+                        or (PICK_MODE != "headroom" and (five_hour_util(t, now) or 0.0) >= ROTATE_THRESHOLD)):
             reason = "over threshold"
         else:
             reason = None
         ranked.append({"fp": t.fp, "eligible": reason is None, "reason": reason,
                        "utilization": util, "reset_at": _bucket_reset_iso(t, key),
+                       "sweep": sweep_factor(t, key, now) > 1,
                        "pressure": pressure(t, key, now) if reason is None else None})
     ranked.sort(key=lambda r: (not r["eligible"], -(r["pressure"] or 0.0)))
     chosen = None
     eligible = [r for r in ranked if r["eligible"]]
     if eligible:
-        best = eligible[0]
-        prev = next((r for r in eligible if r["fp"] == LAST_PICK.get(key)), None)
-        sticky = prev is not None and prev["pressure"] * PICK_TOLERANCE >= best["pressure"]
-        chosen = prev["fp"] if sticky else best["fp"]
-    return {"model_example": model, "last_pick": LAST_PICK.get(key), "would_pick": chosen, "ranking": ranked}
+        if PICK_MODE == "headroom":
+            candidates = below or available
+            chosen = min(candidates, key=lambda t: (bucket_util(t, key, now) or 0.0,
+                                                    five_hour_util(t, now) or 0.0)).fp
+        else:
+            best = eligible[0]
+            _prune_affinity(now)
+            akey = _affinity_key(session_key, key)
+            previous = LAST_PICK.get(akey)
+            prev = next((r for r in eligible if previous and r["fp"] == previous[0]), None)
+            if prev is not None:
+                prev_token = next(t for t in available if t.fp == prev["fp"])
+                pool_tokens = [t for t in available if any(r["fp"] == t.fp for r in eligible)]
+                moved = boundary_move(prev_token, pool_tokens, key, now,
+                                      session_key is not None and (boundary or messages_len is not None and messages_len <= 2))
+                chosen = (moved or (prev_token if session_key is not None or
+                                    prev["pressure"] * PICK_TOLERANCE >= best["pressure"] else
+                                    next(t for t in pool_tokens if t.fp == best["fp"]))).fp
+            elif previous is None and eligible:
+                band = [r for r in eligible if r["pressure"] * PICK_TOLERANCE >= best["pressure"]]
+                band_tokens = [t for t in available if t.fp in {r["fp"] for r in band}]
+                chosen = spread_choice(band_tokens, key, now)
+            else:
+                chosen = best["fp"]
+    previous = LAST_PICK.get(_affinity_key(session_key, key))
+    return {"model_example": model, "last_pick": (previous[0] if previous else None) if PICK_MODE != "headroom" else None,
+            "would_pick": chosen, "ranking": ranked}
 
 
 def _bucket_reset_iso(t: Tok, key: str) -> str | None:
@@ -1093,6 +1516,27 @@ def routing_preview() -> dict:
 
 
 # --- Equivalence table + route oracle -----------------------------------------
+
+CLASSES: dict[str, dict] = {}
+CLASSES_MTIME: float | None = None
+CLASSES_ERROR: str | None = None
+
+
+def load_classes() -> dict[str, dict]:
+    global CLASSES, CLASSES_MTIME, CLASSES_ERROR
+    try:
+        mtime = CLASSES_FILE.stat().st_mtime
+        if mtime == CLASSES_MTIME:
+            return CLASSES
+        data = json.loads(CLASSES_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("classes must be an object")
+        CLASSES, CLASSES_MTIME, CLASSES_ERROR = data, mtime, None
+    except (OSError, ValueError, TypeError) as exc:
+        CLASSES_ERROR = exc.__class__.__name__
+        log(f"classes file {CLASSES_FILE} invalid ({CLASSES_ERROR}); keeping previous table")
+    return CLASSES
+
 
 ROUTES: dict[str, list[list[str]]] = {}
 ROUTES_MTIME: float | None = None
@@ -1157,9 +1601,9 @@ def _epoch_iso(value) -> str | None:
         return None
 
 
-def anthropic_candidate(model: str) -> dict:
+def anthropic_candidate(model: str, class_name: str | None = None) -> dict:
     """Anthropic pool viewed through the same dry run pick() would take."""
-    ranking = rank_pool(model)
+    ranking = rank_pool(model, class_name=class_name)
     rows = ranking["ranking"]
     chosen = next((r for r in rows if r["fp"] == ranking["would_pick"]), None)
     out = {"provider": "anthropic", "model": model, "routable": chosen is not None, "reason": None,
@@ -1168,6 +1612,7 @@ def anthropic_candidate(model: str) -> dict:
         util = chosen["utilization"]
         out.update(quota_left_percent=_pct_left(util * 100) if util is not None else None,
                    reset_at=chosen["reset_at"], account=chosen["fp"])
+        out["pressure"] = chosen.get("pressure")
         return out
     reasons = {r["reason"] for r in rows}
     if not rows or reasons <= {"parked", "forced offline"}:
@@ -1205,6 +1650,31 @@ def codex_candidate(model: str, state: dict) -> dict:
     worst = max(windows, key=lambda w: w["used_percent"])
     out["quota_left_percent"] = _pct_left(worst["used_percent"])
     out["reset_at"] = _epoch_iso(worst.get("reset_at"))
+    now = time.time()
+    def window_pressure(window):
+        reset = numeric(window.get("reset_at"))
+        short = (window.get("window_seconds") == 18000 or
+                 (window.get("name") == "secondary_window" and window.get("window_seconds") is None))
+        duration = 5 * 3600.0 if short else 7 * 86400.0
+        seconds = max(60.0, reset - now) if reset is not None and reset > now else duration
+        result = max(0.0, 1.0 - window["used_percent"] / 100.0) / seconds
+        fc = (state.get("forecast") or {}).get(window.get("name"))
+        if fc is None and reset is not None:
+            name = window.get("name", "window")
+            fc = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []),
+                          window["used_percent"] / 100, reset, now)
+        if (not short and reset is not None and now < reset <= now + SWEEP_HOURS * 3600
+                and isinstance(fc, dict) and fc.get("forecast") == "waste"
+                and all(w["used_percent"] < ROTATE_THRESHOLD * 100 for w in windows
+                        if w.get("window_seconds") == 18000 or
+                        (w.get("name") == "secondary_window" and w.get("window_seconds") is None))):
+            result *= SWEEP_BOOST
+        return result
+    short_windows = [w for w in windows if w.get("window_seconds") == 18000
+                     or (w.get("name") == "secondary_window" and w.get("window_seconds") is None)]
+    weekly = [w for w in windows if w not in short_windows]
+    out["pressure"] = min([window_pressure(w) for w in weekly or windows] +
+                          [window_pressure(w) for w in short_windows])
     blocked = (state.get("models") or {}).get(model) or {}
     if worst["used_percent"] >= 100 or state.get("allowed") is False:
         if codex_on_credits(state) and blocked.get("available") is not False:
@@ -1236,17 +1706,49 @@ def deepseek_candidate(model: str, state: dict) -> dict:
         out["reason"] = "unavailable"
     elif balance <= DEEPSEEK_MIN_BALANCE:
         out["reason"] = "balance below floor"
+    elif deepseek_month_spend() >= DEEPSEEK_MONTHLY_CAP:
+        out["reason"] = "monthly cap"
     else:
         out.update(routable=True, reason=None)
     return out
 
 
-def route_payload(model: str) -> dict | None:
+def route_payload(model: str, current: str | None = None, class_name: str | None = None) -> dict | None:
     """Ranked cross-provider candidates for one Claude model, or None when unmapped.
 
     Anthropic first (what pick() would do), then the routes.json order. Pure:
     reads cached provider state and the pool, touches no upstream, mutates nothing.
     """
+    if class_name:
+        classes = load_classes()
+        policy = classes.get(class_name)
+        if policy is None:
+            return None
+        candidates = []
+        for provider, target in policy.get("routes", []):
+            if provider == "anthropic":
+                candidate = anthropic_candidate(target, class_name=class_name)
+                rows = rank_pool(target, class_name=class_name)["ranking"]
+                if not candidate["routable"] and any(r["reason"] == "class ceiling" for r in rows):
+                    candidate["reason"] = "class ceiling"
+            elif provider == "openai-codex":
+                candidate = codex_candidate(target, dict(PROVIDER_STATE.get(provider, {})))
+            elif provider == "deepseek":
+                candidate = deepseek_candidate(target, dict(PROVIDER_STATE.get(provider, {})))
+            else:
+                candidate = {"provider": provider, "model": target, "routable": False, "reason": "unknown"}
+            candidates.append(candidate)
+        routable = [c for c in candidates if c["routable"]]
+        preferred = next((c for c in routable if c["provider"] == "deepseek"), None) if class_name == "mechanical" else None
+        if preferred is None:
+            eligible = [c for c in routable if c["provider"] != "deepseek" and isinstance(c.get("pressure"), (int, float))]
+            preferred = max(eligible, key=lambda c: c["pressure"], default=None)
+            current_candidate = next((c for c in eligible if c["provider"] == current), None)
+            if (current_candidate and preferred and preferred["provider"] != current
+                    and preferred["pressure"] <= current_candidate["pressure"] * PICK_TOLERANCE):
+                preferred = current_candidate
+        return {"class": class_name, "model": None, "route": class_name, "candidates": candidates, "first_routable": next(iter(routable), None),
+                "preferred": preferred, "generated_at": datetime.now(timezone.utc).isoformat()}
     key = route_key(model)
     if key is None:
         return None
@@ -1261,12 +1763,36 @@ def route_payload(model: str) -> dict | None:
             candidates.append(deepseek_candidate(target, state))
         else:
             candidates.append({"provider": provider, "model": target, "routable": False, "reason": "unknown"})
+    first = next((c for c in candidates if c["routable"]), None)
+    first_codex = next((c for c in candidates if c["provider"] == "openai-codex"), None)
+    eligible = [c for c in candidates if c["routable"] and c["provider"] != "deepseek"
+                and not c.get("on_credits") and isinstance(c.get("pressure"), (int, float))
+                and (c["provider"] != "openai-codex" or c is first_codex)]
+    preferred = max(eligible, key=lambda c: c["pressure"], default=None)
+    current_candidate = next((c for c in eligible if c["provider"] == current), None)
+    if current_candidate and preferred and preferred["provider"] != current:
+        if preferred["pressure"] <= current_candidate["pressure"] * PICK_TOLERANCE:
+            preferred = current_candidate
     return {"model": model, "route": key, "candidates": candidates,
-            "first_routable": next((c for c in candidates if c["routable"]), None),
+            "first_routable": first, "preferred": preferred,
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
 # --- DeepSeek Anthropic-passthrough (opt-in) ----------------------------------
+
+
+def record_starvation(model: str) -> None:
+    global STARVED_COUNT, STARVED_LAST
+    payload = route_payload(model)
+    first = payload.get("first_routable") if payload else None
+    if not first:
+        return
+    last = {"ts": datetime.now(timezone.utc).isoformat(), "model": model, "provider": first.get("provider")}
+    with LOCK:
+        STARVED_COUNT += 1
+        STARVED_LAST = last
+        save_usage_state()
+    append_route({"kind": "starved", **last})
 
 
 def fallback_target(model: str) -> tuple[str | None, str]:
@@ -1338,15 +1864,45 @@ def usage_payload() -> dict:
     with LOCK:
         toks = [t.snapshot() for t in STATE]
         routing = routing_preview()
+        routing["active_sessions"] = len({session for (session, _), (_, touched) in LAST_PICK.items()
+                                          if session != "global" and time.time() - touched <= 900})
         routing["fallback"] = fallback_payload()
         routing["deepseek_fallback"] = {
             "enabled": DEEPSEEK_FALLBACK, "min_balance": DEEPSEEK_MIN_BALANCE,
+            "monthly_cap": DEEPSEEK_MONTHLY_CAP, "monthly_spend": deepseek_month_spend(),
             "requests_total": FALLBACK["requests"], "by_model": FALLBACK["by_model"],
             "note": "opt-in passthrough of Claude Code requests to api.deepseek.com/anthropic when no "
                     "OAuth token is pickable; `fallback` is non-null only during such an episode",
         }
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
+    routing["starved"] = STARVED_COUNT
+    routing["starved_last"] = STARVED_LAST
+    routing["class_usage"] = CLASS_USAGE
+    routing["recent"] = recent_routes()
+    exhaustions = []
+    weekly = []
+    for token in toks:
+        for window, fc in token.get("forecast", {}).items():
+            if window in ("7d", "7d_oi") and fc.get("projected_at_reset") is not None:
+                weekly.append(100 * max(0.0, 1.0 - fc["projected_at_reset"]))
+            if fc.get("exhaust_at") is not None:
+                exhaustions.append({"fp": token["fp"], "window": window,
+                                    "at": datetime.fromtimestamp(fc["exhaust_at"], timezone.utc).isoformat()})
+    deepseek_state = providers.get("deepseek", {})
+    deepseek_state["monthly_cap"] = DEEPSEEK_MONTHLY_CAP
+    deepseek_state["monthly_spend"] = deepseek_month_spend()
+    codex_state = providers.get("openai-codex", {})
+    codex_forecasts = {}
+    for item in codex_state.get("windows", []):
+        reset = item.get("reset_at")
+        used = item.get("used_percent")
+        if isinstance(reset, (int, float)) and isinstance(used, (int, float)):
+            name = item.get("name", "window")
+            codex_forecasts[name] = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []), used / 100, reset)
+    codex_state["forecast"] = codex_forecasts
+    routing["forecast"] = {"weekly_waste_percent": round(sum(weekly)/len(weekly), 1) if weekly else None,
+                            "first_exhaust": min(exhaustions, key=lambda x: x["at"]) if exhaustions else None}
     anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
                  "checked_at": int(max(checked)) if checked else None}
     return {
@@ -1354,6 +1910,8 @@ def usage_payload() -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tokens": toks,
         "routing": routing,
+        "_samples": {k: {window: points[:1] for window, points in buckets.items()}
+                     for k, buckets in SAMPLES.items()},
         "providers": {"anthropic": anthropic, **providers},
         "routes_file": str(ROUTES_FILE),
         "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses; "
@@ -1426,7 +1984,9 @@ class Handler(BaseHTTPRequestHandler):
     def _route_page(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         model = (query.get("model") or [""])[0]
-        payload = route_payload(model)
+        class_name = (query.get("class") or [None])[0]
+        current = (query.get("current") or [None])[0]
+        payload = route_payload(model, current, class_name)
         if payload is None:
             self._send_json(404, {"error": "unknown model", "model": model, "routes": sorted(load_routes()),
                                   "routes_file": str(ROUTES_FILE), "routes_error": ROUTES_ERROR})
@@ -1453,12 +2013,44 @@ class Handler(BaseHTTPRequestHandler):
         valid_count = len([t for t in STATE if t.valid])
         endpoint = self.path.split("?", 1)[0]
         model = request_model(body)
+        session_key = session_key_from(self.headers, body)
+        try:
+            messages_len = len(json.loads(body).get("messages", []))
+        except (ValueError, AttributeError, TypeError):
+            messages_len = None
+        boundary = (messages_len is not None and messages_len <= 2) or self.headers.get("x-cc-proxy-boundary") == "1"
         paced: set[str] = set()  # tokens already given one burst-429 pause
+        class_name = self.headers.get("x-cc-proxy-class", "interactive")
+        if self.headers.get("x-cc-proxy-class-escalate") == "1":
+            class_name = escalated_class(class_name, session_key)
+        self.class_name = class_name
+        if load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {}).get("no_oi") and FABLE_MODEL_RE.search(model):
+            self._send_api_error(503, f"class {class_name} may not use {model}", "overloaded_error")
+            return
 
         # Every token may burn one extra attempt on a burst pause before failover.
         for _ in range(max(1, valid_count + 1) + valid_count):
             with LOCK:
-                tok = pick(exclude=tried, model=model)
+                bucket = bucket_key(model)
+                affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket))
+                tok = pick(exclude=tried, model=model, session_key=session_key, class_name=class_name, boundary=boundary)
+                previous = affinity_before[0] if affinity_before else None
+                if tok is not None and previous and previous != tok.fp:
+                    # A session changed account: the only move that costs a prompt cache.
+                    previous_tok = next((item for item in STATE if item.fp == previous), None)
+                    if previous in forced_cooldown_fps():
+                        reason = "forced"
+                    elif previous in tried or (previous_tok and time.time() < cooldown_deadline(previous_tok, model)):
+                        reason = "cooldown"
+                    elif (previous_tok and boundary and
+                          five_hour_pressure(previous_tok, time.time()) * PICK_TOLERANCE <
+                          five_hour_pressure(tok, time.time())):
+                        reason = "5h"
+                    else:
+                        reason = "sweep" if sweep_factor(tok, bucket, time.time()) > 1 else "pressure"
+                    log(f"session affinity moved bucket={bucket} reason={reason}")
+                    append_route({"ts": datetime.now(timezone.utc).isoformat(), "bucket": bucket,
+                                  "from_fp": previous, "to_fp": tok.fp, "reason": reason})
             if tok is None:
                 with LOCK:
                     detail = ", ".join(
@@ -1467,13 +2059,14 @@ class Handler(BaseHTTPRequestHandler):
                 if self._deepseek_fallback(endpoint, fwd, body, model):
                     return
                 log(f"WARNING: request rejected — no token pickable: {detail}")
+                record_starvation(model)
                 self._send_api_error(503, unavailable_message(model), "overloaded_error")
                 return
             with LOCK:
                 clear_fallback(f"token {tok.fp} pickable")
             try:
-                conn, resp = upstream(self.command, self.path, fwd, body, tok.token)
-                record_request(tok, model)
+                conn, resp = ramp_upstream(tok, self.command, self.path, fwd, body)
+                record_request(tok, model, class_name)
             except Exception as exc:  # network error -> try next token
                 log(f"{self.command} {endpoint} -> token {tok.fp} ERROR {exc.__class__.__name__}")
                 tried.add(tok.fp)
@@ -1483,7 +2076,6 @@ class Handler(BaseHTTPRequestHandler):
                 update_from_headers(tok, resp.headers)
                 tok.last_status = resp.status
                 tok.responses += 1
-                save_usage_state()
                 pause = None
                 cooldown_scope = None
                 if resp.status == 429:
@@ -1500,6 +2092,7 @@ class Handler(BaseHTTPRequestHandler):
                     tok.valid = False
                     tok.last_revalidate = time.time()
                     check_health("token rejected upstream")
+                save_usage_state()
 
             log(f"{self.command} {endpoint} -> token {tok.name()} model={model} "
                 f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
@@ -1565,9 +2158,33 @@ class Handler(BaseHTTPRequestHandler):
             return True
         record_fallback_request(model, target)
         log(f"{self.command} {endpoint} -> deepseek {target} status {resp.status}")
+        if resp.status >= 400:
+            record_starvation(model)
         self._stream(resp, None, model)
         conn.close()
         return True
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/_event":
+            self._proxy()
+            return
+        try:
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_api_error(403, "loopback only")
+                return
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("expected application/json")
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 4096:
+                raise ValueError("body too large")
+            data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict) or not data.get("kind"):
+                raise ValueError("invalid event")
+            append_route({"ts": datetime.now(timezone.utc).isoformat(), **{
+                key: str(data.get(key, ""))[:100] for key in ("kind", "from", "to", "reason")}})
+            self._send_json(200, {"ok": True})
+        except (ValueError, json.JSONDecodeError):
+            self._send_api_error(400, "invalid JSON event")
 
     def do_GET(self):
         endpoint = self.path.split("?", 1)[0]
@@ -1582,9 +2199,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._proxy()
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = _proxy
+    do_PUT = do_DELETE = do_PATCH = _proxy
 
     def _stream(self, resp, tok: Tok | None, model: str):
+        class_name = getattr(self, "class_name", None)
         content_type = resp.getheader("content-type", "")
         is_json = "text/event-stream" not in content_type.lower()
         captured = bytearray()
@@ -1609,7 +2227,7 @@ class Handler(BaseHTTPRequestHandler):
                     line, sse_remainder = sse_remainder.split(b"\n", 1)
                     usage = usage_from_sse_line(line.rstrip(b"\r"))
                     if usage:
-                        add_usage(tok, model, usage)
+                        add_usage(tok, model, usage, class_name)
             try:
                 self.wfile.write(chunk)
                 self.wfile.flush()
@@ -1618,7 +2236,7 @@ class Handler(BaseHTTPRequestHandler):
         if is_json:
             usage = usage_from_json(bytes(captured))
             if usage:
-                add_usage(tok, model, usage)
+                add_usage(tok, model, usage, class_name)
 
 
 def probe(tok: Tok, note: str = "seed") -> None:
@@ -1650,6 +2268,7 @@ def probe(tok: Tok, note: str = "seed") -> None:
             else:
                 tok.valid = True
                 tok.invalid_since = 0.0
+            save_usage_state()
         r.read()
         conn.close()
         log(f"{note} {tok.name()}: status {r.status} u7={tok.u7} u5={tok.u5} valid={tok.valid}")

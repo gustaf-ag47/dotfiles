@@ -27,11 +27,14 @@
 #   --worktree <branch>  Create a git worktree for <branch> off origin/main and use it as --cwd.
 #   --session <name>   Target tmux session (default: auto-detected).
 #   --no-probe         Skip the model availability probe (faster, riskier).
+#   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
 set -euo pipefail
 
 BRIEF="" TASK="" NAME="" CWD="$PWD" MODEL="${PI_DELEGATE_MODEL:-}" AGENT="pi"
-PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0
+CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0
+PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
+ORIGINAL_ARGS=("$@")
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
 
@@ -41,7 +44,9 @@ while [ $# -gt 0 ]; do
 	--task) TASK="${2:?}"; shift 2 ;;
 	--name) NAME="${2:?}"; shift 2 ;;
 	--cwd) CWD="${2:?}"; shift 2 ;;
-	--model) MODEL="${2:?}"; shift 2 ;;
+	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
+	--class) CLASS="${2:?}"; shift 2 ;;
+	--when) WHEN="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
 	--provider) PROVIDER="${2:?}"; shift 2 ;;
 	--worktree) WORKTREE="${2:?}"; shift 2 ;;
@@ -54,7 +59,21 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+case "$WHEN" in now|reset|waste) ;; *) die "--when must be reset, waste or now" ;; esac
 [ -n "$BRIEF" ] || [ -n "$TASK" ] || die "need --brief and/or --task"
+if [ "$WHEN" != now ]; then
+	# Preserve every argument except --when, including --worktree: worktree
+	# creation belongs to the actual launch, not the time of enqueue.
+	cmd=("$0")
+	set -- "${ORIGINAL_ARGS[@]}"
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = --when ]; then shift 2; else cmd+=("$1"); shift; fi
+	done
+	if [ "$DRY" = 1 ]; then printf 'would queue: %q ' "${cmd[@]}"; echo; exit 0; fi
+	command -v llm-schedule >/dev/null || die "llm-schedule not in PATH"
+	llm-schedule add --class "$CLASS" --prefer any -- "${cmd[@]}"
+	exit
+fi
 [ -z "$BRIEF" ] || [ -f "$BRIEF" ] || die "brief not found: $BRIEF"
 command -v tmux >/dev/null || die "tmux not found"
 command -v "$AGENT" >/dev/null || die "$AGENT not in PATH"
@@ -158,6 +177,11 @@ while tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$NAME"; do
 done
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if [ "$MODEL_EXPLICIT" = "0" ]; then
+	ROUTE_URL="http://127.0.0.1:${CC_PROXY_PORT:-8788}/_route?class=${CLASS}"
+	MODEL="$(curl -fsS "$ROUTE_URL" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d.get("preferred") or d.get("first_routable") or {}; print(p.get("provider","")+"/"+p.get("model", ""))' || true)"
+	[ -n "$MODEL" ] || MODEL="${PI_DELEGATE_MODEL:-openai-codex/gpt-6-luna}"
+fi
 MODEL_ARGS=()
 [ -z "$PROVIDER" ] || MODEL_ARGS+=(--provider "$PROVIDER")
 [ -z "$MODEL" ] || MODEL_ARGS+=(--model "$MODEL")
@@ -174,6 +198,30 @@ would delegate:
   run id  : $RUN_ID
 EOF
 	exit 0
+fi
+
+# Wait for the selected provider to become routable before spending a probe request.
+if [ "$PROBE" = "1" ] && command -v llm-wait >/dev/null 2>&1; then
+  selected_provider="$PROVIDER"
+  if [ -z "$selected_provider" ] && [[ "$MODEL" == */* ]]; then selected_provider="${MODEL%%/*}"; fi
+  case "$selected_provider" in openai-codex) wait_provider=codex ;; *) wait_provider="$selected_provider" ;; esac
+  if [ -n "$wait_provider" ]; then
+    route_model="${MODEL#*/}"
+    case "$route_model" in claude-*) ;; *) route_model="claude-sonnet-5" ;; esac
+    if llm-wait --until "$wait_provider.routable" --model "$route_model" --max "${PI_DELEGATE_WAIT_MAX:-2h}"; then
+      :
+    else
+      wait_status=$?
+      if [ "$wait_status" = "2" ] && [ "$wait_provider" = "codex" ]; then
+        echo "delegate: Codex quota wait timed out; falling back to Anthropic sonnet"
+        MODEL="anthropic/claude-sonnet-5"
+        PROVIDER=anthropic
+        MODEL_ARGS=(--provider "$PROVIDER" --model "claude-sonnet-5")
+      else
+        die "waiting for $wait_provider routing failed (status $wait_status)"
+      fi
+    fi
+  fi
 fi
 
 # ── probe the model: an exhausted quota pool dies instantly and silently ─────
@@ -194,10 +242,19 @@ if [ "$PROBE" = "1" ]; then
 fi
 
 # ── boot the child ──────────────────────────────────────────────────────────
+if command -v llm-usage >/dev/null 2>&1; then
+  capacity_json=$(llm-usage --capacity --json 2>/dev/null) || capacity_json=
+  if [ -n "$capacity_json" ] && command -v python3 >/dev/null 2>&1; then
+    capacity=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["capacity"])' "$capacity_json" 2>/dev/null) || capacity=
+    if [[ "$capacity" =~ ^[0-9]+$ ]] && [ "$capacity" -le 0 ]; then
+      echo 'delegate: WARNING: no additional heavy sessions are safe for the next 2h (5h capacity estimate)' >&2
+    fi
+  fi
+fi
 tmux new-window -t "$SESSION" -n "$NAME" -c "$CWD" -d
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
-CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID")
+CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS")
 # tmux's server environment may predate this shell/profile. Pass only the
 # explicitly selected profile/offline settings, never credentials in argv.
 [ -z "${PI_CODING_AGENT_DIR:-}" ] || CHILD_ENV+=("PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR")
@@ -297,11 +354,23 @@ fi
 # outside, so a child that crashes, wedges or simply forgets to report is still
 # reported — the loop must not depend on the child's cooperation.
 WATCHER="$(dirname "$0")/watch-child.sh"
+# Default self-continue condition for briefed children (see watch-child.sh).
+if [ -n "$BRIEF" ] && [ -z "${PI_DELEGATE_GOAL:-}" ]; then
+	PI_DELEGATE_GOAL="every numbered item under Your job in ${brief_rel:-$BRIEF} is implemented and committed, every gate named in the brief has been run and is green, the report file named in the brief is written and pushed, and the PARENT handshake line has been printed. Remaining work is never a blocker; only a missing credential or permission is."
+fi
+export PI_DELEGATE_GOAL
 if [ "${NOTIFY:-1}" = "1" ] && [ -x "$WATCHER" ]; then
-	nohup "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" \
-		>/dev/null 2>&1 &
-	disown 2>/dev/null || true
-	NOTIFY_STATE="watching (nudges $PARENT_WINDOW on idle)"
+	# setsid: a parent that spawns from an agent tool-call shell has its whole
+	# process group killed when the call returns; nohup alone did not survive that
+	# (2026-09-28: zero watchers alive after 7 delegations, no nudges ever landed).
+	if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --quiet --collect \
+		--setenv=PI_DELEGATE_GOAL="$PI_DELEGATE_GOAL" --setenv=PI_DELEGATE_MAILBOX="${PI_DELEGATE_MAILBOX:-$HOME/.pi/agent/delegate-mailbox}" \
+		--unit "pi-delegate-watch-${RUN_ID}" "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" 2>/dev/null; then
+		NOTIFY_STATE="watching via systemd unit pi-delegate-watch-${RUN_ID} (nudges $PARENT_WINDOW on idle)"
+	else
+		setsid -f "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" >/dev/null 2>&1 </dev/null
+		NOTIFY_STATE="watching via setsid (nudges $PARENT_WINDOW on idle)"
+	fi
 else
 	NOTIFY_STATE="off"
 fi

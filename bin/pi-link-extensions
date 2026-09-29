@@ -20,6 +20,7 @@ DST_DIR="$AGENT_DIR/extensions"
 # Explicit allowlist: an untracked or experimental .ts in config/pi/extensions
 # must not reach every pi session just by existing.
 EXTENSIONS=(
+	anthropic-pool.ts
 	goal.ts
 	llm-usage.ts
 	llm-failover.ts

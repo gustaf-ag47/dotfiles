@@ -1,6 +1,6 @@
 -- AI coding assistant: chat, inline transforms, test generation
 -- Backend: Claude (Anthropic API key via ANTHROPIC_API_KEY env var)
--- Pairs with supermaven.lua for inline ghost-text completion
+-- Inline ghost-text completion (supermaven) was removed 2026-09-26: unbounded stdin queue leaked 13 GB (see docs/nvim-memory-leak.md on fix/nvim-memory-leak)
 
 return {
   {

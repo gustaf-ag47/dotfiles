@@ -70,6 +70,14 @@ committing has done nothing.
 
 ## The feedback loop
 
+**Self-continue (2026-09-28).** Briefed children get a default `PI_DELEGATE_GOAL`; the first
+time the watcher sees the child idle *without* a `PARENT: … done` handshake it sends
+`/goal <condition>` so `goal.ts` keeps the child working (up to `PI_GOAL_MAX_TURNS`, 25)
+instead of stopping after one slice and calling the rest "blocked". Only a second idle
+nudges the parent. Watchers now run as `systemd-run --user` units (fallback `setsid`) because
+`nohup` did not survive the tool-call shell that spawned them — seven delegations in a
+row produced zero nudges.
+
 A delegated child runs to completion and then **sits idle forever**. Nothing wakes the
 parent, so work stops until a human happens to look. Measured 2026-08-29: nine agents
 finished and **22.5 hours passed with zero merges** — every one of them a single nudge
@@ -119,7 +127,9 @@ plus a startup grace window (`PI_DELEGATE_MIN_GRACE_SECS`, default 45s). Without
 reports "finished" during startup, which is the same mistake as calling a not-yet-ready
 TUI ready.
 
-Knobs: `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20), `PI_DELEGATE_IDLE_STREAK`
+Before probing, the launcher waits for a selected provider to become routable via `llm-wait`. Set `PI_DELEGATE_WAIT_MAX` (default `2h`) to bound that wait; a timed-out Codex wait proceeds to the existing alternate-model/probe fallback path.
+
+Knobs: `PI_DELEGATE_WAIT_MAX` (2h), `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20), `PI_DELEGATE_IDLE_STREAK`
 (3), `PI_DELEGATE_MIN_GRACE_SECS` (45), `PI_DELEGATE_WATCH_HOURS` (12). `--no-notify`
 disables it.
 

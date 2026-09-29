@@ -33,12 +33,13 @@ pi --model deepseek/deepseek-v4-pro -p 'your task'
   --model deepseek/deepseek-v4-pro --brief docs/handover/my-task.md
 ```
 
-Use Flash for inexpensive bulk work, Pro for harder tasks; verify current model
-capabilities and prices rather than relying on fixed historical estimates.
+Use Flash for inexpensive bulk work, Pro for harder tasks; for delegated cheap work
+prefer `delegate.sh --class mechanical`. Verify current model capabilities and prices
+rather than relying on fixed historical estimates.
 
 ## Loops
 
-For a loop still using `pi-claude-sub`, explicitly configure its launcher as `pi`
+For a loop still using `pi-claude-sub` (now a `pi` shim), explicitly configure its launcher as `pi`
 and provider/model as DeepSeek. Keep these changes within the loop's documented
 configuration; do not change live services or another lane without authorization.
 Credentials in Pi's normal auth store are available to child Pi processes. A custom

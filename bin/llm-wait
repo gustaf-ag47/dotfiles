@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Wait for a routing/usage predicate from the local Claude token proxy."""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+TOK = re.compile(r'\s*(>=|<=|==|>|<|\(|\)|\band\b|\bor\b|\bnot\b|[A-Za-z][A-Za-z0-9_.]*|\d+(?:\.\d+)?)')
+
+class ParseError(ValueError): pass
+
+class Expression:
+    def __init__(self, text, values):
+        self.values = values
+        self.tokens = []
+        pos = 0
+        while pos < len(text):
+            m = TOK.match(text, pos)
+            if not m: raise ParseError(f'unexpected input at {pos}')
+            self.tokens.append(m.group(1)); pos = m.end()
+        self.i = 0
+    def peek(self): return self.tokens[self.i] if self.i < len(self.tokens) else None
+    def pop(self):
+        t = self.peek()
+        if t is None: raise ParseError('unexpected end')
+        self.i += 1; return t
+    def parse(self):
+        v = self.or_expr()
+        if self.peek() is not None: raise ParseError(f'unexpected {self.peek()}')
+        return bool(v)
+    def or_expr(self):
+        v = self.and_expr()
+        while self.peek() == 'or': self.pop(); rhs = self.and_expr(); v = bool(v) or bool(rhs)
+        return v
+    def and_expr(self):
+        v = self.compare()
+        while self.peek() == 'and': self.pop(); rhs = self.compare(); v = bool(v) and bool(rhs)
+        return v
+    def compare(self):
+        v = self.unary()
+        if self.peek() in ('>=','<=','>','<','=='):
+            op = self.pop(); r = self.unary()
+            if op == '>=': return v >= r
+            if op == '<=': return v <= r
+            if op == '>': return v > r
+            if op == '<': return v < r
+            return v == r
+        return v
+    def unary(self):
+        if self.peek() == 'not': self.pop(); return not self.unary()
+        if self.peek() == '(': self.pop(); v = self.or_expr()
+        else:
+            t = self.pop()
+            if t == ')': raise ParseError('unexpected )')
+            if re.fullmatch(r'\d+(?:\.\d+)?', t): return float(t)
+            if t not in self.values: raise ParseError(f'unknown term {t}')
+            return self.values[t]
+        if self.pop() != ')': raise ParseError('expected )')
+        return v
+
+def proxy_url():
+    raw = os.environ.get('PI_ANTHROPIC_PROXY_URL', f"http://127.0.0.1:{os.environ.get('CC_PROXY_PORT','8788')}")
+    return raw.rstrip('/')
+def get(url):
+    with urllib.request.urlopen(url, timeout=5) as r: return json.load(r)
+def snapshot(model):
+    usage = get(proxy_url()+'/_usage')
+    values = {}
+    tokens = usage.get('tokens', [])
+    for term, bucket in [('anthropic.base.left','u7'),('anthropic.oi.left','u7_oi'),('anthropic.5h.left','u5')]:
+        vals = [100*(1-float(t[bucket])) for t in tokens if isinstance(t.get(bucket),(int,float))]
+        values[term] = max(vals, default=0)
+    # The oracle keys on Claude model names (and classes); a Codex/DeepSeek model id
+    # is not a route key, so fall back to the like-for-like default.
+    route_model = model if model.startswith('claude-') else 'claude-sonnet-5'
+    route = get(proxy_url()+'/_route?model='+urllib.parse.quote(route_model))
+    for provider in ('anthropic','codex','deepseek'):
+        found = next((c for c in route.get('candidates',[]) if c.get('provider') == {'codex':'openai-codex'}.get(provider,provider)), {})
+        values[provider+'.routable'] = bool(found.get('routable'))
+        if provider == 'codex':
+            windows = (usage.get('providers',{}).get('openai-codex',{}).get('windows') or [])
+            left = [100-float(w['used_percent']) for w in windows if isinstance(w.get('used_percent'),(int,float))]
+            values['codex.left'] = max(left,default=0)
+    values['any.routable'] = any(values.get(p+'.routable') for p in ('anthropic','codex','deepseek'))
+    resets = [t.get(k) for t in tokens for k in ('u5_reset','u7_reset','u7_oi_reset') if t.get(k)]
+    return values, min(resets) if resets else 'unknown'
+
+import urllib.parse
+
+def main():
+    ap=argparse.ArgumentParser(description="Wait for proxy routing predicate. Example: llm-wait --until 'any.routable' --model claude-sonnet-5; llm-wait --until 'anthropic.base.left>=20 or codex.left>=20'")
+    ap.add_argument('--until',required=True); ap.add_argument('--model',default='claude-sonnet-5'); ap.add_argument('--poll',type=float,default=60); ap.add_argument('--max',default='6h')
+    a=ap.parse_args()
+    try: max_s=float(a.max[:-1])*({'s':1,'m':60,'h':3600}[a.max[-1]]) if a.max[-1] in 'smh' else float(a.max)
+    except (ValueError,KeyError): ap.error('--max must be seconds or a duration like 90s, 2h')
+    deadline=time.monotonic()+max_s; failures=0; waiting=False; reset='unknown'
+    while True:
+        try:
+            vals, reset=snapshot(a.model); failures=0
+            if Expression(a.until,vals).parse():
+                print(f"llm-wait: predicate satisfied for {a.model}",flush=True); return 0
+        except (OSError,ValueError,KeyError,TypeError,urllib.error.URLError) as e:
+            failures+=1
+            if failures>=3: print(f'llm-wait: proxy unreachable ({type(e).__name__})',file=sys.stderr); return 3
+        if time.monotonic()>=deadline: print('llm-wait: timed out',flush=True); return 2
+        if not waiting:
+            print(f'llm-wait: waiting for {a.until}; earliest known reset: {reset}',flush=True); waiting=True
+        time.sleep(min(max(a.poll,0.1),max(0,deadline-time.monotonic())))
+if __name__=='__main__': sys.exit(main())

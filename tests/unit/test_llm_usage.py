@@ -54,6 +54,27 @@ def report(provider, info):
     return {'schema': 1, 'providers': {provider: {**info, 'checked_at': int(NOW)}}}
 
 
+class ForecastRenderingTests(unittest.TestCase):
+    def test_window_forecast_suffixes(self):
+        base = {'name': 'five_hour', 'used_percent': 40, 'resets_at': NOW + 3600}
+        with patch.object(usage, 'use_color', return_value=False):
+            waste = usage.window_line({**base, 'forecast': {'burn_per_hour': .031, 'forecast': 'waste', 'projected_at_reset': .6}}, NOW)
+            self.assertIn('burn 3.1%/h', waste)
+            self.assertIn('will waste ~40%', waste)
+            exhaust = usage.window_line({**base, 'forecast': {'forecast': 'exhaust', 'exhaust_at': NOW+7200}}, NOW)
+            self.assertIn('exhausts in 2h', exhaust)
+            track = usage.window_line({**base, 'forecast': {'forecast': 'on_track'}}, NOW)
+            self.assertIn('on track', track)
+
+    def test_routing_forecast_line_and_json_payload_passthrough(self):
+        routing = {'buckets': {'base': {'ranking': []}}, 'forecast': {'weekly_waste_percent': 12.5, 'first_exhaust': None},
+                   'recent': [{'ts': '2026-01-01T14:02:00Z', 'bucket': 'base', 'from_fp': 'abc', 'to_fp': 'def', 'reason': 'cooldown'}]}
+        with patch.object(usage, 'use_color', return_value=False):
+            lines = usage.routing_lines(routing, {})
+        self.assertIn('weekly waste 12.5%', '\n'.join(lines))
+        self.assertIn('14:02 base abc→def cooldown', '\n'.join(lines))
+
+
 class JwtClaimsTests(unittest.TestCase):
     def test_valid_token_yields_email_and_plan_only(self):
         self.assertEqual(usage.jwt_claims(JWT), {'email': 'a@b', 'name': 'A B', 'plan': 'plus'})
@@ -243,6 +264,29 @@ class DeepseekTests(unittest.TestCase):
 
 
 class UsageTests(unittest.TestCase):
+    def test_expired_window_is_unknown_not_full_or_exhausted(self):
+        window = {'name': 'five_hour', 'used_percent': 101, 'resets_at': NOW - 1,
+                  'source': 'header observation (may be stale)'}
+        group = {'valid': True, 'windows': [window]}
+        with patch.object(usage, 'use_color', return_value=False):
+            self.assertIn('UNKNOWN', usage.account_status(group, NOW))
+            line = usage.window_line(window, NOW)
+        self.assertIn('~100% left', line)
+        self.assertIn('window reset; unconfirmed', line)
+
+    def test_scoped_exhaustion_is_partial_and_expired_cooldowns_are_hidden(self):
+        group = {'account': 'test', 'valid': True, 'windows': [
+            {'name': 'five_hour', 'used_percent': 10, 'resets_at': NOW + 100},
+            {'name': 'seven_day_overage_included', 'used_percent': 100, 'resets_at': NOW + 100}],
+            'model_cooldowns': {'opus': NOW - 1}}
+        with patch.object(usage, 'use_color', return_value=False):
+            lines, _ = usage.anthropic_lines({'accounts': [group]}, NOW)
+        self.assertIn('PARTIAL', lines[0])
+        self.assertNotIn('opus cooldown', '\n'.join(lines))
+        group['windows'][0]['used_percent'] = 100
+        with patch.object(usage, 'use_color', return_value=False):
+            self.assertEqual(usage.account_status(group, NOW), 'EXHAUSTED')
+
     def test_codex_is_subscription_only_and_whitelists_response(self):
         auth = {'openai-codex': {'type': 'oauth', 'access': 'fake-test', 'expires': (time.time() + 600) * 1000}}
         data = {'private': 'sensitive', 'rate_limit': {'primary_window': {'used_percent': 0, 'reset_at': 100, 'private': 'sensitive'}}}
@@ -279,10 +323,33 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(result['deepseek']['status'], 'ok')
         self.assertNotIn('secret-value', str(result))
 
+    def test_deepseek_monthly_cap_and_starvation_render(self):
+        lines, _ = usage.deepseek_lines({'label': 'test', 'available': True, 'balances': [],
+                                        'monthly_spend': 5, 'monthly_cap': 20}, time.time())
+        self.assertIn('cap $5.00/$20.00', '\n'.join(lines))
+        with patch.object(usage, 'use_color', return_value=True):
+            rendered = usage.routing_lines({'buckets': {}, 'starved': 2}, {})
+        self.assertIn('starved this week: ', '\n'.join(rendered))
+        self.assertIn('31;1m2', '\n'.join(rendered))
+
     def test_remote_proxy_is_rejected(self):
         with patch.dict(usage.os.environ, {'PI_ANTHROPIC_PROXY_URL': 'http://example.com'}):
             with self.assertRaises(ValueError):
                 usage.local_url()
+
+    def test_weekly_metrics_and_missing_class_events(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); state=root/'usage.json'; log=root/'routing.log'
+            state.write_text(json.dumps({'acct':{'input_tokens':100,'cache_read_input_tokens':300,'cache_creation_input_tokens':100}}))
+            log.write_text('')
+            payload={'usage_state_file':str(state),'routing_log':str(log),'tokens':[{'forecast':{'7d':{'forecast':'waste','projected_at_reset':.6}},'counters':{'input_tokens':100,'cache_read_input_tokens':300,'cache_creation_input_tokens':100}}], 'providers':{'openai-codex':{'forecast':{}}},'routing':{'starved':0}}
+            with patch.object(usage,'get_json',return_value=payload):
+                result=usage.weekly_report({})
+            self.assertEqual(result['P1_starved_requests'],0)
+            self.assertEqual(result['P2_weekly_waste_percent']['anthropic:7d'],'~40.0%')
+            self.assertEqual(result['P4_opus_fable_token_share_percent'],'n/a')
+            self.assertEqual(result['cache_hit_percent'],60)
 
 
 if __name__ == '__main__':
