@@ -17,8 +17,8 @@ CHECKS = (
     "node --test --experimental-strip-types tests/unit/test_llm_failover.mjs",
     "bin/llm-usage --refresh --json | python3 -m json.tool >/dev/null",
     "bin/llm-news --json | python3 -m json.tool >/dev/null",
-    "curl -s --noproxy '*' 'http://127.0.0.1:${CC_PROXY_PORT:-8788}/_usage' | python3 -m json.tool >/dev/null",
-    "curl -s --noproxy '*' 'http://127.0.0.1:${CC_PROXY_PORT:-8788}/_route?model=claude-opus-5-5' | python3 -m json.tool >/dev/null",
+    "curl -s --noproxy '*' \"http://127.0.0.1:${CC_PROXY_PORT:-8788}/_usage\" | python3 -m json.tool >/dev/null",
+    "curl -s --noproxy '*' \"http://127.0.0.1:${CC_PROXY_PORT:-8788}/_route?model=claude-opus-5-5\" | python3 -m json.tool >/dev/null",
     "pi --no-session -p '/usage'",
 )
 
