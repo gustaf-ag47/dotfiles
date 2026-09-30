@@ -69,7 +69,7 @@ This plan is based on `ralph/llm-utilization/specs/llm-utilization.md`, the six 
     - `pi --no-session -p '/usage'` (operator-run smoke check; inspect only local output)
   - Evidence required: renderer fixture snapshots/assertions, a Pi output proving no model-context injection, Waybar command/format validation, JSON compatibility, and a redacted live-safe smoke capture.
 
-- [ ] LLM-05: complete the official provider news monitor
+- [x] LLM-05: complete the official provider news monitor
   - Dependencies: none for implementation; `LLM-01` before integration in the unified report. Owned paths: `scripts/llm_news.py`, `bin/llm-news`, `tests/unit/test_llm_news.py`, news cache/timer wiring under `config/systemd/user/` and existing desktop integrations.
   - Prior committed work already supplies the four official HTML/release-note sources, `llm-news`, bounded cache, deduplication, classification, and 403/429/parser failure handling. Re-verify and close gaps: conditional/bounded polling, explicit per-source freshness/stale/unavailable metadata, stable content identity, provider filtering, and no auth headers/cookies.
   - Acceptance: OpenAI and Anthropic official news/changelog/release/status surfaces produce quota, billing, model, routing, or general items; stale cache and feed failure are visible and never look like an empty successful feed; news cannot mutate routes, policy, credentials, or billing.
@@ -81,6 +81,7 @@ This plan is based on `ralph/llm-utilization/specs/llm-utilization.md`, the six 
     - `bin/llm-news --provider openai --json | python3 -m json.tool >/dev/null`
     - `bin/llm-news --provider anthropic --json | python3 -m json.tool >/dev/null`
   - Evidence required: fresh fixture results for duplication, classification, malformed HTML, 403, 429, stale cache, conditional/cache behavior; cache mode/permissions; a diff or test proving route/policy files are untouched. The local ticket is marked done, but this fresh evidence is mandatory.
+  - BUILD evidence (2026-09-30): added per-source freshness metadata (fresh/stale/unavailable), conditional ETag/Last-Modified polling with 304 cache reuse, and redacted external-behavior fixtures for freshness, conditional refresh, deduplication/classification, and 403/429 stale fallback. `python3 -m unittest tests.unit.test_llm_news -v` passed (5 tests); `make test-unit` passed (165 tests, 1 expected skip); shell syntax and all three JSON CLI checks passed. Diff review found no auth headers/cookies, route/policy changes, credentials, or account mutations.
 
 - [ ] LLM-06: add opt-in read-only authenticated browser/CDP enrichment
   - Dependencies: `LLM-01`. Owned paths: a new browser adapter module under `scripts/` or `config/pi/lib/` chosen to match existing browser tooling, its redacted fixture tests, and documentation adjacent to `docs/research/openai-anthropic-usage-surfaces.md`; do not alter credentials.

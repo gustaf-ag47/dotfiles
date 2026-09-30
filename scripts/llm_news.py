@@ -146,20 +146,55 @@ def _cache_path() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llm-usage" / "news.json"
 
 
-def fetch(source: dict, opener=urlopen) -> dict:
-    request = Request(source["url"], headers={"User-Agent": "llm-news/1.0 (read-only; official sources)"})
+def _freshness(fetched_at: int, status: str = "ok", now: int | None = None) -> dict:
+    age = max(0, (int(time.time()) if now is None else now) - int(fetched_at))
+    if status != "ok":
+        state = "unavailable"
+    else:
+        state = "fresh" if age < MAX_AGE else "stale"
+    return {"status": state, "age_seconds": age}
+
+
+def fetch(source: dict, opener=urlopen, cached=None) -> dict:
+    headers = {"User-Agent": "llm-news/1.0 (read-only; official sources)"}
+    if cached:
+        if cached.get("etag"):
+            headers["If-None-Match"] = cached["etag"]
+        if cached.get("last_modified"):
+            headers["If-Modified-Since"] = cached["last_modified"]
+    request = Request(source["url"], headers=headers)
+    now = int(time.time())
     try:
         with opener(request, timeout=20) as response:
             status = getattr(response, "status", 200)
+            if status == 304 and cached:
+                result = {**cached, "status": "ok", "http_status": 304, "fetched_at": now,
+                          "not_modified": True}
+                result["freshness"] = _freshness(now)
+                return result
             body = response.read().decode("utf-8", "replace")
-        items = parse_html(body, source)
-        if not items:
-            raise ValueError("parser found no news items")
-        return {"status": "ok", "http_status": status, "items": items, "fetched_at": int(time.time())}
+            items = parse_html(body, source)
+            if not items:
+                raise ValueError("parser found no news items")
+            result = {"status": "ok", "http_status": status, "items": items, "fetched_at": now}
+            headers = getattr(response, "headers", {})
+            if headers.get("ETag"):
+                result["etag"] = headers["ETag"]
+            if headers.get("Last-Modified"):
+                result["last_modified"] = headers["Last-Modified"]
+            result["freshness"] = _freshness(now)
+            return result
     except HTTPError as exc:
-        return {"status": "unavailable", "http_status": exc.code, "error": f"HTTP {exc.code}", "items": [], "fetched_at": int(time.time())}
+        if exc.code == 304 and cached:
+            result = {**cached, "status": "ok", "http_status": 304, "fetched_at": now,
+                      "not_modified": True}
+            result["freshness"] = _freshness(now)
+            return result
+        return {"status": "unavailable", "http_status": exc.code, "error": f"HTTP {exc.code}",
+                "items": [], "fetched_at": now, "freshness": _freshness(now, "unavailable")}
     except (URLError, TimeoutError, OSError, ValueError) as exc:
-        return {"status": "unavailable", "error": f"{type(exc).__name__}: {exc}", "items": [], "fetched_at": int(time.time())}
+        return {"status": "unavailable", "error": f"{type(exc).__name__}: {exc}", "items": [],
+                "fetched_at": now, "freshness": _freshness(now, "unavailable")}
 
 
 def collect(refresh=False, provider=None, opener=urlopen, cache_path=None) -> dict:
@@ -172,6 +207,8 @@ def collect(refresh=False, provider=None, opener=urlopen, cache_path=None) -> di
             if (not refresh and cached.get("provider") == provider
                     and now - int(cached.get("fetched_at", 0)) < MAX_AGE):
                 cached["cache"] = {"status": "fresh", "age_seconds": max(0, now - int(cached["fetched_at"]))}
+                for source in cached.get("sources", {}).values():
+                    source["freshness"] = _freshness(source.get("fetched_at", cached["fetched_at"]), source.get("status", "ok"), now)
                 return cached
         except (OSError, ValueError, TypeError):
             cached = None
@@ -180,7 +217,7 @@ def collect(refresh=False, provider=None, opener=urlopen, cache_path=None) -> di
         if provider and definition["provider"] != provider:
             continue
         source = {**definition, "name": name}
-        sources[name] = fetch(source, opener)
+        sources[name] = fetch(source, opener, (cached or {}).get("sources", {}).get(name))
     items = deduplicate([item for result in sources.values() for item in result.get("items", [])])[:MAX_ITEMS]
     failed = bool(sources) and all(result.get("status") != "ok" for result in sources.values())
     if failed and cached and cached.get("provider") == provider and cached.get("items"):

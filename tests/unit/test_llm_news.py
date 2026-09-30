@@ -51,6 +51,44 @@ class NewsTests(unittest.TestCase):
         result = news.fetch({"name": "fixture", "provider": "openai", "url": "https://example.test"}, blocked)
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["http_status"], 403)
+        self.assertEqual(result["freshness"]["status"], "unavailable")
+
+    def test_conditional_refresh_reuses_cached_items(self):
+        captured = {}
+
+        class NotModified(Response):
+            status = 304
+
+            def read(self):
+                raise AssertionError("304 response must not be parsed")
+
+        def not_modified(request, timeout):
+            captured.update(request.headers)
+            return NotModified("")
+
+        cached = {"status": "ok", "items": [{"title": "Cached", "url": "https://x/cached"}],
+                  "fetched_at": 1, "etag": '"v1"', "last_modified": "Wed, 30 Sep 2026 10:00:00 GMT"}
+        result = news.fetch({"provider": "openai", "url": "https://example.test"}, not_modified, cached)
+        self.assertEqual(result["items"][0]["title"], "Cached")
+        self.assertTrue(result["not_modified"])
+        self.assertEqual(captured["If-none-match"], '"v1"')
+        self.assertEqual(captured["If-modified-since"], "Wed, 30 Sep 2026 10:00:00 GMT")
+
+    def test_report_exposes_per_source_freshness_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "news.json"
+            source = {"name": "fixture", "provider": "openai", "url": "https://example.test/news/"}
+
+            def available(_request, timeout):
+                return Response(FIXTURE)
+
+            with patch.object(news, "SOURCES", {"fixture": source}):
+                result = news.collect(refresh=True, cache_path=path, opener=available)
+
+            metadata = result["sources"]["fixture"]
+            self.assertEqual(metadata["status"], "ok")
+            self.assertEqual(metadata["freshness"]["status"], "fresh")
+            self.assertIsInstance(metadata["freshness"]["age_seconds"], int)
 
     def test_failed_refresh_keeps_stale_items(self):
         with tempfile.TemporaryDirectory() as directory:
