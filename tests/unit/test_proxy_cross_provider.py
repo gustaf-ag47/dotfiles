@@ -53,6 +53,19 @@ class CrossProviderEDFTests(OracleFixture):
         self.assertAlmostEqual(candidate["pressure"], .4 / (7 * 86400))
         self.assertTrue(candidate["routable"])
 
+    def test_route_candidates_expose_safe_observation_freshness(self):
+        self.token(cooldown=time.time() + 600)
+        state = codex_state(used=10)
+        state["source"] = "ChatGPT Codex wham/usage (private endpoint)"
+        state["checked_at"] = int(time.time()) - 7
+        self.providers(state)
+        result = proxy.route_payload("claude-opus-5-5")
+        self.assertEqual(result["candidates"][0]["source"], "local Anthropic proxy observation")
+        self.assertEqual(result["candidates"][1]["source"], state["source"])
+        self.assertGreaterEqual(result["candidates"][1]["age_seconds"], 7)
+        self.assertEqual(result["candidates"][0]["reason"], "cooldown")
+        self.assertEqual(result["candidates"][1]["reason"], None)
+
     def test_preferred_selects_highest_pressure_but_never_deepseek(self):
         self.token(cooldown=time.time() + 600)
         self.providers(codex_state(used=10))

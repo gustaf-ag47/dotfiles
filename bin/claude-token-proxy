@@ -1610,13 +1610,27 @@ def _epoch_iso(value) -> str | None:
         return None
 
 
+def observation_fields(state: dict, default_source: str) -> dict:
+    """Return only safe freshness metadata for the route oracle."""
+    observed = state.get("checked_at") or state.get("quota_checked_at")
+    if isinstance(observed, str):
+        try:
+            observed = datetime.fromisoformat(observed.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            observed = None
+    age = max(0, int(time.time() - observed)) if isinstance(observed, (int, float)) else None
+    return {"source": state.get("source") or default_source, "age_seconds": age,
+            "confidence": state.get("confidence")}
+
+
 def anthropic_candidate(model: str, class_name: str | None = None) -> dict:
     """Anthropic pool viewed through the same dry run pick() would take."""
     ranking = rank_pool(model, class_name=class_name)
     rows = ranking["ranking"]
     chosen = next((r for r in rows if r["fp"] == ranking["would_pick"]), None)
     out = {"provider": "anthropic", "model": model, "routable": chosen is not None, "reason": None,
-           "quota_left_percent": None, "reset_at": None, "account": None}
+           "quota_left_percent": None, "reset_at": None, "account": None,
+           **observation_fields({}, "local Anthropic proxy observation")}
     if chosen is not None:
         util = chosen["utilization"]
         out.update(quota_left_percent=_pct_left(util * 100) if util is not None else None,
@@ -1650,7 +1664,8 @@ def codex_on_credits(state: dict) -> bool:
 
 def codex_candidate(model: str, state: dict) -> dict:
     out = {"provider": "openai-codex", "model": model, "routable": False, "reason": "unknown",
-           "quota_left_percent": None, "reset_at": None, "checked_at": state.get("checked_at")}
+           "quota_left_percent": None, "reset_at": None, "checked_at": state.get("checked_at"),
+           **observation_fields(state, "ChatGPT Codex wham/usage (private endpoint)")}
     if state.get("status") != "ok":
         return out
     windows = [w for w in state.get("windows", []) if numeric(w.get("used_percent")) is not None]
@@ -1701,7 +1716,8 @@ def codex_candidate(model: str, state: dict) -> dict:
 def deepseek_candidate(model: str, state: dict) -> dict:
     out = {"provider": "deepseek", "model": model, "routable": False, "reason": "unknown",
            "balance": None, "currency": None, "min_balance": DEEPSEEK_MIN_BALANCE,
-           "proxy_passthrough": DEEPSEEK_FALLBACK, "checked_at": state.get("checked_at")}
+           "proxy_passthrough": DEEPSEEK_FALLBACK, "checked_at": state.get("checked_at"),
+           **observation_fields(state, "DeepSeek balance endpoint")}
     if state.get("status") != "ok":
         return out
     rows = state.get("balances") or []
