@@ -334,6 +334,31 @@ class NormalizedReportTests(unittest.TestCase):
         self.assertEqual(failed['reason'], 'HTTP 403')
 
 
+class WaybarProjectionTests(unittest.TestCase):
+    def test_waybar_output_summarizes_unknown_stale_and_provider_failure(self):
+        report = {'providers': {
+            'anthropic': {'status': 'ok', 'normalized': {
+                'freshness': {'state': 'stale'}, 'confidence': 'low', 'unknowns': [],
+                'quota': {'windows': [{'remaining_percent': 62, 'state': 'known'}]}},
+                'checked_at': int(NOW)},
+            'deepseek': {'status': 'unavailable', 'reason': 'HTTP 429', 'checked_at': int(NOW)},
+        }}
+        payload = usage.waybar_payload(report)
+        self.assertEqual(payload['text'], 'LLM 62% ~!')
+        self.assertEqual(payload['class'], 'warning')
+        self.assertIn('anthropic: stale', payload['tooltip'])
+        self.assertIn('deepseek: HTTP 429', payload['tooltip'])
+
+    def test_waybar_output_does_not_turn_unknown_capacity_into_zero(self):
+        report = {'providers': {'deepseek': {'status': 'ok', 'normalized': {
+            'freshness': {'state': 'fresh'}, 'confidence': 'high', 'unknowns': ['credits'],
+            'quota': {'windows': []}}, 'checked_at': int(NOW)}}}
+        payload = usage.waybar_payload(report)
+        self.assertEqual(payload['text'], 'LLM ?')
+        self.assertEqual(payload['class'], 'warning')
+        self.assertIn('unknown=credits', payload['tooltip'])
+
+
 class UsageTests(unittest.TestCase):
     def test_expired_window_is_unknown_not_full_or_exhausted(self):
         window = {'name': 'five_hour', 'used_percent': 101, 'resets_at': NOW - 1,

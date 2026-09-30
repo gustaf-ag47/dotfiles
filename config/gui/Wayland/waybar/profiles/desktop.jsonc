@@ -6,5 +6,5 @@
 // like a wireless mouse (hidpp_battery_0) and USB-C PD, so an unconditional
 // battery module shows a misleading percentage that is not the machine's.
 {
-  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "custom/claude-usage", "custom/power"]
+  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "custom/llm-usage", "custom/power"]
 }

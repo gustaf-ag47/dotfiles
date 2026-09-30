@@ -610,6 +610,43 @@ def deepseek_lines(info, _now):
 RENDERERS = {'anthropic': anthropic_lines, 'openai-codex': codex_lines, 'deepseek': deepseek_lines}
 
 
+def waybar_payload(report):
+    """Return compact Waybar JSON from an already collected report.
+
+    This is presentation only: it never calls an adapter and unknown capacity
+    stays ``?`` rather than being represented as zero.
+    """
+    remaining = []
+    stale = False
+    failed = []
+    details = []
+    for provider, info in report.get('providers', {}).items():
+        if info.get('status') != 'ok':
+            failed.append(provider)
+            details.append(f"{provider}: {info.get('reason') or 'unavailable'}")
+            continue
+        normalized = info.get('normalized') or {}
+        state = (normalized.get('freshness') or {}).get('state', 'unknown')
+        stale |= state == 'stale'
+        unknowns = normalized.get('unknowns') or []
+        suffix = f" unknown={','.join(unknowns)}" if unknowns else ''
+        details.append(f"{provider}: {state}{suffix}")
+        for window in ((normalized.get('quota') or {}).get('windows') or []):
+            value = window.get('remaining_percent')
+            if numeric(value) is not None and window.get('state') == 'known':
+                remaining.append(max(0, min(100, float(value))))
+    if remaining:
+        percent = min(remaining)
+        text_value = f"LLM {percent:.0f}%" + (' ~' if stale else '') + ('!' if failed else '')
+        css_class = 'critical' if percent < 20 else 'warning' if percent < 60 or stale or failed else 'normal'
+        payload = {'text': text_value, 'percentage': round(percent)}
+    else:
+        payload = {'text': 'LLM ?' + ('!' if failed else ''), 'percentage': 0}
+        css_class = 'error' if failed else 'warning'
+    payload.update({'class': css_class, 'tooltip': 'LLM usage\n' + '\n'.join(details)})
+    return payload
+
+
 def render(report):
     now = time.time()
     checked = max(info['checked_at'] for info in report['providers'].values())
@@ -730,6 +767,7 @@ def capacity_report(data, horizon=2):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--waybar', action='store_true', help='Emit compact Waybar JSON')
     parser.add_argument('--week', action='store_true', help='Report rolling-seven-day routing metrics')
     parser.add_argument('--capacity', action='store_true', help='Estimate additional 5h heavy-session capacity')
     parser.add_argument('--news', action='store_true', help='Show cached official OpenAI and Anthropic news')
@@ -800,7 +838,10 @@ def main():
         if report is None:
             report = {'schema': REPORT_SCHEMA, 'generated_at': int(time.time()),
                       'host_local': True, 'providers': collect(auth, providers)}
-    print(json.dumps(report, indent=2) if args.json else render(report))
+    if args.waybar:
+        print(json.dumps(waybar_payload(report), separators=(',', ':')))
+    else:
+        print(json.dumps(report, indent=2) if args.json else render(report))
 
 
 if __name__ == '__main__':

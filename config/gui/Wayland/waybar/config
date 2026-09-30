@@ -9,7 +9,7 @@
   "spacing": 8,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/claude-usage", "custom/power"],
+  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/llm-usage", "custom/power"],
   
   "hyprland/workspaces": {
     "disable-scroll": true,
@@ -160,12 +160,12 @@
     "on-click": "hyprctl switchxkblayout at-translated-set-2-keyboard next"
   },
   
-  "custom/claude-usage": {
-    "exec": "waybar-claude-usage",
+  "custom/llm-usage": {
+    "exec": "llm-usage --waybar",
     "return-type": "json",
     "interval": 300,
     "tooltip": true,
-    "on-click": "kitty -e sh -c 'claude-usage; echo; read -p \"Press enter to close\"'"
+    "on-click": "kitty -e llm-usage"
   },
 
   "custom/power": {
