@@ -230,6 +230,91 @@ def deepseek(auth):
 
 ADAPTERS = {'anthropic': anthropic, 'openai-codex': codex, 'deepseek': deepseek}
 
+# The adapter payloads above intentionally remain provider-shaped for the
+# existing renderers and proxy integrations.  Consumers of the report should
+# use this deliberately boring, provider-neutral projection instead.
+REPORT_SCHEMA = 'llm-usage.v1'
+
+
+def _freshness(checked_at, now=None):
+    now = time.time() if now is None else now
+    age = max(0, int(now - checked_at))
+    return {'observed_at': datetime.datetime.fromtimestamp(checked_at, datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
+            'age_seconds': age, 'state': 'fresh' if age < 300 else 'stale'}
+
+
+def _observation(provider, raw, checked_at):
+    status = raw.get('status', 'unknown')
+    freshness = _freshness(checked_at)
+    if status != 'ok':
+        state = 'scope_denied' if 'scope' in str(raw.get('reason', '')).lower() else 'failed'
+        return {'provider': provider, 'status': status, 'reason': raw.get('reason'),
+                'freshness': {**freshness, 'state': state}, 'confidence': 'none',
+                'quota': {'windows': []}, 'credits': {'balances': []},
+                'reset_entitlements': {'available_count': None, 'items': []},
+                'availability': {'provider': None, 'models': {}}, 'telemetry': {},
+                'forecasts': {}, 'unknowns': ['quota', 'credits', 'reset_entitlements', 'availability']}
+    return None
+
+
+def normalize_provider(provider, raw, checked_at):
+    """Return the stable, redacted report contract for one provider.
+
+    None is intentional: it means unknown, never zero.  ``unknowns`` keeps
+    that distinction machine-readable when an adapter or scope is incomplete.
+    """
+    failed = _observation(provider, raw, checked_at)
+    if failed:
+        return failed
+    freshness = _freshness(checked_at)
+    confidence = 'high'
+    quota, credits, resets, availability, telemetry, forecasts = [], {'balances': [], 'state': 'unknown'}, {'available_count': None, 'items': [], 'state': 'unknown'}, {'provider': None, 'models': {}, 'state': 'unknown'}, {}, {}
+    if provider == 'anthropic':
+        confidence = 'medium'
+        for account in raw.get('accounts', []):
+            windows = []
+            for window in account.get('windows', []):
+                item = {'account': account.get('account'), 'name': window.get('name'),
+                        'used_percent': window.get('used_percent'), 'remaining_percent':
+                        None if window.get('used_percent') is None else max(0, 100 - window['used_percent']),
+                        'reset_at': window.get('resets_at') or window.get('reset_at'),
+                        'source': window.get('source'),
+                        'freshness': 'stale' if str(window.get('source', '')).startswith('header') else freshness['state'],
+                        'state': 'unknown' if window.get('used_percent') is None else 'known'}
+                windows.append(item)
+                if window.get('forecast') is not None: forecasts[f"{account.get('account')}:{window.get('name')}"] = window['forecast']
+            quota.append({'account': account.get('account'), 'label': account.get('label'), 'windows': windows,
+                          'state': 'scope_denied' if account.get('quota_scope_denied') else 'known'})
+            telemetry[account.get('account') or 'unknown'] = account.get('observed', {})
+        availability['provider'] = any(a.get('valid') and not a.get('forced_down') for a in raw.get('accounts', []))
+        if any(w.get('freshness') == 'stale' for q in quota for w in q.get('windows', [])):
+            freshness = {**freshness, 'state': 'stale'}
+            confidence = 'low'
+    elif provider == 'openai-codex':
+        quota = [{'name': w.get('name'), 'used_percent': w.get('used_percent'),
+                  'remaining_percent': None if w.get('used_percent') is None else max(0, 100-w['used_percent']),
+                  'window_seconds': w.get('window_seconds'), 'reset_at': w.get('reset_at'), 'state': 'known'}
+                 for w in raw.get('windows', [])]
+        raw_credits = raw.get('credits') if isinstance(raw.get('credits'), dict) else {}
+        credits = {'balances': [{'balance': raw_credits.get('balance'), 'unit': 'provider-native'}],
+                   'state': 'known' if raw_credits.get('balance') is not None else 'unknown'}
+        resets = {'available_count': raw.get('reset_credits'), 'items': [],
+                  'state': 'known' if raw.get('reset_credits') is not None else 'unknown'}
+        availability = {'provider': raw.get('allowed'), 'models': raw.get('models') or {}}
+        confidence = 'medium'  # private Codex endpoint; useful but not a public contract
+    else:
+        credits = {'balances': [{**row, 'unit': row.get('currency')} for row in raw.get('balances', [])], 'state': 'known'}
+        availability['provider'] = raw.get('available')
+        confidence = 'high'
+    unknowns = []
+    for name, value in (('quota', quota), ('credits', credits), ('reset_entitlements', resets), ('availability', availability)):
+        if value in (None, [], {'balances': []}, {'provider': None, 'models': {}}) or (isinstance(value, dict) and value.get('state') == 'unknown'):
+            unknowns.append(name)
+    return {'provider': provider, 'status': 'ok', 'account': raw.get('account') or raw.get('label'),
+            'freshness': freshness, 'confidence': confidence, 'quota': {'windows': quota},
+            'credits': credits, 'reset_entitlements': resets, 'availability': availability,
+            'telemetry': telemetry, 'forecasts': forecasts, 'unknowns': unknowns}
+
 
 def safe_query(provider, auth):
     try:
@@ -239,7 +324,9 @@ def safe_query(provider, auth):
     except Exception as error:
         # No exception text/response bodies: either could carry credentials.
         result = {'status': 'unavailable', 'reason': f'Usage lookup failed ({type(error).__name__}).'}
-    return provider, {**result, 'checked_at': int(time.time())}
+    checked_at = int(time.time())
+    return provider, {**result, 'checked_at': checked_at,
+                      'normalized': normalize_provider(provider, result, checked_at)}
 
 
 def collect(auth, providers):
@@ -439,19 +526,33 @@ def codex_lines(info, now):
               for window in info.get('windows', [])]
     credits = info.get('credits') or {}
     balance = f" (balance {credits['balance']})" if credits.get('balance') is not None else ''
+    credit_state = []
+    if credits.get('has_credits') is True:
+        credit_state.append('enabled')
+    elif credits.get('has_credits') is False:
+        credit_state.append('none')
+    if credits.get('unlimited') is True:
+        credit_state.append('unlimited')
+    if credits.get('overage_limit_reached') is True:
+        credit_state.append('overage limit reached')
+    if credit_state or balance:
+        lines.append('    credits: ' + ', '.join(credit_state) + balance)
     for slug, row in (info.get('models') or {}).items():
-        if row.get('available') is not False:
-            continue
-        when = to_epoch(row.get('available_at'))
-        line = f'{slug} unavailable' + (f' until {until(when, now)}' if when is not None else '')
-        if row.get('credits_would_enable'):
-            line += f' \u2014 credits would unlock it{balance}'
-        lines.append('    ' + paint(line, '31'))
+        if row.get('available') is False:
+            when = to_epoch(row.get('available_at'))
+            line = f'{slug} unavailable' + (f' until {until(when, now)}' if when is not None else '')
+            if row.get('credits_would_enable'):
+                line += f' \u2014 credits would unlock it{balance}'
+            lines.append('    ' + paint(line, '31'))
+        elif row.get('available') is True:
+            lines.append('    ' + paint(f'{slug} available', '32'))
     if blocked:
         tail = f"    top up: {info.get('topup_url') or CODEX_TOPUP_URL}"
         if info.get('reset_credits') is not None:
             tail += f"   reset credits: {info['reset_credits']:g}"
         lines.append(paint(tail, '2'))
+    elif info.get('reset_credits') is not None:
+        lines.append(paint(f"    reset credits available: {info['reset_credits']:g}", '2'))
     return lines, False
 
 
@@ -493,7 +594,9 @@ RENDERERS = {'anthropic': anthropic_lines, 'openai-codex': codex_lines, 'deepsee
 def render(report):
     now = time.time()
     checked = max(info['checked_at'] for info in report['providers'].values())
-    lines = [f"LLM usage left   (checked {time.strftime('%H:%M:%S', time.localtime(checked))})"]
+    age = max(0, int(time.time() - checked))
+    age_label = f'{age // 60}m' if age >= 60 else f'{age}s'
+    lines = [f"LLM usage left   (checked {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(checked))}, {age_label} ago)"]
     stale_seen = False
     for provider, info in report['providers'].items():
         lines.append('')
@@ -501,7 +604,14 @@ def render(report):
             who = codex_identity(info) if info.get('account') else info.get('label')
             lines.append(f"{paint(provider, '1')}  " + (f"{paint(who, '1')}  " if who else '') + paint(info['reason'], '31'))
             continue
-        lines.append(paint(provider, '1'))
+        normalized = info.get('normalized') or {}
+        freshness = (normalized.get('freshness') or {}).get('state', 'unknown')
+        confidence = normalized.get('confidence', 'unknown')
+        unknowns = normalized.get('unknowns') or []
+        meta = f'  freshness={freshness} confidence={confidence}'
+        if unknowns:
+            meta += ' unknown=' + ','.join(unknowns)
+        lines.append(paint(provider, '1') + meta)
         body, stale = RENDERERS.get(provider, anthropic_lines)(info, now)
         lines += body
         stale_seen |= stale
@@ -634,24 +744,30 @@ def main():
     report = None
     try:
         cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(cache_dir, 0o700)
         path = cache_dir / (hashlib.sha256(identity.encode()).hexdigest()[:20] + '.json')
         with open(cache_dir / 'lock', 'a') as lock:
+            os.chmod(cache_dir / 'lock', 0o600)
             fcntl.flock(lock, fcntl.LOCK_EX)
             if not args.refresh and path.exists() and 0 <= time.time() - path.stat().st_mtime < 60:
                 report = json.loads(path.read_text())
+                os.chmod(path, 0o600)
             if report is None:
-                report = {'schema': 1, 'providers': collect(auth, providers)}
+                report = {'schema': REPORT_SCHEMA, 'generated_at': int(time.time()),
+                          'host_local': True, 'providers': collect(auth, providers)}
                 fd, temp = tempfile.mkstemp(dir=cache_dir)
                 try:
                     with os.fdopen(fd, 'w') as out:
                         json.dump(report, out)
+                    os.chmod(temp, 0o600)
                     os.replace(temp, path)
                 finally:
                     if os.path.exists(temp):
                         os.unlink(temp)
     except (OSError, ValueError):
         if report is None:
-            report = {'schema': 1, 'providers': collect(auth, providers)}
+            report = {'schema': REPORT_SCHEMA, 'generated_at': int(time.time()),
+                      'host_local': True, 'providers': collect(auth, providers)}
     print(json.dumps(report, indent=2) if args.json else render(report))
 
 

@@ -263,6 +263,39 @@ class DeepseekTests(unittest.TestCase):
         self.assertIn('top up:', out)
 
 
+class NormalizedReportTests(unittest.TestCase):
+    def test_provider_projection_separates_domains_and_preserves_unknowns(self):
+        raw = {'status': 'ok', 'accounts': [{'account': 'abc123', 'label': 'test', 'valid': True,
+                'windows': [{'name': 'five_hour', 'used_percent': None, 'source': 'header observation (may be stale)'}],
+                'quota_scope_denied': True, 'observed': {'requests': 2}}]}
+        result = usage.normalize_provider('anthropic', raw, NOW)
+        self.assertEqual(result['quota']['windows'][0]['state'], 'scope_denied')
+        window = result['quota']['windows'][0]['windows'][0]
+        self.assertEqual(window['freshness'], 'stale')
+        self.assertIsNone(window['remaining_percent'])
+        self.assertEqual(result['telemetry']['abc123']['requests'], 2)
+        self.assertIn('reset_entitlements', result['unknowns'])
+
+    def test_failed_observation_is_explicit_and_redacted(self):
+        result = usage.normalize_provider('deepseek',
+            {'status': 'unavailable', 'reason': 'Usage endpoint HTTP 403; inference may still work.'}, NOW)
+        self.assertEqual(result['freshness']['state'], 'failed')
+        self.assertEqual(result['confidence'], 'none')
+        self.assertIn('quota', result['unknowns'])
+        self.assertNotIn('access', json.dumps(result))
+
+    def test_codex_projection_keeps_credits_and_reset_entitlements_distinct(self):
+        raw = {'status': 'ok', 'allowed': False, 'windows': [{'name': 'primary_window', 'used_percent': 100,
+                'window_seconds': 604800, 'reset_at': NOW + 60}],
+                'credits': {'balance': '12.50'}, 'reset_credits': 2,
+                'models': {'astra': {'available': False}}}
+        result = usage.normalize_provider('openai-codex', raw, NOW)
+        self.assertEqual(result['credits']['balances'][0]['balance'], '12.50')
+        self.assertEqual(result['reset_entitlements']['available_count'], 2)
+        self.assertEqual(result['availability']['models']['astra']['available'], False)
+        self.assertEqual(result['quota']['windows'][0]['remaining_percent'], 0)
+
+
 class UsageTests(unittest.TestCase):
     def test_expired_window_is_unknown_not_full_or_exhausted(self):
         window = {'name': 'five_hour', 'used_percent': 101, 'resets_at': NOW - 1,
