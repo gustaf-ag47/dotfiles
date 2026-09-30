@@ -295,6 +295,44 @@ class NormalizedReportTests(unittest.TestCase):
         self.assertEqual(result['availability']['models']['astra']['available'], False)
         self.assertEqual(result['quota']['windows'][0]['remaining_percent'], 0)
 
+    def test_missing_deepseek_balance_is_explicitly_unknown(self):
+        result = usage.normalize_provider('deepseek', {'status': 'ok', 'balances': [], 'available': None}, NOW)
+        self.assertEqual(result['credits']['state'], 'unknown')
+        self.assertIsNone(result['availability']['provider'])
+        self.assertIn('credits', result['unknowns'])
+        self.assertIn('availability', result['unknowns'])
+
+    def test_malformed_provider_payload_stays_explicitly_unknown(self):
+        cases = {
+            'anthropic': {'status': 'ok', 'accounts': None},
+            'openai-codex': {'status': 'ok', 'windows': None, 'credits': None, 'models': None},
+            'deepseek': {'status': 'ok', 'balances': [None, 'not-a-balance'], 'available': 'yes'},
+        }
+        for provider, raw in cases.items():
+            with self.subTest(provider=provider):
+                result = usage.normalize_provider(provider, raw, NOW)
+                self.assertEqual(result['status'], 'ok')
+                self.assertTrue(result['unknowns'] or result['availability']['provider'] is None)
+                self.assertNotIn('secret', json.dumps(result))
+
+    def test_json_projection_identifies_source_for_every_observation(self):
+        cases = {
+            'anthropic': {'status': 'ok', 'accounts': []},
+            'openai-codex': {'status': 'ok', 'windows': [], 'credits': {}, 'models': {}},
+            'deepseek': {'status': 'ok', 'balances': [], 'available': None},
+        }
+        for provider, raw in cases.items():
+            with self.subTest(provider=provider):
+                result = usage.normalize_provider(provider, raw, NOW)
+                self.assertIsInstance(result['source'], str)
+                self.assertTrue(result['source'])
+                self.assertIn('reason', result)
+                self.assertIsNone(result['reason'])
+
+        failed = usage.normalize_provider('deepseek', {'status': 'unavailable', 'reason': 'HTTP 403'}, NOW)
+        self.assertEqual(failed['source'], 'DeepSeek balance API')
+        self.assertEqual(failed['reason'], 'HTTP 403')
+
 
 class UsageTests(unittest.TestCase):
     def test_expired_window_is_unknown_not_full_or_exhausted(self):

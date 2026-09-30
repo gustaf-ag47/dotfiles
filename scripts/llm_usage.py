@@ -234,6 +234,11 @@ ADAPTERS = {'anthropic': anthropic, 'openai-codex': codex, 'deepseek': deepseek}
 # existing renderers and proxy integrations.  Consumers of the report should
 # use this deliberately boring, provider-neutral projection instead.
 REPORT_SCHEMA = 'llm-usage.v1'
+REPORT_SOURCES = {
+    'anthropic': 'Anthropic proxy _usage observations',
+    'openai-codex': 'ChatGPT Codex wham/usage (private endpoint)',
+    'deepseek': 'DeepSeek balance API',
+}
 
 
 def _freshness(checked_at, now=None):
@@ -248,8 +253,8 @@ def _observation(provider, raw, checked_at):
     freshness = _freshness(checked_at)
     if status != 'ok':
         state = 'scope_denied' if 'scope' in str(raw.get('reason', '')).lower() else 'failed'
-        return {'provider': provider, 'status': status, 'reason': raw.get('reason'),
-                'freshness': {**freshness, 'state': state}, 'confidence': 'none',
+        return {'provider': provider, 'status': status, 'source': REPORT_SOURCES.get(provider, 'provider adapter'),
+                'reason': raw.get('reason'), 'freshness': {**freshness, 'state': state}, 'confidence': 'none',
                 'quota': {'windows': []}, 'credits': {'balances': []},
                 'reset_entitlements': {'available_count': None, 'items': []},
                 'availability': {'provider': None, 'models': {}}, 'telemetry': {},
@@ -271,12 +276,18 @@ def normalize_provider(provider, raw, checked_at):
     quota, credits, resets, availability, telemetry, forecasts = [], {'balances': [], 'state': 'unknown'}, {'available_count': None, 'items': [], 'state': 'unknown'}, {'provider': None, 'models': {}, 'state': 'unknown'}, {}, {}
     if provider == 'anthropic':
         confidence = 'medium'
-        for account in raw.get('accounts', []):
+        accounts = raw.get('accounts') if isinstance(raw.get('accounts'), list) else []
+        for account in accounts:
+            if not isinstance(account, dict):
+                continue
             windows = []
-            for window in account.get('windows', []):
+            account_windows = account.get('windows') if isinstance(account.get('windows'), list) else []
+            for window in account_windows:
+                if not isinstance(window, dict):
+                    continue
                 item = {'account': account.get('account'), 'name': window.get('name'),
                         'used_percent': window.get('used_percent'), 'remaining_percent':
-                        None if window.get('used_percent') is None else max(0, 100 - window['used_percent']),
+                        None if not numeric(window.get('used_percent')) else max(0, 100 - window['used_percent']),
                         'reset_at': window.get('resets_at') or window.get('reset_at'),
                         'source': window.get('source'),
                         'freshness': 'stale' if str(window.get('source', '')).startswith('header') else freshness['state'],
@@ -286,31 +297,39 @@ def normalize_provider(provider, raw, checked_at):
             quota.append({'account': account.get('account'), 'label': account.get('label'), 'windows': windows,
                           'state': 'scope_denied' if account.get('quota_scope_denied') else 'known'})
             telemetry[account.get('account') or 'unknown'] = account.get('observed', {})
-        availability['provider'] = any(a.get('valid') and not a.get('forced_down') for a in raw.get('accounts', []))
+        availability['provider'] = any(a.get('valid') and not a.get('forced_down') for a in accounts)
         if any(w.get('freshness') == 'stale' for q in quota for w in q.get('windows', [])):
             freshness = {**freshness, 'state': 'stale'}
             confidence = 'low'
     elif provider == 'openai-codex':
+        windows = raw.get('windows') if isinstance(raw.get('windows'), list) else []
         quota = [{'name': w.get('name'), 'used_percent': w.get('used_percent'),
-                  'remaining_percent': None if w.get('used_percent') is None else max(0, 100-w['used_percent']),
+                  'remaining_percent': None if not numeric(w.get('used_percent')) else max(0, 100-w['used_percent']),
                   'window_seconds': w.get('window_seconds'), 'reset_at': w.get('reset_at'), 'state': 'known'}
-                 for w in raw.get('windows', [])]
+                 for w in windows if isinstance(w, dict)]
         raw_credits = raw.get('credits') if isinstance(raw.get('credits'), dict) else {}
-        credits = {'balances': [{'balance': raw_credits.get('balance'), 'unit': 'provider-native'}],
-                   'state': 'known' if raw_credits.get('balance') is not None else 'unknown'}
-        resets = {'available_count': raw.get('reset_credits'), 'items': [],
-                  'state': 'known' if raw.get('reset_credits') is not None else 'unknown'}
-        availability = {'provider': raw.get('allowed'), 'models': raw.get('models') or {}}
+        balance = raw_credits.get('balance')
+        valid_balance = isinstance(balance, str) or numeric(balance) is not None
+        credits = {'balances': [{'balance': balance, 'unit': 'provider-native'}],
+                   'state': 'known' if valid_balance else 'unknown'}
+        reset_count = raw.get('reset_credits') if numeric(raw.get('reset_credits')) is not None else None
+        resets = {'available_count': reset_count, 'items': [],
+                  'state': 'known' if reset_count is not None else 'unknown'}
+        models = raw.get('models') if isinstance(raw.get('models'), dict) else {}
+        availability = {'provider': boolean(raw.get('allowed')), 'models': models}
         confidence = 'medium'  # private Codex endpoint; useful but not a public contract
     else:
-        credits = {'balances': [{**row, 'unit': row.get('currency')} for row in raw.get('balances', [])], 'state': 'known'}
-        availability['provider'] = raw.get('available')
+        balances = [{**row, 'unit': row.get('currency')} for row in raw.get('balances', [])
+                    if isinstance(row, dict)]
+        credits = {'balances': balances, 'state': 'known' if balances else 'unknown'}
+        availability['provider'] = boolean(raw.get('available'))
         confidence = 'high'
     unknowns = []
     for name, value in (('quota', quota), ('credits', credits), ('reset_entitlements', resets), ('availability', availability)):
         if value in (None, [], {'balances': []}, {'provider': None, 'models': {}}) or (isinstance(value, dict) and value.get('state') == 'unknown'):
             unknowns.append(name)
-    return {'provider': provider, 'status': 'ok', 'account': raw.get('account') or raw.get('label'),
+    return {'provider': provider, 'status': 'ok', 'source': REPORT_SOURCES.get(provider, 'provider adapter'),
+            'reason': None, 'account': raw.get('account') or raw.get('label'),
             'freshness': freshness, 'confidence': confidence, 'quota': {'windows': quota},
             'credits': credits, 'reset_entitlements': resets, 'availability': availability,
             'telemetry': telemetry, 'forecasts': forecasts, 'unknowns': unknowns}
