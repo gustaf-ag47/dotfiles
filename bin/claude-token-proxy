@@ -1017,6 +1017,11 @@ def deepseek(auth: dict) -> dict:
 
 
 PROVIDER_ADAPTERS = {"openai-codex": codex, "deepseek": deepseek}
+PROVIDER_SOURCES = {
+    "openai-codex": "ChatGPT Codex wham/usage (private endpoint)",
+    "deepseek": "DeepSeek balance API",
+}
+PROVIDER_CONFIDENCE = {"openai-codex": "medium", "deepseek": "high"}
 PROVIDER_STATE: dict[str, dict] = {
     name: {"status": "unavailable", "reason": "not polled yet", "checked_at": None}
     for name in PROVIDER_ADAPTERS
@@ -1024,14 +1029,18 @@ PROVIDER_STATE: dict[str, dict] = {
 
 
 def safe_query(provider: str, auth: dict) -> dict:
-    """Never raise, never echo response bodies or exception text."""
+    """Never raise; never echo response bodies or expose exception text."""
     try:
         result = PROVIDER_ADAPTERS[provider](auth)
     except urllib.error.HTTPError as error:
         result = {"status": "unavailable", "reason": f"Usage endpoint HTTP {error.code}; inference may still work."}
     except Exception as error:
         result = {"status": "unavailable", "reason": f"Usage lookup failed ({type(error).__name__})."}
-    return {**result, "checked_at": int(time.time())}
+    checked_at = int(time.time())
+    observed_at = datetime.fromtimestamp(checked_at, timezone.utc).isoformat().replace("+00:00", "Z")
+    return {**result, "source": PROVIDER_SOURCES[provider],
+            "checked_at": checked_at, "observed_at": observed_at, "age_seconds": 0,
+            "confidence": PROVIDER_CONFIDENCE[provider], "reason": result.get("reason")}
 
 
 def update_deepseek_spend(balance: float, now: datetime | None = None) -> dict:
@@ -1875,6 +1884,16 @@ def usage_payload() -> dict:
                     "OAuth token is pickable; `fallback` is non-null only during such an episode",
         }
         providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
+    observation_now = int(time.time())
+    for provider, state in providers.items():
+        state.setdefault("source", PROVIDER_SOURCES.get(provider, "provider adapter"))
+        state.setdefault("confidence", PROVIDER_CONFIDENCE.get(provider, "none"))
+        checked_at = state.get("checked_at")
+        state["age_seconds"] = (max(0, observation_now - checked_at)
+                                 if isinstance(checked_at, (int, float)) else None)
+        state["observed_at"] = (datetime.fromtimestamp(checked_at, timezone.utc).isoformat().replace("+00:00", "Z")
+                                 if isinstance(checked_at, (int, float)) else None)
+        state.setdefault("reason", None)
     checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
     routing["starved"] = STARVED_COUNT
     routing["starved_last"] = STARVED_LAST

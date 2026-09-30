@@ -676,6 +676,17 @@ class ProviderAdapterTests(OracleFixture):
         for canary in (CODEX_CANARY, DEEPSEEK_CANARY, "CANARYREFRESH"):
             self.assertNotIn(canary, blob)
 
+    def test_provider_observation_metadata_is_explicit_and_source_labeled(self):
+        with mock.patch.dict(proxy.PROVIDER_ADAPTERS, {"openai-codex": mock.Mock(return_value={"status": "ok", "windows": []})}), \
+                mock.patch.object(proxy.time, "time", return_value=1700000000):
+            result = proxy.safe_query("openai-codex", {})
+        self.assertEqual(result["source"], "ChatGPT Codex wham/usage (private endpoint)")
+        self.assertEqual(result["checked_at"], 1700000000)
+        self.assertEqual(result["observed_at"], "2023-11-14T22:13:20Z")
+        self.assertEqual(result["age_seconds"], 0)
+        self.assertEqual(result["confidence"], "medium")
+        self.assertIsNone(result["reason"])
+
     def test_codex_parses_wham_usage_and_jwt_claims(self):
         payload = {"email": "live@b", "plan_type": "pro",
                    "rate_limit": {"allowed": False, "limit_reached": True,
@@ -764,6 +775,12 @@ class OracleHttpTests(OracleFixture):
         self.assertEqual(sorted(data["providers"]), ["anthropic", "deepseek", "openai-codex"])
         self.assertEqual(data["providers"]["anthropic"]["tokens"], data["tokens"])
         self.assertEqual(data["providers"]["openai-codex"]["status"], "ok")
+        codex = data["providers"]["openai-codex"]
+        self.assertEqual(codex["source"], "ChatGPT Codex wham/usage (private endpoint)")
+        self.assertEqual(codex["confidence"], "medium")
+        self.assertIsInstance(codex["observed_at"], str)
+        self.assertGreaterEqual(codex["age_seconds"], 0)
+        self.assertIsNone(codex["reason"])
         self.assert_no_secrets(body)
 
     def test_cli_end_to_end_with_expired_headers_and_restart(self):
