@@ -713,10 +713,23 @@ def main():
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--week', action='store_true', help='Report rolling-seven-day routing metrics')
     parser.add_argument('--capacity', action='store_true', help='Estimate additional 5h heavy-session capacity')
+    parser.add_argument('--news', action='store_true', help='Show cached official OpenAI and Anthropic news')
+    parser.add_argument('--news-provider', choices=('openai', 'anthropic'))
+    parser.add_argument('--since', help='With --news, only show items on/after YYYY-MM-DD')
     parser.add_argument('--horizon', type=float, default=2, help='Capacity planning horizon in hours (default: 2)')
     parser.add_argument('--refresh', action='store_true', help='Bypass the 60-second report cache (does not refresh OAuth)')
     parser.add_argument('--provider', choices=list(ADAPTERS))
     args = parser.parse_args()
+    if args.news:
+        import llm_news
+        news_args = ['--json'] if args.json else []
+        if args.refresh:
+            news_args.append('--refresh')
+        if args.news_provider:
+            news_args += ['--provider', args.news_provider]
+        if args.since:
+            news_args += ['--since', args.since]
+        return llm_news.main(news_args)
     agent = Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent')).expanduser()
     auth_path = agent / 'auth.json'
     try:
