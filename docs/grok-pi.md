@@ -64,6 +64,14 @@ initial asynchronous poll, `/_usage` includes `providers.grok-build`. Pi's
 **Unknown means unknown:** the tested account's billing response exposes a weekly
 period but no recognized usage/limit amount. The report shows `UNKNOWN` / `?%`,
 not free capacity. A successful quota GET does not establish inference headroom.
+A later real inference rejection (2026-10-02) did expose a **historical** quota
+observation: HTTP 429 reported `grok-4.7` free usage at 602,828 / 600,000 tokens
+in a rolling 24-hour window. This was absent from the successful billing GET.
+It is not a live remaining-balance reading, does not specify which token categories
+count, and provides no exact reset timestamp. Capturing these error observations
+with timestamps/model/account scope is a follow-up, not implemented by the current
+billing reader; do not hard-code that limit for other plans or infer a midnight reset.
+
 Grok is intentionally **not** added to `routes.json`, task classes, automatic
 failover, or the waste/reset scheduler. Manual selection works. The `grok.routable`
 predicate in `llm-wait` remains false unless a future oracle candidate explicitly
