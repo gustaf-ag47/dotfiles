@@ -115,6 +115,8 @@ def anthropic(_auth):
                 forecast_key = {'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d_oi'}.get(name)
                 windows.append({'name': name, 'used_percent': used,
                                 'resets_at': bucket.get('resets_at') or bucket.get('reset_at') or token.get(reset),
+                                'observed_at': ((token.get('header_observed_at') or {}).get(header)
+                                                if source.startswith('header') else token.get('quota_checked_at')),
                                 'forecast': (token.get('forecast') or {}).get(forecast_key),
                                 'source': source if used is not None else 'unavailable'})
         counters = token.get('counters') or {}
@@ -722,6 +724,9 @@ def normalize_provider(provider, raw, checked_at):
                         None if not numeric(window.get('used_percent')) else max(0, 100 - window['used_percent']),
                         'reset_at': window.get('resets_at') or window.get('reset_at'),
                         'source': window.get('source'),
+                        'observed_at': window.get('observed_at'),
+                        'age_seconds': (max(0, int(time.time() - observed))
+                                        if (observed := to_epoch(window.get('observed_at'))) is not None else None),
                         'freshness': 'stale' if str(window.get('source', '')).startswith('header') else freshness['state'],
                         'state': 'unknown' if window.get('used_percent') is None else 'known'}
                 windows.append(item)
@@ -729,7 +734,12 @@ def normalize_provider(provider, raw, checked_at):
             quota.append({'account': account.get('account'), 'label': account.get('label'), 'windows': windows,
                           'state': 'scope_denied' if account.get('quota_scope_denied') else 'known'})
             telemetry[account.get('account') or 'unknown'] = account.get('observed', {})
-        availability['provider'] = any(a.get('valid') and not a.get('forced_down') for a in accounts)
+        # Token validity is not proof of inference capacity. A local read is
+        # not a new upstream observation (in particular after a scope denial).
+        availability['provider'] = None
+        observations = [to_epoch(w.get('observed_at')) for q in quota for w in q.get('windows', [])]
+        freshness = (_freshness(min(observations)) if observations and all(t is not None for t in observations)
+                     else {'observed_at': None, 'age_seconds': None, 'state': 'unknown'})
         if any(w.get('freshness') == 'stale' for q in quota for w in q.get('windows', [])):
             freshness = {**freshness, 'state': 'stale'}
             confidence = 'low'
@@ -881,7 +891,9 @@ def window_line(window, now):
     elif state == 'on_track':
         tail += paint(' · on track', '32')
     if stale:
-        tail += ' ~'
+        observed = to_epoch(window.get('observed_at'))
+        age = f'{max(0, int(now - observed)) // 60}m ago' if observed is not None else 'time unknown'
+        tail += f' · estimate; last observed {age} ~'
     pct = paint(f'{left:3.0f}% left', '1' if left < 20 else '0')
     return f'    {label:<9} {bar(left)} {pct}   {tail}'
 
@@ -906,6 +918,8 @@ def account_status(group, now):
                and (to_epoch(w.get('resets_at') or w.get('reset_at')) or 0) > now
                for w in group.get('windows', [])):
         return paint('UNKNOWN · awaiting fresh reading', '33;1')
+    if group.get('quota_scope_denied') or any(w.get('source', '').startswith('header') for w in group.get('windows', [])):
+        return paint('UNKNOWN · header estimates only', '33;1')
     return paint('READY', '32;1')
 
 
@@ -952,6 +966,8 @@ def routing_lines(routing, labels):
 
 def anthropic_lines(info, now):
     lines, stale = [], False
+    if any(g.get('quota_scope_denied') for g in info.get('accounts', [])):
+        lines.append('  Live quota refresh unavailable: OAuth lacks user:profile; --refresh only rereads local observations.')
     labels = {g['account']: g.get('label') for g in info.get('accounts', []) if g.get('label')}
     for group in info.get('accounts', []):
         lines.append(f"  {paint(account_name(group['account'], labels), '1')}  {account_status(group, now)}")
@@ -1113,7 +1129,7 @@ def render(report):
     checked = max(info['checked_at'] for info in report['providers'].values())
     age = max(0, int(time.time() - checked))
     age_label = f'{age // 60}m' if age >= 60 else f'{age}s'
-    lines = [f"LLM usage left   (checked {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(checked))}, {age_label} ago)"]
+    lines = [f"LLM usage left   (report fetched {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(checked))}, {age_label} ago)"]
     stale_seen = False
     for provider, info in report['providers'].items():
         lines.append('')
@@ -1287,6 +1303,10 @@ def main():
             if not args.refresh and path.exists() and 0 <= time.time() - path.stat().st_mtime < 60:
                 report = json.loads(path.read_text())
                 os.chmod(path, 0o600)
+                # Remote adapters stay cached; the loopback proxy already owns
+                # quota polling. Always see its latest 429/cooldown observations.
+                if 'anthropic' in providers:
+                    report['providers'].update(collect(auth, ['anthropic']))
             if report is None:
                 report = {'schema': REPORT_SCHEMA, 'generated_at': int(time.time()),
                           'host_local': True, 'providers': collect(auth, providers)}

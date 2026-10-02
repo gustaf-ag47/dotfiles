@@ -219,6 +219,7 @@ class Tok:
         self.u5: float | None = None
         self.u7: float | None = None
         self.u7_oi: float | None = None
+        self.header_observed_at: dict[str, float] = {}
         self.u5_reset: str | None = None
         self.u7_reset: str | None = None
         self.u7_oi_reset: str | None = None
@@ -267,6 +268,7 @@ class Tok:
             "u5": self.u5,
             "u7": self.u7,
             "u7_oi": self.u7_oi,
+            "header_observed_at": dict(self.header_observed_at),
             "u5_reset": self.u5_reset,
             "u7_reset": self.u7_reset,
             "u7_oi_reset": self.u7_oi_reset,
@@ -465,6 +467,7 @@ QUOTA_FIELDS = ("u5", "u7", "u7_oi", "u5_reset", "u7_reset", "u7_oi_reset", "uni
 
 def quota_snapshot(t: Tok) -> dict:
     snap = {key: getattr(t, key) for key in QUOTA_FIELDS}
+    snap["header_observed_at"] = dict(t.header_observed_at)
     snap["cooldown_until"] = t.cooldown_until
     snap["model_cooldowns"] = t.model_cooldowns
     return snap
@@ -478,6 +481,9 @@ def restore_quota(tok: Tok, saved: dict, now: float | None = None) -> None:
     for key in QUOTA_FIELDS:
         if getattr(tok, key) is None and saved.get(key) is not None:
             setattr(tok, key, saved[key])
+            observed = (saved.get("header_observed_at") or {}).get(key)
+            if isinstance(observed, (int, float)):
+                tok.header_observed_at[key] = observed
     cooldown = saved.get("cooldown_until")
     if isinstance(cooldown, (int, float)) and cooldown > now:
         tok.cooldown_until = max(tok.cooldown_until, float(cooldown))
@@ -675,12 +681,11 @@ def update_from_headers(tok: Tok, headers) -> None:
     u5 = _hdr_float(headers, "anthropic-ratelimit-unified-5h-utilization")
     u7 = _hdr_float(headers, "anthropic-ratelimit-unified-7d-utilization")
     u7_oi = _hdr_float(headers, "anthropic-ratelimit-unified-7d_oi-utilization")
-    if u5 is not None:
-        tok.u5 = u5
-    if u7 is not None:
-        tok.u7 = u7
-    if u7_oi is not None:
-        tok.u7_oi = u7_oi
+    # A Sonnet/Haiku response must not freshen a retained Fable observation.
+    for key, value in (("u5", u5), ("u7", u7), ("u7_oi", u7_oi)):
+        if value is not None:
+            setattr(tok, key, value)
+            tok.header_observed_at[key] = time.time()
     tok.u5_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-5h-reset") or tok.u5_reset
     tok.u7_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-7d-reset") or tok.u7_reset
     tok.u7_oi_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-7d_oi-reset") or tok.u7_oi_reset
