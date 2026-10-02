@@ -6,6 +6,94 @@ avoid touching real credentials). Full real-token inference is **not**
 verified by this change; the parent coordinates that live check. Branch
 `feat/grok-pi-auth`, own-files only.
 
+**Update (post-review fix):** parent check-in caught a real bug in the
+read-only CLI-bridge auth path before merge; fixed and re-verified. See
+"Post-review fix" below.
+
+## Post-review fix: native `resolve()` does not interpret `!command`
+
+Parent asked me to verify that `auth.apiKey.resolve()` returning
+`{ apiKey: "!" + bridgeScript }` actually executes the bridge script rather
+than sending that literal string as the bearer token. It did not -- this was
+a real bug.
+
+Traced through `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`:
+
+- `pi-ai`'s `resolveApiKey()` (`auth/resolve.ts`) calls
+  `provider.auth.apiKey.resolve({ ctx, credential, signal })` and uses its
+  returned `AuthResult.auth.apiKey` **verbatim**. No `!command`/`$ENV`
+  interpretation happens at this layer, for native or legacy providers alike.
+- The `!command` / `$ENV` convention described in `docs/custom-provider.md`
+  is implemented only in `pi-coding-agent`'s
+  `core/resolve-config-value.js`, and is applied automatically in exactly
+  two places: (a) legacy `ProviderConfig` (models.json /
+  `pi.registerProvider(name, config)`) string fields, via
+  `core/provider-composer.js`; and (b) `AuthStorage.read()` for **stored**
+  `api_key` credentials whose `key` is *not* a command value -- for
+  command-type stored keys, `AuthStorage.read()` explicitly returns them
+  **unresolved**, leaving execution to the caller.
+- A native `Provider`'s own custom `apiKey.resolve()` implementation (what
+  this provider uses) is that caller. It must execute the command itself; the
+  framework does not do it for you.
+
+My original `resolve()` ignored its `credential` argument entirely and
+always returned the literal string `"!/abs/path/to/bin/grok-oauth-token"` --
+that string would have been sent as the `Authorization: Bearer` value on
+every request. The same bug was present in `refreshModels`'s credential
+handling.
+
+**Fix**: moved the resolution logic into a new, dependency-free
+`config/pi/lib/grok-cli-bridge.mjs` exporting `resolveGrokCliBridgeToken()`,
+which runs the bridge script directly via `node:child_process.execFileSync`
+(argv array, no shell, 10s timeout) and returns its trimmed stdout. Both
+`auth.apiKey.resolve()` and `refreshModels()` now call this directly instead
+of relying on an unenforced string convention. The stored credential's `key`
+field is now just an inert marker (`"grok-cli-session-bridge"`, no secret);
+`resolve()` ignores its content and always re-executes the script fresh, so
+no token is ever stored, cached, or copied -- consistent with "no new OAuth
+login, no copying refresh token."
+
+**Proof** (`tests/unit/test_grok_cli_bridge.mjs`, offline, `node --test`,
+6/6 passing):
+
+- a fake bridge script's stdout is returned, and is asserted to differ from
+  the unresolved `"!<path>"` literal (the exact shape of the bug);
+- trailing-newline trimming;
+- a failing script raises a short, non-secret error built from its stderr;
+- a missing script raises a clear error instead of a raw `ENOENT`;
+- an empty-output script raises rather than returning an empty bearer token.
+
+Also re-ran the live, offline-safe end-to-end check (temp `GROK_HOME` +
+temp `PI_CODING_AGENT_DIR`, fake token, real `pi` binary, real
+`cli-chat-proxy.grok.com`) after the fix; behavior is unchanged from before
+(expected 401, since the token is intentionally fake) but the request now
+carries whatever the bridge script actually outputs, not an unresolved
+literal -- confirmed directly by the unit proof above since the live
+server's 401 body does not echo the token back.
+
+## Coordination check: usage sibling's credential read
+
+Parent flagged a concern that the usage sibling (`feat/grok-usage`) might
+only read Pi's OAuth-type `grok-build` credential and miss the CLI-bridge
+path. Checked `worktrees/usage/scripts/llm_usage.py` (not modified; sibling
+owns it) -- `grok_build_token()` already does the right thing:
+
+```python
+credential = auth.get('grok-build')
+if isinstance(credential, dict) and credential.get('type') == 'oauth' and credential.get('access'):
+    ...  # use Pi's own OAuth credential
+    return access, email, 'pi-auth.json', None
+access, reason = grok_cli_fallback_token()  # falls back to bin/grok-oauth-token
+```
+
+It type-checks for `type == 'oauth'` before trusting `auth.grok-build`, so
+our `api_key`-type marker credential (`"grok-cli-session-bridge"`) correctly
+fails that check and falls through to the identical `bin/grok-oauth-token`
+bridge script -- the same file this change installs. No sibling-file change
+needed; this is already correctly coordinated. Flagging this explicitly so
+the parent doesn't need to re-derive it: **both of this provider's auth
+methods are already usable by the sibling's usage reader as committed.**
+
 ## Correction to the earlier handover assumption
 
 The handover this task started from assumed Pi had no relevant native OAuth
@@ -210,8 +298,12 @@ none touch `~/.pi` or `~/.grok`.
 ## Files owned by this change
 
 - `config/pi/extensions/grok-build.ts` — provider registration
+- `config/pi/lib/grok-cli-bridge.mjs` — dependency-free bridge-script
+  execution helper used by both `auth.apiKey.resolve()` and `refreshModels()`
 - `scripts/grok_oauth.py` — read-only Grok CLI auth-file bridge
-- `bin/grok-oauth-token` — thin exec wrapper for the bridge, used as the
-  provider's `!command` apiKey credential
-- `tests/unit/test_grok_oauth.py` — offline bridge-script tests
+- `bin/grok-oauth-token` — thin exec wrapper for the bridge, invoked directly
+  (not via a `!command` string) by `grok-cli-bridge.mjs`
+- `tests/unit/test_grok_oauth.py` — offline bridge-script tests (12/12)
+- `tests/unit/test_grok_cli_bridge.mjs` — offline regression test for the
+  resolve()-executes-the-script fix (6/6)
 - `docs/research/grok-pi-auth-implementation.md` — this report

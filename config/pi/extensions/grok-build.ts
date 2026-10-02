@@ -34,6 +34,7 @@ import type { Model, ProviderHeaders, RefreshModelsContext } from "@earendil-wor
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { resolveGrokCliBridgeToken } from "../lib/grok-cli-bridge.mjs";
 
 export const GROK_BUILD_PROVIDER_ID = "grok-build";
 export const GROK_BUILD_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
@@ -83,10 +84,21 @@ export function routeToGrokBuild(model: Model<"openai-responses">): Model<"opena
   };
 }
 
-function credentialApiKey(credential: RefreshModelsContext["credential"]): string | undefined {
+// `context.credential` in refreshModels is the stored credential, not the
+// resolved apiKey.resolve() output -- for the CLI bridge method the stored
+// value is only a marker (see apiKey.login() below), so resolve a real token
+// the same way apiKey.resolve() does rather than sending the marker as a
+// bearer token.
+function credentialApiKey(credential: RefreshModelsContext["credential"], bridgeScript: string): string | undefined {
   if (!credential) return undefined;
   if (credential.type === "oauth") return credential.access;
-  if (credential.type === "api_key") return credential.key;
+  if (credential.type === "api_key") {
+    try {
+      return resolveGrokCliBridgeToken(bridgeScript);
+    } catch {
+      return undefined;
+    }
+  }
   return undefined;
 }
 
@@ -150,21 +162,24 @@ export default function (pi: ExtensionAPI) {
       oauth: native.auth.oauth!,
       // Secondary: read-only bridge to an existing `grok login` session. The
       // Grok CLI remains the sole writer/refresher of ~/.grok/auth.json; we
-      // only ever read its current access token, fresh, on every request.
+      // only ever execute the bridge script to read its current access
+      // token, fresh, on every request -- nothing is stored or cached here.
       apiKey: {
         name: "Grok CLI session (read-only, ~/.grok/auth.json via $GROK_HOME)",
         async login() {
-          return { type: "api_key" as const, key: `!${bridgeScript}` };
+          // Records that this method was selected; carries no secret. resolve()
+          // ignores stored credential content and always re-executes the script.
+          return { type: "api_key" as const, key: "grok-cli-session-bridge" };
         },
         async resolve() {
-          return { auth: { apiKey: `!${bridgeScript}` }, source: "Grok CLI session (grok login)" };
+          return { auth: { apiKey: resolveGrokCliBridgeToken(bridgeScript) }, source: "Grok CLI session (grok login)" };
         },
       },
     },
     getModels: () => models,
     async refreshModels(context: RefreshModelsContext) {
       if (!context.allowNetwork) return;
-      const apiKey = credentialApiKey(context.credential);
+      const apiKey = credentialApiKey(context.credential, bridgeScript);
       const fetched = await fetchGrokModels(context.signal, apiKey);
       if (!fetched) return; // keep the static/prior list on failure or when unconfigured
       const next = fetched;
