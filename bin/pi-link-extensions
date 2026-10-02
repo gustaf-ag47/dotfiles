@@ -22,6 +22,7 @@ DST_DIR="$AGENT_DIR/extensions"
 EXTENSIONS=(
 	anthropic-pool.ts
 	grok-build.ts
+	jev.ts
 	goal.ts
 	llm-usage.ts
 	llm-failover.ts

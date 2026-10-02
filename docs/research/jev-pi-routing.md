@@ -477,7 +477,7 @@ itself (`MAX_BILLED_CALLS = 5`, throws rather than exceed it).
 | Case | Question type | Input | Answer | Confidence/probability | Latency | input/output tokens | Pi-reported cost |
 |---|---|---|---|---|---|---|---|
 | `noul_clear_approval` | bool | "The change works, thanks." | `true`-leaning | probability **0.97** | 258 ms | 299 / 20 | $0 (see discrepancy above) |
-| `noul_ambiguous` | bool | "It's fine I guess, not sure yet." | `true`-leaning but weak | probability **0.32** | 226 ms | 303 / 20 | $0 |
+| `noul_ambiguous` | bool | "It's fine I guess, not sure yet." | `false`-leaning but uncertain | probability **0.32** | 226 ms | 303 / 20 | $0 |
 | `choice_task_class_clear` | choice (mechanical/research/build/interactive) | "Rename this variable from `x` to `count` across the file." | `mechanical` | probabilities `{mechanical:1, others:0}`, confidence **1.0** | 210 ms | 384 / 50 | $0 |
 | `choice_task_class_ambiguous` | choice (same 4 options) | "Look into why it's slow sometimes and maybe fix it if it's easy." | `build` | probabilities `{build:0.58, research:0.42, mechanical:0, interactive:0}`, confidence **0.44** | 228 ms | 385 / 48 | $0 |
 | `score_complexity` | score (Trivial/Standard/Complex) | "Add a retry with exponential backoff around one HTTP call." | score **0.84** (between Trivial=0 and Standard=1, close to Standard) | confidence **0.75** | 207 ms | 316 / 19 | $0 |

@@ -397,6 +397,7 @@ JEV_EVENT_SCHEMA = 'jev-event.v1'
 JEV_CLASSIFIER_ACTIVITY_SCHEMA = 'jev-classifier-activity.v1'
 JEV_VALID_STATUSES = {'ok', 'abstained', 'error', 'skipped', 'cache_hit'}
 JEV_VALID_SOURCES = {'delegate', 'pi'}
+JEV_TASK_CLASSES = {'interactive', 'build', 'research', 'mechanical'}
 JEV_VALID_COST_SOURCES = {'published-rate', 'unknown', 'cache'}
 JEV_MAX_LEDGER_BYTES = 5 * 1024 * 1024
 JEV_MAX_EVENTS = 50_000
@@ -487,7 +488,7 @@ def jev_validate_event(record):
         return None
     return {
         'day': day, 'source': jev_enum(record.get('source'), JEV_VALID_SOURCES), 'status': status,
-        'class': jev_safe_token(record.get('class')),
+        'class': jev_enum(record.get('class'), JEV_TASK_CLASSES),
         'confidence': jev_finite(record.get('confidence')),
         'model': jev_safe_token(record.get('model')),
         'rubric_version': jev_safe_token(record.get('rubric_version')),

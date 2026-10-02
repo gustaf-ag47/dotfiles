@@ -29,6 +29,8 @@
 #   --no-probe         Skip the model availability probe (faster, riskier).
 #   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
+# Jev observes only --task (never the brief), after validation/probing. It cannot
+# change CLASS/MODEL. PI_JEV_MODE=off disables observation; failures never block.
 set -euo pipefail
 
 BRIEF="" TASK="" NAME="" CWD="$PWD" MODEL="${PI_DELEGATE_MODEL:-}" AGENT="pi"
@@ -241,6 +243,17 @@ if [ "$PROBE" = "1" ]; then
 	fi
 fi
 
+# Observe one short task description, not the brief or repository contents.
+# The classifier records metadata only; its output is deliberately not evaluated
+# or assigned to CLASS/MODEL. Dry runs and queued jobs have already returned.
+if [ "${PI_JEV_MODE:-observe}" != off ] && [ -n "$TASK" ]; then
+	delegate_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+	jev_helper="$delegate_dir/../../../../../bin/jev-classify"
+	if [ -x "$jev_helper" ] && command -v timeout >/dev/null 2>&1; then
+		printf '%s' "$TASK" | timeout 5 "$jev_helper" --task-stdin --source delegate >/dev/null 2>&1 || true
+	fi
+fi
+
 # ── boot the child ──────────────────────────────────────────────────────────
 if command -v llm-usage >/dev/null 2>&1; then
   capacity_json=$(llm-usage --capacity --json 2>/dev/null) || capacity_json=
@@ -259,6 +272,7 @@ CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" 
 # explicitly selected profile/offline settings, never credentials in argv.
 [ -z "${PI_CODING_AGENT_DIR:-}" ] || CHILD_ENV+=("PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR")
 [ -z "${PI_OFFLINE:-}" ] || CHILD_ENV+=("PI_OFFLINE=$PI_OFFLINE")
+[ -z "${PI_JEV_MODE:-}" ] || CHILD_ENV+=("PI_JEV_MODE=$PI_JEV_MODE")
 printf -v child_command '%q ' "${CHILD_ENV[@]}" "$AGENT" "${MODEL_ARGS[@]}"
 tmux send-keys -t "$SESSION:$NAME" -l -- "$child_command"
 tmux send-keys -t "$SESSION:$NAME" Enter

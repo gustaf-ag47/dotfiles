@@ -43,7 +43,7 @@ function formatStatus(status: ReturnType<typeof getStatus>): string {
 		`jev: mode ${status.mode}${sessionModeOverride ? " (session override: off)" : ""}, model ${status.model}, key ${status.keyConfigured ? "configured" : "missing"}`,
 		...(status.configValid ? [] : [`config: invalid (${status.configError}); every call abstains until fixed`]),
 		`today: ok ${status.today.ok}, abstained ${status.today.abstained}, error ${status.today.error}, skipped ${status.today.skipped}, cache_hit ${status.today.cache_hit}`,
-		`budget: ${status.budget.calls}/${status.budget.maxCallsPerDay} calls, $${status.budget.costUsd.toFixed(4)}/$${status.budget.maxCostPerDayUsd} (${status.budget.date})${status.budget.corrupt ? " [corrupt: failing closed]" : ""}`,
+		`budget: ${status.budget.calls}/${status.budget.maxCallsPerDay} calls, $${status.budget.costUsd.toFixed(6)}/$${status.budget.maxCostPerDayUsd} (${status.budget.date})${status.budget.corrupt ? " [corrupt: failing closed]" : ""}`,
 		`cache: ${status.cacheEntries} entries`,
 	];
 	return lines.join("\n");

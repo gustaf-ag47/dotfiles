@@ -26,7 +26,7 @@ def event(**overrides):
         'timestamp': '2026-10-02T12:00:00Z',
         'source': 'delegate',
         'status': 'ok',
-        'class': 'routine',
+        'class': 'mechanical',
         'confidence': 0.91,
         'model': 'jev-1.13.0',
         'rubric_version': 'r3',
@@ -206,11 +206,12 @@ class HardeningTests(unittest.TestCase):
             write_ledger(path, [
                 event(**{'class': 'sk-ant-api03-SECRETVALUE\x1b[31mhacked\x07'}),
                 event(**{'class': 'has spaces'}),
-                event(**{'class': 'routine'}),  # safe token, must still pass through
+                event(**{'class': 'apikey_SYNTHETIC_PRIVATE_VALUE'}),
+                event(**{'class': 'mechanical'}),  # only an actual task-class label passes
             ])
             activity = usage.jev_classifier_activity(ledger_path=path)
         by_class = activity['retained_total']['by_class']
-        self.assertEqual(by_class, {'routine': 1})
+        self.assertEqual(by_class, {'mechanical': 1})
         rendered = json.dumps(activity) + '\n'.join(usage.jev_classifier_lines(activity))
         self.assertNotIn('SECRET', rendered)
         self.assertNotIn('\x1b', rendered)
