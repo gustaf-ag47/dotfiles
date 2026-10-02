@@ -390,6 +390,140 @@ behavior**.
   this stack's existing pattern of "notify/suggest, human or explicit flag
   decides."
 
+## 5a. Empirical follow-up: authorized bounded live test (2026-10-02)
+
+User supplied a TypeSafe API key (`/home/gustaf/.local/state/jev-research/api-key`,
+0600 file in a 0700 directory, outside git) and explicitly authorized a small
+live test. This section records what was actually measured, kept strictly
+separate from the catalog claims in §1.2. The key was read only via shell
+command substitution directly into a subprocess environment variable
+(set from the private key file via shell command substitution into the
+subprocess environment, as documented in `jev-test.mjs`'s own header); it was never
+echoed, logged, written to a file, or included in any artifact. The private
+key file itself was left in place for the parent to clean up, per instructions.
+
+### Official pricing (verified before sending, supersedes §1.2's catalog-only claim)
+
+Fetched directly from TypeSafe's own docs (`https://docs.typesafe.ai/models.md`,
+`https://docs.typesafe.ai/api.md`, `https://docs.typesafe.ai/confidence.md`,
+accessed 2026-10-02, no search engine involved):
+
+- **`jev-1.13.0`** (alias `jev-latest`): **$42 per billion input tokens
+  ($0.042/Mtok)**, **output tokens are free**. This is charged on every
+  account, including direct API access — TypeSafe's docs make no mention of a
+  free tier for the direct `api.typesafe.ai` endpoint.
+- Rate limits: 100K tokens/sec and 40 requests/sec per account, explicitly
+  called out as adjusting dynamically without notice.
+- Context budget: 64k tokens total (`state` + all questions); 32k tokens for
+  `state` plus the single longest question.
+- Endpoint: `POST https://api.typesafe.ai/v1/systemone`, `Authorization:
+  Bearer <key>`, body `{ state, model, questions }`. Response:
+  `{ model, answers, usage: { input_tokens, output_tokens } }`. Wire-level
+  question types are `noul` (yes/no), `choice`, `score` — confirming the
+  `bool → noul` field rename already documented in Pi's own source comment
+  (`typesafe-system-one.d.ts`: "public `bool` values mapped to wire-level
+  `noul`").
+- Errors: `401` (bad key), `422` (validation), `429` (rate limit), `529`
+  (overloaded); SDKs retry 429/529 with backoff honoring `retry-after`.
+- Confidence: officially documented as `(n·peak − 1)/(n − 1)` for `choice`
+  (same formula Pi's `llama-cpp.md` uses for its local token-probability
+  read-out, §1.3) and an analogous spread-based formula for `score`. `noul`/
+  `bool` answers carry **no separate confidence field** — the probability
+  itself is the only signal, and a value near 0.5 is TypeSafe's own
+  documented definition of "the model is unsure." This is an **officially
+  documented absence of an abstention mechanism**, not a gap in Pi's
+  integration: callers must threshold `probability` (for bool) or
+  `confidence` (for choice/score) themselves; TypeSafe's own docs say
+  "Start with conservative thresholds, test with your own data, and adjust
+  as you observe results" — i.e., there is no vendor-supplied default.
+
+**Discrepancy found**: Pi's bundled catalog (§1.2,
+`node_modules/@earendil-works/pi-ai/dist/providers/data/typesafe.json`) lists
+`cost: { input: 0, output: 0, ... }` for the direct `typesafe/jev-latest`
+route. TypeSafe's own docs say input is **not** free ($0.042/Mtok). The
+measured test below confirms Pi's cost accounting reports `$0` for these
+calls even though the real TypeSafe invoice (by their own published price)
+would be nonzero. This is a **concrete, verified under-reporting risk** in
+Pi 0.99.1's session/`/session` cost ledger for this specific provider route —
+flag for whoever eventually wires Jev in: do not trust `/session`'s dollar
+figure for `typesafe/jev-latest` classify calls; compute cost from
+`usage.input`/`usage.output` and the official $0.042/Mtok rate instead. The
+Cloudflare Workers AI route's advertised $0 and OpenCode's `jev-1.13-free`
+were not tested and could not be checked against an independent official
+price page in the time available — treat their "free" catalog entries with
+the same skepticism until independently verified.
+
+### Test method
+
+Script: `docs/research/jev-test.mjs` (committed, credential-free, reusable —
+reads `TYPESAFE_API_KEY` from the environment only, never a file path).
+It imports `classify` directly from the **installed Pi package's own dist
+file** (`.../pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/typesafe-system-one.js`),
+satisfying "use the installed Pi classifier API/provider implementation" —
+this is not a reimplementation, it is the exact function `jev-router.ts` and
+`models.classify()` call under the hood (traced in §2.1–2.2). The model
+object passed in is a literal copy of Pi's own catalog entry for
+`typesafe/jev-latest` (verified by `node -e "import(...).then(m =>
+console.log(m.TYPESAFE_CLASSIFIER_MODELS))"` against the installed package).
+
+Run: one unbilled `GET /v1/models` (confirms the key works, lists
+`jev-latest`/`jev-preview` aliases with release dates — matches docs) followed
+by exactly **5 billed `classify()` calls**, each a short synthetic prompt
+(no real code, conversations, or task history), hard-capped in the script
+itself (`MAX_BILLED_CALLS = 5`, throws rather than exceed it).
+
+### Measured results (sanitized, reproduced in full — no secrets, no real data)
+
+| Case | Question type | Input | Answer | Confidence/probability | Latency | input/output tokens | Pi-reported cost |
+|---|---|---|---|---|---|---|---|
+| `noul_clear_approval` | bool | "The change works, thanks." | `true`-leaning | probability **0.97** | 258 ms | 299 / 20 | $0 (see discrepancy above) |
+| `noul_ambiguous` | bool | "It's fine I guess, not sure yet." | `true`-leaning but weak | probability **0.32** | 226 ms | 303 / 20 | $0 |
+| `choice_task_class_clear` | choice (mechanical/research/build/interactive) | "Rename this variable from `x` to `count` across the file." | `mechanical` | probabilities `{mechanical:1, others:0}`, confidence **1.0** | 210 ms | 384 / 50 | $0 |
+| `choice_task_class_ambiguous` | choice (same 4 options) | "Look into why it's slow sometimes and maybe fix it if it's easy." | `build` | probabilities `{build:0.58, research:0.42, mechanical:0, interactive:0}`, confidence **0.44** | 228 ms | 385 / 48 | $0 |
+| `score_complexity` | score (Trivial/Standard/Complex) | "Add a retry with exponential backoff around one HTTP call." | score **0.84** (between Trivial=0 and Standard=1, close to Standard) | confidence **0.75** | 207 ms | 316 / 19 | $0 |
+
+All five calls returned `stopReason: "stop"` (no errors, no aborts) and a
+well-formed `usage: { input, output, cacheRead: 0, cacheWrite: 0, totalTokens,
+cost }` object — **confirming `result.usage` is populated for this provider**,
+answering the brief's question of whether the SDK output contains usage: yes,
+structurally, every time, for all three question types. Whether that usage is
+*displayed/accounted* in an actual Pi session footer or `/session` was **not**
+verified here — this test called `classify()` directly, outside a running Pi
+agent session, so no footer/`/session` was ever rendered to check against.
+That remains exactly as flagged in §6: unverified whether `/session` picks up
+an extension's direct `ctx.modelRegistry.classify()` cost the same way it
+picks up a `codemode` script's. This test does not close that gap; it only
+confirms the prerequisite (the raw `usage` object exists and is well-formed).
+
+### Interpretation — explicitly not a calibration claim
+
+Five requests is not a benchmark and no calibration conclusion is drawn.
+What the ambiguous-input cases show is **directional plausibility**, nothing
+more: the deliberately hedged bool prompt ("It's fine I guess, not sure yet")
+scored lower (0.32) than the clear approval (0.97), and the deliberately
+vague task description ("maybe fix it if it's easy") produced the lowest
+choice confidence of the two choice cases (0.44 vs 1.0), split across two
+plausible classes (`build`/`research`) rather than collapsing onto one. This
+is consistent with §1.1's note that confidence is a usable *relative* signal,
+not evidence that the probabilities are well-calibrated in the statistical
+sense — that would require many labeled examples and is out of scope here.
+
+### What this does and does not change in the recommendation
+
+- No routing, defaults, or service state changed. `docs/research/jev-test.mjs`
+  is a standalone, opt-in script; it is not wired into `delegate.sh`, any
+  extension, `classes.json`, or `claude-token-proxy`.
+- §5's recommended experiment stands, with one correction: budget estimates
+  for a future larger pilot must use the **official $0.042/Mtok input price**,
+  not the $0 catalog figure — e.g. 20 calls at ~350 input tokens each (this
+  test's average) is ~7,000 tokens ≈ **$0.0003**, still negligible, but it is
+  not contractually free as §1.2 alone would have implied.
+- The pricing discrepancy itself (not the small dollar amount) is the most
+  actionable new finding: anyone later wiring Jev into a cost-sensitive path
+  in this stack must not rely on Pi's own `/session` dollar display for the
+  direct `typesafe` route and should compute real cost from `usage.input` and
+  the official per-token rate.
+
 ## 6. Open questions / flagged uncertainties
 
 - Whether `ctx.modelRegistry.classify()` called from an extension (not
@@ -435,3 +569,16 @@ behavior**.
   `docs/handover/routing-H-task-classes*.md`,
   `docs/research/routing-10-of-10-plan.md` — current routing/data flow and
   task-class mechanism.
+- `https://docs.typesafe.ai/models.md`, `https://docs.typesafe.ai/api.md`,
+  `https://docs.typesafe.ai/confidence.md` (TypeSafe's official docs, fetched
+  directly 2026-10-02, no search engine) — official pricing, rate limits,
+  wire contract, confidence formulas; used in §5a to verify and correct the
+  catalog-only claims of §1.2.
+- `docs/research/jev-test.mjs` (this worktree, committed) — bounded live-test
+  script and its console output, reproduced in §5a. 1 unbilled `GET
+  /v1/models` + 5 billed `classify()` calls against `typesafe/jev-latest`,
+  run 2026-10-02 with a user-supplied key read only from
+  `process.env.TYPESAFE_API_KEY` (never from a file path, never logged,
+  never committed). Total measured input tokens across the 5 calls: 1,687 ⇒
+  real cost at TypeSafe's official $0.042/Mtok rate ≈ $0.00007, authorized
+  and within the 5-request/<1000-tokens-each bound set by the task.
