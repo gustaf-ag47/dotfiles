@@ -1,0 +1,6 @@
+#!/bin/bash
+# Thin wrapper so Pi's `!command` apiKey auth can invoke the read-only Grok
+# CLI auth bridge without a hardcoded interpreter path in config. See
+# scripts/grok_oauth.py for the actual logic and guarantees.
+set -euo pipefail
+exec python3 "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../scripts/grok_oauth.py" "$@"
