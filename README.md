@@ -85,6 +85,7 @@ All configurations are organized in the `config/` directory:
 ## 📖 Documentation
 
 - Complete keybinding reference: [KEYBINDINGS.md](KEYBINDINGS.md)
+- [Grok CLI OAuth in Pi and LLM usage](docs/grok-pi.md)
 - Installation troubleshooting in individual config directories
 
 ---

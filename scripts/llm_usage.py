@@ -246,7 +246,7 @@ def deepseek(auth):
 # session from $GROK_HOME/auth.json. Neither path writes or refreshes anything
 # -- this file never touches ~/.grok/auth.json directly itself.
 GROK_BASE_URL = 'https://cli-chat-proxy.grok.com/v1'
-GROK_DEFAULT_CLIENT_VERSION = '1.0.5'
+GROK_DEFAULT_CLIENT_VERSION = '1.0.46'
 GROK_CLI_BRIDGE_ENV = 'GROK_OAUTH_BRIDGE'  # override the bridge script path (mainly for tests/alt installs)
 
 

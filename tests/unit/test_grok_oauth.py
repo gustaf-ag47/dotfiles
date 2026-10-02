@@ -112,6 +112,18 @@ class GrokOAuthBridgeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "FRESH")
 
+    def test_expiry_is_independent_of_local_timezone(self):
+        from datetime import datetime, timedelta, timezone
+        expiry = datetime.now(timezone.utc) + timedelta(minutes=30)
+        for offset in (timezone.utc, timezone(timedelta(hours=5))):
+            self.write_auth({ENTRY_KEY: {
+                "auth_mode": "oidc", "key": "FRESH",
+                "expires_at": expiry.astimezone(offset).isoformat(),
+            }})
+            for tz in ("UTC", "Europe/Stockholm", "America/Los_Angeles"):
+                result = run(self.grok_home, {"TZ": tz})
+                self.assertEqual(result.returncode, 0, (tz, result.stderr))
+
     def test_absent_expires_at_does_not_block_token_use(self):
         # The field is community-observed, not guaranteed; the CLI itself owns
         # refresh when expiry data is unavailable to us.

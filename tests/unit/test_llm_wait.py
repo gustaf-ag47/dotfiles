@@ -10,14 +10,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'bin/llm-wait'
 
 class WaitHTTPTests(unittest.TestCase):
-    def run_wait(self, predicate, ready, max_time='1s', failures=False):
+    def run_wait(self, predicate, ready, max_time='1s', failures=False, provider='anthropic'):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
             def do_GET(self):
                 if failures:
                     self.send_error(500); return
                 if self.path.startswith('/_route'):
-                    body = {'candidates':[{'provider':'anthropic','routable':ready}]}
+                    body = {'candidates':[{'provider':provider,'routable':ready}]}
                 else:
                     body = {'tokens':[], 'providers':{}}
                 raw=json.dumps(body).encode(); self.send_response(200); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw)
@@ -31,6 +31,15 @@ class WaitHTTPTests(unittest.TestCase):
     def test_routable_returns_zero(self):
         result=self.run_wait('anthropic.routable',True)
         self.assertEqual(result.returncode,0,result.stderr)
+    def test_grok_routable_uses_oracle_and_contributes_to_any(self):
+        for predicate in ('grok.routable', 'any.routable'):
+            result = self.run_wait(predicate, True, provider='grok-build')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_grok_candidate_is_not_ready(self):
+        result = self.run_wait('grok.routable', True, max_time='.1s')
+        self.assertEqual(result.returncode, 2, result.stderr)
+
     def test_timeout_returns_two_and_wait_message(self):
         result=self.run_wait('anthropic.routable',False)
         self.assertEqual(result.returncode,2); self.assertIn('waiting for',result.stdout)

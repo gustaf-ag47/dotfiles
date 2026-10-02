@@ -74,18 +74,19 @@ def snapshot(model):
     for term, bucket in [('anthropic.base.left','u7'),('anthropic.oi.left','u7_oi'),('anthropic.5h.left','u5')]:
         vals = [100*(1-float(t[bucket])) for t in tokens if isinstance(t.get(bucket),(int,float))]
         values[term] = max(vals, default=0)
-    # The oracle keys on Claude model names (and classes); a Codex/DeepSeek model id
+    # The oracle keys on Claude model names (and classes); a Codex/DeepSeek/Grok model id
     # is not a route key, so fall back to the like-for-like default.
     route_model = model if model.startswith('claude-') else 'claude-sonnet-5'
     route = get(proxy_url()+'/_route?model='+urllib.parse.quote(route_model))
-    for provider in ('anthropic','codex','deepseek'):
-        found = next((c for c in route.get('candidates',[]) if c.get('provider') == {'codex':'openai-codex'}.get(provider,provider)), {})
+    for provider in ('anthropic','codex','deepseek','grok'):
+        found = next((c for c in route.get('candidates',[]) if c.get('provider') == {'codex':'openai-codex','grok':'grok-build'}.get(provider,provider)), {})
         values[provider+'.routable'] = bool(found.get('routable'))
         if provider == 'codex':
             windows = (usage.get('providers',{}).get('openai-codex',{}).get('windows') or [])
             left = [100-float(w['used_percent']) for w in windows if isinstance(w.get('used_percent'),(int,float))]
             values['codex.left'] = max(left,default=0)
-    values['any.routable'] = any(values.get(p+'.routable') for p in ('anthropic','codex','deepseek'))
+    # A logged-in account is not enough: only the route oracle can declare readiness.
+    values['any.routable'] = any(values.get(p+'.routable') for p in ('anthropic','codex','deepseek','grok'))
     resets = [t.get(k) for t in tokens for k in ('u5_reset','u7_reset','u7_oi_reset') if t.get(k)]
     return values, min(resets) if resets else 'unknown'
 

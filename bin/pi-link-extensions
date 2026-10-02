@@ -21,6 +21,7 @@ DST_DIR="$AGENT_DIR/extensions"
 # must not reach every pi session just by existing.
 EXTENSIONS=(
 	anthropic-pool.ts
+	grok-build.ts
 	goal.ts
 	llm-usage.ts
 	llm-failover.ts

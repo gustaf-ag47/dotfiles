@@ -19,6 +19,7 @@ Usage:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 import sys
@@ -69,8 +70,11 @@ def _expired(entry: dict) -> bool:
     try:
         # Accept trailing 'Z' as UTC.
         normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-        expires_at = time.mktime(time.strptime(normalized[:19], "%Y-%m-%dT%H:%M:%S"))
-    except (ValueError, IndexError):
+        expiry = datetime.fromisoformat(normalized)
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        expires_at = expiry.timestamp()
+    except (ValueError, OverflowError):
         return False
     return (expires_at - EXPIRY_SKEW_SECONDS) < time.time()
 
