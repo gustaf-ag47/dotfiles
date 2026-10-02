@@ -383,6 +383,287 @@ REPORT_SOURCES = {
 }
 
 
+# --- Jev local classifier activity (shadow-only observation, not a provider) ---
+#
+# This section reads a LOCAL ledger of Jev classifier calls written by the
+# delegate/Pi helper (see docs/research/jev-accounting-implementation.md).
+# It is intentionally kept separate from ADAPTERS/REPORT_SOURCES above: Jev
+# is not a routable provider here, has no known account balance or quota,
+# and "applied" must always observationally be false unless the ledger says
+# otherwise (shadow-only milestone). Never read credentials, never make a
+# network call, never echo raw/untrusted ledger text into output.
+
+JEV_EVENT_SCHEMA = 'jev-event.v1'
+JEV_CLASSIFIER_ACTIVITY_SCHEMA = 'jev-classifier-activity.v1'
+JEV_VALID_STATUSES = {'ok', 'abstained', 'error', 'skipped', 'cache_hit'}
+JEV_VALID_SOURCES = {'delegate', 'pi'}
+JEV_VALID_COST_SOURCES = {'published-rate', 'unknown', 'cache'}
+JEV_MAX_LEDGER_BYTES = 5 * 1024 * 1024
+JEV_MAX_EVENTS = 50_000
+JEV_MAX_FIELD_LEN = 128
+# Whitelist, not a blocklist: a label must be built entirely from these
+# characters to be retained at all. Anything else (control chars, raw prompt
+# text, secrets-shaped strings, whitespace) is dropped to `None` rather than
+# echoed -- this is the only text ever rendered from an untrusted ledger line.
+JEV_SAFE_TOKEN_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,%d}$' % (JEV_MAX_FIELD_LEN - 1))
+# cost_source values for which a numeric estimated_cost_usd is a *known*
+# amount (including a known zero for a cache hit) rather than an unknown one.
+JEV_KNOWN_COST_SOURCES = {'published-rate', 'cache'}
+
+
+def jev_ledger_path():
+    state_home = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local' / 'state')).expanduser()
+    return state_home / 'jev' / 'events.jsonl'
+
+
+def jev_event_day(timestamp):
+    """UTC calendar day (YYYY-MM-DD) for a schema-required ISO timestamp, or None if unparseable/naive."""
+    if not timestamp:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(datetime.timezone.utc).strftime('%Y-%m-%d')
+
+
+def jev_safe_token(value):
+    """Whitelist a short label (class/model/rubric_version). Anything not matching -> None.
+
+    Rejects non-strings, empty strings, control characters, whitespace, and
+    anything over JEV_MAX_FIELD_LEN -- this is the only guard between an
+    untrusted ledger line and terminal/JSON output, so it fails closed.
+    """
+    value = text(value)
+    if value is None:
+        return None
+    return value if JEV_SAFE_TOKEN_RE.match(value) else None
+
+
+def jev_enum(value, allowed):
+    """Membership test that cannot raise: unhashable `value` (list/dict) is just not a member."""
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def jev_finite(value):
+    value = numeric(value)
+    if value is None:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def jev_nonneg_finite(value):
+    value = jev_finite(value)
+    return value if value is not None and value >= 0 else None
+
+
+def jev_nonneg_int(value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 0 else None
+
+
+def jev_validate_event(record):
+    """Validate+normalize one ledger line against jev-event.v1. Returns None if not trustworthy.
+
+    Unknown/malformed fields never pass through verbatim: every field is
+    type-checked and bounded here, and nothing outside this known field set
+    is carried into the aggregate or rendered output. Enum fields use
+    `jev_enum` (never a bare `in {set}` against attacker-controlled JSON --
+    a list/dict value there would raise TypeError on an unhashable type).
+    Numeric fields reject NaN/Inf/negative so one corrupt row can't poison a
+    sum or render as a nonsensical total; token counts must be real
+    non-negative ints, not just "numeric".
+    """
+    if not isinstance(record, dict) or record.get('schema') != JEV_EVENT_SCHEMA:
+        return None
+    status = jev_enum(record.get('status'), JEV_VALID_STATUSES)
+    if status is None:
+        return None
+    day = jev_event_day(record.get('timestamp'))
+    if day is None:
+        return None
+    return {
+        'day': day, 'source': jev_enum(record.get('source'), JEV_VALID_SOURCES), 'status': status,
+        'class': jev_safe_token(record.get('class')),
+        'confidence': jev_finite(record.get('confidence')),
+        'model': jev_safe_token(record.get('model')),
+        'rubric_version': jev_safe_token(record.get('rubric_version')),
+        'latency_ms': jev_nonneg_finite(record.get('latency_ms')),
+        'input_tokens': jev_nonneg_int(record.get('input_tokens')),
+        'output_tokens': jev_nonneg_int(record.get('output_tokens')),
+        'estimated_cost_usd': jev_nonneg_finite(record.get('estimated_cost_usd')),
+        'cost_source': jev_enum(record.get('cost_source'), JEV_VALID_COST_SOURCES),
+        'applied': record.get('applied') if isinstance(record.get('applied'), bool) else None,
+    }
+
+
+def jev_read_ledger(path, max_bytes=JEV_MAX_LEDGER_BYTES, max_events=JEV_MAX_EVENTS):
+    """Read the local Jev ledger bounded in size/time. Never raises.
+
+    A missing ledger is the expected default (no Jev activity configured or
+    observed yet) and is reported quietly as ``ledger_status: missing``, not
+    as an error. Permission failures are reported as ``unreadable`` without
+    raising. Corrupt JSON lines and lines that fail schema validation are
+    counted and skipped, never echoed. A trailing line with no newline (a
+    concurrent writer mid-append, or our own byte cap cutting a line in
+    half) is dropped silently rather than treated as corrupt.
+    """
+    meta = {'ledger_status': 'missing', 'parse_errors': 0, 'schema_errors': 0,
+            'truncated_bytes': False, 'truncated_events': False}
+    try:
+        if not path.exists():
+            return [], meta
+        with open(path, 'rb') as handle:
+            raw = handle.read(max_bytes + 1)
+    except (PermissionError, OSError):
+        meta['ledger_status'] = 'unreadable'
+        return [], meta
+    if len(raw) > max_bytes:
+        meta['truncated_bytes'] = True
+        raw = raw[:max_bytes]
+    meta['ledger_status'] = 'ok'
+    lines = raw.decode('utf-8', errors='replace').split('\n')
+    if lines:
+        lines = lines[:-1]  # drop trailing partial/empty line (concurrent write or our own byte cap)
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if len(events) >= max_events:
+            meta['truncated_events'] = True
+            break
+        try:
+            record = json.loads(line)
+        except ValueError:
+            meta['parse_errors'] += 1
+            continue
+        validated = jev_validate_event(record)
+        if validated is None:
+            meta['schema_errors'] += 1
+            continue
+        events.append(validated)
+    return events, meta
+
+
+# Statuses that represent an actual call out to the classifier, as opposed to
+# a local cache hit or a call that was never made. Distinct from `calls`
+# (every retained observation, any status) -- this is only the subset that
+# actually reached a network classifier per the ledger's own status field.
+JEV_NETWORK_STATUSES = {'ok', 'abstained', 'error'}
+
+
+def jev_aggregate(events):
+    """Shadow-only aggregate counts. Unknown cost/tokens stay explicitly unknown, never silently zero."""
+    by_status, by_class, latencies = {}, {}, []
+    input_tokens = output_tokens = tokens_unknown_calls = 0
+    estimated_cost_usd = cost_unknown_calls = applied_count = network_calls = 0
+    for event in events:
+        by_status[event['status']] = by_status.get(event['status'], 0) + 1
+        if event['status'] in JEV_NETWORK_STATUSES:
+            network_calls += 1
+        if event['class']:
+            by_class[event['class']] = by_class.get(event['class'], 0) + 1
+        if event['input_tokens'] is not None and event['output_tokens'] is not None:
+            input_tokens += event['input_tokens']
+            output_tokens += event['output_tokens']
+        else:
+            tokens_unknown_calls += 1
+        # A cache hit's cost is a *known* zero (or whatever the ledger recorded
+        # for it), not an unknown one -- only `cost_source: unknown` (or a
+        # missing/non-numeric amount) counts as unknown-cost.
+        if event['cost_source'] in JEV_KNOWN_COST_SOURCES and event['estimated_cost_usd'] is not None:
+            estimated_cost_usd += event['estimated_cost_usd']
+        else:
+            cost_unknown_calls += 1
+        if event['latency_ms'] is not None:
+            latencies.append(event['latency_ms'])
+        if event['applied']:
+            applied_count += 1
+    return {
+        'calls': len(events), 'network_calls': network_calls, 'by_status': by_status, 'by_class': by_class,
+        'ok': by_status.get('ok', 0), 'abstained': by_status.get('abstained', 0),
+        'errors': by_status.get('error', 0), 'skipped': by_status.get('skipped', 0),
+        'cache_hits': by_status.get('cache_hit', 0),
+        'input_tokens': input_tokens, 'output_tokens': output_tokens,
+        'tokens_unknown_calls': tokens_unknown_calls,
+        'estimated_cost_usd': round(estimated_cost_usd, 6), 'cost_unknown_calls': cost_unknown_calls,
+        'latency_ms_summary': ({'count': len(latencies), 'avg': round(statistics.fmean(latencies), 1),
+                                'min': round(min(latencies), 1), 'max': round(max(latencies), 1)}
+                               if latencies else None),
+        'applied_count': applied_count,
+    }
+
+
+def jev_classifier_activity(now=None, ledger_path=None):
+    """Local-only Jev shadow-classification activity: today UTC + retained-total observation.
+
+    This is NOT a provider/account quota: Jev has no known balance here.
+    ``applied_count`` should always be 0 at this milestone (shadow-only);
+    a nonzero value is surfaced, never hidden, as a schema/contract anomaly.
+    """
+    now = time.time() if now is None else now
+    path = ledger_path or jev_ledger_path()
+    events, meta = jev_read_ledger(path)
+    today_utc = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
+    return {
+        'schema': JEV_CLASSIFIER_ACTIVITY_SCHEMA,
+        'note': ('Local observation only: Jev shadow-classification activity recorded by the '
+                 'delegate/Pi helper. Not a billed account or known quota, not a routing decision, '
+                 'and not applied to live task routing.'),
+        'ledger_path': str(path),
+        'ledger_status': meta['ledger_status'],
+        'malformed_lines_skipped': meta['parse_errors'] + meta['schema_errors'],
+        'parse_errors': meta['parse_errors'], 'schema_errors': meta['schema_errors'],
+        'truncated_bytes': meta['truncated_bytes'], 'truncated_events': meta['truncated_events'],
+        'today_utc': today_utc,
+        'today': jev_aggregate([event for event in events if event['day'] == today_utc]),
+        'retained_total': jev_aggregate(events),
+    }
+
+
+def jev_classifier_lines(activity):
+    """Render the 'Jev classifier activity (observation only)' text block."""
+    today = activity['today']
+    lines = [f"  today UTC ({activity['today_utc']}): observations={today['calls']} "
+             f"(network_calls={today['network_calls']}) ok={today['ok']} "
+             f"abstained={today['abstained']} error={today['errors']} skipped={today['skipped']} "
+             f"cache_hit={today['cache_hits']}"]
+    if today['calls']:
+        # 6dp: Jev's per-call cost is a few millionths of a dollar: at 4dp it
+        # visibly rounds to $0.0000 even when real calls were made. This is
+        # always an *estimate* from the published per-token rate ("est."),
+        # never an actual bill.
+        cost = f"${today['estimated_cost_usd']:.6f} est."
+        if today['cost_unknown_calls']:
+            cost += f" (+{today['cost_unknown_calls']} unknown-cost call(s))"
+        tokens = f"in={today['input_tokens']} out={today['output_tokens']}"
+        if today['tokens_unknown_calls']:
+            tokens += f" ({today['tokens_unknown_calls']} unknown)"
+        lines.append(f'  tokens {tokens}  estimated cost={cost}')
+        if today['latency_ms_summary']:
+            lat = today['latency_ms_summary']
+            lines.append(f"  latency ms avg={lat['avg']} min={lat['min']} max={lat['max']} (n={lat['count']})")
+        if today['by_class']:
+            classes = ', '.join(f'{name}={count}' for name, count in sorted(today['by_class'].items()))
+            lines.append(f'  observed suggestions: {classes}')
+        if today['applied_count']:
+            lines.append(paint(f"  anomaly: {today['applied_count']} event(s) marked applied=true "
+                                '(expected 0 at this shadow-only milestone)', '31'))
+    elif activity['ledger_status'] == 'missing':
+        lines.append('  no local activity observed (ledger not found)')
+    elif activity['ledger_status'] == 'unreadable':
+        lines.append('  ledger present but unreadable (permission denied?)')
+    else:
+        lines.append('  no activity recorded today')
+    if activity['malformed_lines_skipped']:
+        lines.append(f"  skipped {activity['malformed_lines_skipped']} malformed ledger line(s)")
+    return lines
+
+
 def _freshness(checked_at, now=None):
     now = time.time() if now is None else now
     age = max(0, int(now - checked_at))
@@ -844,6 +1125,10 @@ def render(report):
         stale_seen |= stale
     if stale_seen:
         lines += ['', paint('~ from response headers of the last request; may be stale', '2')]
+    activity = report.get('classifier_activity')
+    if activity:
+        lines += ['', paint('Jev classifier activity (observation only)', '1')]
+        lines += jev_classifier_lines(activity)
     return '\n'.join(lines)
 
 
@@ -1009,6 +1294,9 @@ def main():
         if report is None:
             report = {'schema': REPORT_SCHEMA, 'generated_at': int(time.time()),
                       'host_local': True, 'providers': collect(auth, providers)}
+    # Read fresh every run, even on a cached provider report: this is local
+    # observation data, not a remote quota response worth throttling reads of.
+    report['classifier_activity'] = jev_classifier_activity()
     if args.waybar:
         print(json.dumps(waybar_payload(report), separators=(',', ':')))
     else:
