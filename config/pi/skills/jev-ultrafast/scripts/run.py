@@ -53,7 +53,6 @@ PINNED_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
 MAX_STEPS_CAP = 20
 MAX_SECONDS_CAP = 180
 INSPECT_TIMEOUT_SECONDS = 60
-EXECUTE_OUTER_GRACE_SECONDS = 90  # headroom over --max-seconds for one in-flight model call to finish/timeout internally
 
 SKILL_DIR = Path(__file__).resolve().parent
 
@@ -198,7 +197,7 @@ def main(argv: list[str]) -> int:
     print(f"Pinned commit: {PINNED_COMMIT}")
     print(f"Checkout: {checkout} ({'ready' if ready else 'NOT READY: ' + reason})")
     print(f"URL: {_trace.redact_url(args.url)}")
-    print(f"Goal: {args.goal}")
+    print(f"Goal: {len(args.goal)} characters (not printed)")
 
     if not args.inspect and not args.execute:
         key_present = resolve_typesafe_key(env) is not None
@@ -264,9 +263,9 @@ def main(argv: list[str]) -> int:
     if args.auto_approve:
         cmd.append("--auto-approve")
 
-    outer_timeout = args.max_seconds + EXECUTE_OUTER_GRACE_SECONDS
+    outer_timeout = args.max_seconds
     print(f"Trace will be written to: {trace_path}")
-    print(f"Outer hard timeout: {outer_timeout:.0f}s (--max-seconds + {EXECUTE_OUTER_GRACE_SECONDS}s grace)")
+    print(f"Outer hard timeout: {outer_timeout:g}s (includes model calls and approval waits)")
     result = run_bounded(cmd, cwd=str(checkout), env=proc_env, timeout_seconds=outer_timeout)
     _report_final(result.returncode, inspect_mode=False)
     return result.returncode

@@ -21,16 +21,16 @@ _STEP_FIELDS = ("operation", "probability", "confidence", "latency_ms", "page_ch
 
 
 def redact_url(url: str) -> str:
-    """scheme://host[:port]/path only -- drops query, fragment, and any
-    embedded userinfo credentials."""
+    """Origin only: paths can contain reset tokens or private account identifiers."""
     try:
         parts = urlsplit(url)
+        host = parts.hostname or ""
+        netloc = f"[{host}]" if ":" in host else host
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+        return urlunsplit((parts.scheme, netloc, "", "", ""))
     except ValueError:
         return "(unparseable)"
-    netloc = parts.hostname or ""
-    if parts.port:
-        netloc = f"{netloc}:{parts.port}"
-    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
 def redact_step(step: dict, step_index: int) -> dict:

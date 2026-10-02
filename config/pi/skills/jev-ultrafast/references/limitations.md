@@ -25,15 +25,17 @@ Stated directly in its README/AGENTS.md:
 ## This wrapper's additional bounds (not upstream defaults)
 
 - `run.py --execute` always requires an explicit `--goal` and `--url`; there is no default goal.
-- Step/time budgets are mandatory and hard-capped (20 steps / 180 seconds) regardless of what you pass.
+- Step/time budgets are mandatory and hard-capped (20 prediction attempts / 180 seconds).
+  The wall-clock deadline includes model calls and approval waits. A timeout stops automation;
+  it cannot undo completed browser actions or guarantee cleanup of a tab in a shared browser.
 - Every mutating decision (`CLICK`, `TYPE_TEXT`, `SELECT`) is printed and asks for approval before
   execution unless `--auto-approve` is passed; `DONE`/`BLOCKED` never mutate and never prompt.
 - No automatic retry of a browser mutation; a stale-page retry only reuses an already-generated
   `TYPE_TEXT` value if the entire text-helper input (goal, field, page title, recent history) is
   byte-identical, matching the upstream guard.
 - Traces written by this wrapper never include raw DOM/page text, the TypeSafe/text-model request or
-  response bodies, or any credential; only operation, element label, confidence, latency, and
-  timestamps. Upstream's own recording/demo tooling (which does capture screenshots) is intentionally
+  response bodies, labels, titles, full URLs, or goal text; only operation/confidence/timing
+  metadata, URL origins, and a goal hash. Upstream's own recording/demo tooling (which does capture screenshots) is intentionally
   not wrapped here.
 - This wrapper never writes to `config/pi/lib/jev.mjs`'s ledger, cache, or budget files — the two Jev
   integrations (task classifier vs. browser agent) are accounted for completely separately.

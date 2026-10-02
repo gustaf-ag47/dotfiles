@@ -43,12 +43,16 @@ class InvalidUrlError(ValueError):
 def validate_url(url: str) -> str:
     """Only plain http(s) URLs with no embedded userinfo credentials.
     Returns the URL unchanged on success; raises InvalidUrlError otherwise."""
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        _ = parts.port
+    except ValueError:
+        raise InvalidUrlError("URL is malformed") from None
     if parts.scheme not in ("http", "https"):
         raise InvalidUrlError("URL must start with http:// or https://")
     if not parts.hostname:
         raise InvalidUrlError("URL has no host")
-    if parts.username or parts.password:
+    if parts.username is not None or parts.password is not None:
         raise InvalidUrlError("URL must not embed credentials (user:pass@host)")
     return url
 
@@ -94,12 +98,9 @@ def safe_error_text(exc: BaseException, limit: int = 200) -> str:
     upstream exceptions already carry clean, body-free messages (see
     model.py's post_json), but this is a backstop against an unexpected
     exception type (e.g. a raw httpx error) carrying request/response text."""
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    for marker in ("authorization", "bearer ", "api_key", "apikey", "x-api-key", "sk-"):
-        if marker in lowered:
-            return f"{type(exc).__name__} (message redacted; contained a sensitive-looking token)"
-    return text[:limit]
+    # Provider/browser exceptions can contain arbitrary page or credential text.
+    # A denylist cannot reliably detect it; keep only the exception class.
+    return f"{type(exc).__name__} (details redacted; run doctor.py for prerequisites)"[:limit]
 
 
 @dataclass
@@ -129,6 +130,15 @@ def run_bounded(cmd, *, cwd, env, timeout_seconds, stdin=None) -> BoundedResult:
         except subprocess.TimeoutExpired:
             pass  # best effort; the group SIGKILL above should be terminal
         return BoundedResult(returncode=EXIT_TIMEOUT, timed_out=True)
+    except BaseException:
+        # Ctrl-C reaches the wrapper, not the detached child process group.
+        # Stop automation before propagating cancellation or an unexpected error.
+        _kill_process_group(proc)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
 
 
 def _kill_process_group(proc: subprocess.Popen) -> None:

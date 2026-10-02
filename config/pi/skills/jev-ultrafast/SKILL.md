@@ -83,7 +83,7 @@ python3 ~/.pi/agent/skills/jev-ultrafast/scripts/run.py \
 
 - Requires `--execute` (omit it and the command only prints the resolved plan/config and exits).
 - `--max-steps` capped at 20, `--max-seconds` capped at 180; both required with `--execute`.
-- **Every CLICK/TYPE_TEXT/SELECT is printed (operation, element label, confidence) and asks `y/N`
+- **Every CLICK/TYPE_TEXT/SELECT is printed (operation, target identifier, confidence) and asks `y/N`
   before it executes**, by default. `DONE`/`BLOCKED` never mutate the page and don't prompt.
 - **This default `y/N` prompt needs a real interactive terminal.** Run `--execute` (without
   `--auto-approve`) in a visible, interactive pane (a tmux window/pane you're watching, not a
@@ -95,14 +95,14 @@ python3 ~/.pi/agent/skills/jev-ultrafast/scripts/run.py \
   pass, with explicit authorization, once they trust a specific goal/site** — an agent must never add
   `--auto-approve` on its own judgment or self-declared confidence; that defeats the approval gate this
   skill exists to provide.
-- A `DONE` decision is **not** verified success; read the final URL printed and confirm the goal
+- A `DONE` decision is **not** verified success; inspect the actual browser page and confirm the goal
   yourself. Jev's own confidence or `DONE` choice is never treated as proof.
 - Never performs a purchase/booking/send/account-changing action beyond what you individually approve
   per step, never attempts CAPTCHA bypass, and refuses to run without an explicit `--goal`/`--url`
   (http(s) only, no embedded credentials).
 - Writes a **metadata-only, atomically-written** trace (0600 file in a 0700 dir: operation, probability,
   confidence, latency, whether the page changed, whether *some* text was entered — never an element
-  label, never a URL with query string, never a title, never prompts/credentials) to
+  label, never a full URL (origin only), never a title, never prompts/credentials) to
   `${XDG_STATE_HOME:-$HOME/.local/state}/jev-ultrafast/traces/`.
 - Both `--inspect` and `--execute` run under their own hard outer timeout (process-group kill on
   expiry), separate from and in addition to the script's own step/time bounds, so a stuck browser call

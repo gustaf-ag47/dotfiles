@@ -13,6 +13,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _bounded import TEXT_MODEL_CONFIGURED, resolve_text_model_config
+from _trace import redact_url
+
 PINNED_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
 
 
@@ -93,6 +96,7 @@ def build_report(env: dict) -> dict:
     cstatus = checkout_status(checkout)
     vstatus = venv_status(checkout) if cstatus["present"] else {"present": False, "has_python": False}
     state_dir = xdg_state_home(env) / "jev-ultrafast"
+    text_status, _ = resolve_text_model_config(env)
     report = {
         "pinned_commit": PINNED_COMMIT,
         "checkout_dir": str(checkout),
@@ -108,7 +112,8 @@ def build_report(env: dict) -> dict:
             "typesafe_key_configured": key_configured(env),
             "key_file": str(default_key_path(env)),
             "text_model_api_key_configured": bool((env.get("TEXT_MODEL_API_KEY") or "").strip()),
-            "text_model_base_url": env.get("TEXT_MODEL_BASE_URL") or "(upstream default: https://api.deepseek.com/v1)",
+            "text_model_base_url": redact_url(env["TEXT_MODEL_BASE_URL"]) if env.get("TEXT_MODEL_BASE_URL") else "(not configured; no automatic backend)",
+            "text_model_backend_status": text_status,
         },
         "state_dir": {
             "path": str(state_dir),
@@ -127,7 +132,7 @@ def build_report(env: dict) -> dict:
     report["prerequisites_present_for_inspect"] = prerequisites_for_inspect
     report["prerequisites_present_for_execute"] = prerequisites_for_execute
     report["prerequisites_present_for_type_text"] = (
-        prerequisites_for_execute and report["credentials"]["text_model_api_key_configured"]
+        prerequisites_for_execute and text_status == TEXT_MODEL_CONFIGURED
     )
     return report
 
@@ -157,7 +162,7 @@ def main(argv: list[str]) -> int:
     print(f"browser_connectivity: {report['browser_connectivity']}")
     print(f"prerequisites_present_for_inspect:  {report['prerequisites_present_for_inspect']} (binaries/pin/clean-tree only, not a live check)")
     print(f"prerequisites_present_for_execute:  {report['prerequisites_present_for_execute']} (also needs TypeSafe key)")
-    print(f"prerequisites_present_for_type_text: {report['prerequisites_present_for_type_text']} (also needs TEXT_MODEL_API_KEY)")
+    print(f"prerequisites_present_for_type_text: {report['prerequisites_present_for_type_text']} (also needs a complete, valid text-model configuration)")
     if not c["present"]:
         print("\nNext: run scripts/setup.sh to clone the pinned checkout.")
     elif not v["has_python"]:

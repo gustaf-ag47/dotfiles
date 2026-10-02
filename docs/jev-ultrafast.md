@@ -55,12 +55,12 @@ shim) — not attempted in this closeout.
   loop). `--execute` requires `--max-steps` (hard cap 20) and `--max-seconds` (hard cap 180);
   out-of-range values are rejected before the checkout or credentials are even consulted.
 - Inside `--execute`, `_agent_driver.py` (run inside the pinned checkout's own venv) calls upstream's
-  `Agent.command("predict")` then prints the decision (operation, element label, confidence, latency)
+  `Agent.command("predict")` then prints the decision (operation, target identifier, confidence, latency)
   and prompts `y/N` before `Agent.command("act", ...)` for every `CLICK`/`TYPE_TEXT`/`SELECT`.
   `--auto-approve` removes the prompt but not the step/time caps. `DONE`/`BLOCKED` never mutate the page
   (upstream's own `Agent.command` contract) and are never prompted.
 - A `DONE` decision is explicitly **not** treated as verified success anywhere in this wrapper; the
-  driver prints the final URL/title and a note to verify independently, matching upstream's own
+  driver prints the final URL origin and a note to verify the actual browser page independently, matching upstream's own
   documented position ("A `DONE` choice still requires independent outcome verification").
 - Browser Harness creates an owned **background** Chrome target (`Target.createTarget ...
   background=True`), not the user's active tab — but it is still the same installed Chrome profile
@@ -72,8 +72,12 @@ shim) — not attempted in this closeout.
 - The redacted trace written to `${XDG_STATE_HOME:-$HOME/.local/state}/jev-ultrafast/traces/*.json`
   contains only operation, probability/confidence, latency, whether the page changed, whether *some*
   text was entered (never the text itself), and a SHA-256 of the goal text (not the goal itself) —
-  never an element label, a URL with its query string, a page title, request/response bodies, or
+  never an element label, a URL path/query/fragment (origin only), a page title, request/response bodies, or
   credentials. Written atomically at 0600 in a 0700 directory.
+
+The outer process timeout is exactly `--max-seconds`, including model calls and
+human approval waits; it is not extended to let a late action execute. Killing a
+run cannot undo previously completed browser actions.
 
 ## What was verified in this environment
 
@@ -81,8 +85,8 @@ Offline (no network, no credentials read beyond a boolean presence check, no pai
 on this branch:
 
 - `python3 -m unittest tests.unit.test_jev_ultrafast_skill tests.unit.test_jev_ultrafast_closeout -v` —
-  all passing (see exact output and count in
-  [`docs/research/jev-ultrafast-implementation.md`](research/jev-ultrafast-implementation.md)). Covers:
+  **51 tests passing** at final integration. Includes exact outer-deadline forwarding,
+  Ctrl-C process-group cleanup, origin-only diagnostics, and complete-backend readiness. Covers:
   SKILL.md frontmatter/discovery, script syntax (`py_compile` + `bash -n`), `doctor.py`'s readiness
   report (including that it never claims verified browser connectivity), that neither `doctor.py` nor
   `run.py` ever prints a configured key's value, `run.py`'s dry-run/`--inspect`/`--execute` argument
@@ -113,15 +117,15 @@ paid TypeSafe key dispatch, and (for `TYPE_TEXT`) a fully-configured text-model 
 parent's call per the handover brief ("Parent owns review, integration, live install and any paid smoke
 tests").
 
-## Open items for the parent
+## Setup requirements and optional follow-ups
 
 1. **`config/pi/upstreams.json` integration.** `scripts/pi_setup.py` already has a generic pinned-skill
    clone mechanism (`--fetch-upstreams`) that targets `~/.agents/skills/<name>`. This implementation
    deliberately does not add an entry there (that file is explicitly out of this implementation's
    ownership) and instead gives `jev-ultrafast` its own `setup.sh` targeting
    `${XDG_CACHE_HOME}/jev-ultrafast/src`, since the upstream here is a Python library consumed via `uv`,
-   not another skill directory to be symlinked into `~/.pi/agent/skills`. If you'd rather unify this
-   under `upstreams.json`, that needs a small `pi_setup.py` change (not made here).
+   not another skill directory to be symlinked into `~/.pi/agent/skills`. **Closeout decision:**
+   keep this explicit library setup separate; `pi-setup` installs the skill resources only.
 2. **Text-model backend.** No default is wired. If you want `TYPE_TEXT` to work out of the box against
    an existing Pi-managed subscription instead of a separately metered DeepSeek/OpenRouter key, that
    needs a small local OpenAI-compatible shim in front of a Pi provider — not built here; flagged as

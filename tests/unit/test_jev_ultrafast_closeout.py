@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,10 +97,20 @@ class UrlValidationTests(unittest.TestCase):
             env = clean_env(Path(tmp))
             result = run_python(RUN_PY, ["--url", "https://example.com/search?token=secret123", "--goal", "x"], env)
             self.assertNotIn("secret123", result.stdout)
-            self.assertIn("https://example.com/search", result.stdout)
+            self.assertIn("https://example.com", result.stdout)
+            self.assertNotIn("/search", result.stdout)
 
 
 class HangingChildTimeoutTests(unittest.TestCase):
+    def test_interrupt_stops_detached_children(self):
+        proc = Mock()
+        proc.wait.side_effect = [KeyboardInterrupt(), 0]
+        with patch.object(_bounded.subprocess, 'Popen', return_value=proc), \
+             patch.object(_bounded, '_kill_process_group') as kill:
+            with self.assertRaises(KeyboardInterrupt):
+                _bounded.run_bounded(['fixture'], cwd='.', env={}, timeout_seconds=5)
+        kill.assert_called_once_with(proc)
+
     def test_hanging_child_is_killed_within_bound(self):
         start = time.monotonic()
         result = _bounded.run_bounded(
@@ -144,6 +155,51 @@ class HangingChildTimeoutTests(unittest.TestCase):
         self.assertTrue(0 < module.INSPECT_TIMEOUT_SECONDS <= 90)
 
 
+class FinalIntegrationTests(unittest.TestCase):
+    def load(self, filename):
+        spec = importlib.util.spec_from_file_location('closeout_' + filename, SCRIPTS_DIR / filename)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_execute_outer_deadline_equals_requested_seconds(self):
+        module = self.load('run.py')
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, clean_env(Path(tmp)), clear=True), \
+             patch.object(module, 'checkout_ready', return_value=(True, 'ok')), \
+             patch.object(module, 'resolve_typesafe_key', return_value='test'), \
+             patch.object(module, 'run_bounded', return_value=_bounded.BoundedResult(0, False)) as run, \
+             patch('builtins.print'):
+            module.main(['--url', 'https://example.com', '--goal', 'x', '--execute', '--max-steps', '1', '--max-seconds', '5'])
+            self.assertEqual(run.call_args.kwargs['timeout_seconds'], 5)
+
+    def test_doctor_requires_complete_backend_and_redacts_endpoint(self):
+        module = self.load('doctor.py')
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(module, 'checkout_status', return_value={'present': True, 'pinned': True, 'dirty': False}), \
+             patch.object(module, 'venv_status', return_value={'has_python': True}), \
+             patch.object(module, 'tool_found', return_value=True), \
+             patch.object(module, 'chrome_found', return_value=True), \
+             patch.object(module, 'key_configured', return_value=True):
+            env = dict(clean_env(Path(tmp)), TEXT_MODEL_API_KEY='test')
+            report = module.build_report(env)
+            self.assertFalse(report['prerequisites_present_for_type_text'])
+            self.assertEqual(report['credentials']['text_model_backend_status'], 'partial')
+            env.update(TEXT_MODEL_BASE_URL='https://user:PRIVATE_VALUE@example.com/private_path?x=PRIVATE_VALUE', TEXT_MODEL='test')
+            report = module.build_report(env)
+            self.assertFalse(report['prerequisites_present_for_type_text'])
+            self.assertNotIn('PRIVATE_VALUE', json.dumps(report))
+            self.assertNotIn('private_path', json.dumps(report))
+
+    def test_goal_and_unrecognized_error_content_are_not_printed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_python(RUN_PY, ['--url', 'https://example.com/private_path?token=PRIVATE_VALUE', '--goal', 'SENSITIVE_GOAL'], clean_env(Path(tmp)))
+            self.assertNotIn('SENSITIVE_GOAL', result.stdout)
+            self.assertNotIn('PRIVATE_VALUE', result.stdout)
+            self.assertNotIn('private_path', result.stdout)
+        self.assertNotIn('PRIVATE_VALUE', _bounded.safe_error_text(ValueError('payload PRIVATE_VALUE')))
+
+
 class TracePrivacyTests(unittest.TestCase):
     def test_redact_step_excludes_label_text_and_url(self):
         step = {
@@ -171,7 +227,7 @@ class TracePrivacyTests(unittest.TestCase):
     def test_redact_url_drops_query_fragment_and_credentials(self):
         self.assertEqual(
             _trace.redact_url("https://user:pass@example.com:8443/a/b?x=secret#frag"),
-            "https://example.com:8443/a/b",
+            "https://example.com:8443",
         )
 
     def test_build_trace_never_contains_raw_goal(self):
