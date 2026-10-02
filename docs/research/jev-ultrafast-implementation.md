@@ -151,6 +151,37 @@ time.
 
 These are the concrete remaining steps listed in `docs/jev-ultrafast.md`'s "Open items for the parent".
 
+## Live test, 2026-10-02 (post-delivery, network-authorized)
+
+Ran for real against this host, at the user's explicit request to "test it out":
+
+- `scripts/setup.sh`: cloned the real upstream repo at the pinned commit and ran `uv sync` — succeeded
+  cleanly, 22 packages resolved/installed, checkout verified at
+  `1231850a0bf1a0c0341fe408ef1668dbbfdfac46` with no local changes.
+- `scripts/doctor.py`: correctly reported `ready_for_inspect: True`, `ready_for_execute: True` (the
+  pre-existing shared TypeSafe key was found), `ready_for_type_text: False` (no `TEXT_MODEL_API_KEY`),
+  `git`/`uv`/`node`/`chrome` all found. No secret printed.
+- `run.py --inspect` against `https://example.com`: failed with a clean upstream `RuntimeError` from
+  Browser Harness (`daemon default didn't come up`); the wrapper's traceback and own status lines never
+  leaked a credential. Root cause isolated by hand: `uv run browser-harness doctor --json` on this host
+  reports `chrome_running: false` even though a Chromium profile exists at `~/.config/chromium`.
+  Manually invoking Browser Harness's own `_launch_browser()` *does* spawn a real Chromium process (PID
+  confirmed alive, full process tree observed) using that profile — so Browser Harness can launch
+  Chrome here — but Chrome never writes a `DevToolsActivePort` file because this profile has never had
+  Chrome's remote-debugging discovery toggle (`chrome://inspect`) enabled, which upstream's own README
+  describes as a one-time interactive step ("Allow remote debugging in Chrome when prompted"). That
+  manually-launched Chromium window was closed immediately (`pkill`) once this was diagnosed, rather
+  than left open on the user's live desktop or driven further without that consent step.
+- **Conclusion**: the skill's own code (setup, doctor, credential resolution, bounds, dry-run/`--inspect`
+  dispatch, clean error surfacing) all work correctly end-to-end against the real pinned upstream. The
+  remaining blocker to a live `--inspect`/`--execute` run is a **one-time human action outside this
+  skill's scope**: enable Chrome's remote-debugging discovery toggle once (visit `chrome://inspect` in
+  the profile Browser Harness will use, or run `uv run browser-harness --doctor` interactively and
+  accept its prompt), then re-run `run.py --inspect`. Not attempted automatically here because it mutates
+  the user's regular Chrome profile's debugging posture and the brief calls for an isolated owned
+  tab/profile preference and explicit consent at consequential steps, not silent changes to shared
+  browser state.
+
 ## Blockers: none that stopped delivery
 
 No blocker prevented a usable, testable baseline. The two intentional scope boundaries — no default
