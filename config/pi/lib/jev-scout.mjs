@@ -155,9 +155,11 @@ const SECRET_CONTENT_PATTERNS = [
   /AKIA[0-9A-Z]{16}/,
   AWS_SECRET_PATTERN,
   /gh[pousr]_[A-Za-z0-9]{20,}/,
+  /\bapikey_[a-f0-9]{32}_[a-f0-9]{64}\b/i,
+  /\b(?:sk-ant-|sk-proj-|xai-)[A-Za-z0-9_-]{20,}/,
   /xox[baprs]-[A-Za-z0-9-]{10,}/,
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
-  /(api[_-]?key|secret|token|password|passwd|private[_-]?key)\s*[:=]\s*['"][A-Za-z0-9\-_./+=]{12,}['"]/i,
+  /(api[_-]?key|secret|token|password|passwd|private[_-]?key)['"]?\s*[:=]\s*['"][A-Za-z0-9\-_./+=]{12,}['"]/i,
 ];
 
 function isSensitivePath(relPath) {
