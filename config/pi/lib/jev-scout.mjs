@@ -183,6 +183,10 @@ function safePath(candidate) {
   return typeof candidate === "string" ? candidate : null;
 }
 
+function isNonNegativeSafeInt(v) {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+
 function emptyUsage() {
   return {
     input: 0,
@@ -312,15 +316,26 @@ function resolveCandidate({ cwd, repoRoot, candidate, fsImpl }) {
 
 /**
  * Opens `absPath` with O_NOFOLLOW (so a symlink swapped in after the chain
- * check above is rejected at open time, not silently followed), reads at
- * most `MAX_FILE_BYTES + 1` bytes from the resulting descriptor (never by
- * path a second time), and re-verifies path identity immediately after.
+ * check above is rejected at open time, not silently followed) and
+ * O_NONBLOCK (so, if the tracked regular file was swapped for a FIFO with
+ * no writer, `open()` returns immediately instead of hanging the whole
+ * call -- the immediately-following `fstat().isFile()` check then rejects
+ * it as `not_regular_file`; O_NONBLOCK has no effect on reads from an
+ * actual regular file). Reads at most `MAX_FILE_BYTES + 1` bytes from the
+ * resulting descriptor (never by path a second time), then re-verifies
+ * both path identity (`realpathSync`) AND inode identity (`lstatSync`'s
+ * dev/ino against the opened fd's own `fstat`) immediately after the read
+ * -- the realpath check alone would miss a same-path unlink+recreate race
+ * that doesn't involve a symlink at all (e.g. the tracked regular file is
+ * deleted and replaced by a different regular file at the identical path
+ * between the git/safety checks and this read); the inode comparison
+ * catches that even though the path string never changes.
  * Returns `{ ok: true, buf }` or `{ ok: false, reason }`.
  */
 function readFileBounded(absPath, fsImpl) {
   let fd;
   try {
-    fd = fsImpl.openSync(absPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    fd = fsImpl.openSync(absPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   } catch (err) {
     if (err && (err.code === "ELOOP" || err.code === "EMLINK")) return { ok: false, reason: "symlink" };
     if (err && err.code === "ENOENT") return { ok: false, reason: "not_found" };
@@ -358,6 +373,15 @@ function readFileBounded(absPath, fsImpl) {
       return { ok: false, reason: "read_error" };
     }
     if (path.normalize(realAfter) !== path.normalize(absPath)) return { ok: false, reason: "symlink" };
+
+    let lstatAfter;
+    try {
+      lstatAfter = fsImpl.lstatSync(absPath);
+    } catch {
+      return { ok: false, reason: "read_error" };
+    }
+    if (lstatAfter.isSymbolicLink() || !lstatAfter.isFile()) return { ok: false, reason: "path_swapped" };
+    if (lstatAfter.dev !== st.dev || lstatAfter.ino !== st.ino) return { ok: false, reason: "path_swapped" };
 
     return { ok: true, buf: buf.subarray(0, total), sizeOnDisk: st.size };
   } finally {
@@ -616,8 +640,15 @@ export async function scoutFiles(params = {}) {
   let totalBytesExceeded = false;
 
   try {
+    // Checked at candidate start AND again right after the (synchronous,
+    // blocking) git preflight calls below: those calls are real subprocess
+    // spawns, so a slow filesystem/git could otherwise let several
+    // candidates' worth of blocking preflight work run past the shared
+    // ~15s deadline before any per-call remaining-time check ever executes.
+    const deadlineExceeded = () => overallController.signal.aborted || now() >= overallDeadline;
+
     await runPool(paths, CONCURRENCY, async (candidate) => {
-      if (overallController.signal.aborted) {
+      if (deadlineExceeded()) {
         skipped.push({ path: safePath(candidate), reason: "aborted" });
         return;
       }
@@ -650,6 +681,11 @@ export async function scoutFiles(params = {}) {
       }
       if (ignored === "ignored") {
         skipped.push({ path: safePath(candidate), reason: "gitignored" });
+        return;
+      }
+
+      if (deadlineExceeded()) {
+        skipped.push({ path: safePath(candidate), reason: "aborted" });
         return;
       }
 
@@ -768,8 +804,13 @@ export async function scoutFiles(params = {}) {
 
       // From here the call genuinely succeeded with a validated answer.
       const requestUsage = result.usage;
-      const knownInput = typeof requestUsage?.input === "number" && Number.isFinite(requestUsage.input) ? requestUsage.input : null;
-      const knownOutput = typeof requestUsage?.output === "number" && Number.isFinite(requestUsage.output) ? requestUsage.output : null;
+      // Require a non-negative safe integer, not merely finite: a negative
+      // or fractional/huge "usage" value from a misbehaving classifyFn must
+      // never silently settle the budget reservation for less than it
+      // reserved or produce negative token counts in the returned usage
+      // aggregate -- treat it as unknown, same as a missing value.
+      const knownInput = isNonNegativeSafeInt(requestUsage?.input) ? requestUsage.input : null;
+      const knownOutput = isNonNegativeSafeInt(requestUsage?.output) ? requestUsage.output : null;
       const actualCost = knownInput != null ? (knownInput / 1_000_000) * config.costPerMillionInputUsd : null;
       try {
         reservation.settle(actualCost ?? reservedCostUsd);

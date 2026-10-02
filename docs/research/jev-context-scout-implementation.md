@@ -68,14 +68,14 @@ const result = await scoutFiles({
 `skipped[].reason` and `items[].reason` are always one of a small fixed set
 of safe codes (`disabled`, `mode_off`, `invalid_mode`, `config_invalid`,
 `missing_key`, `classifier_unavailable`, `not_git_repo`, `git_error`,
-`path_outside_repo`, `symlink`, `not_found`, `not_git_tracked`, `gitignored`,
-`sensitive_path`, `sensitive_content`, `binary_file`, `not_regular_file`,
-`oversized_file`, `total_bytes_exceeded`, `read_error`, `budget_exceeded`,
-`budget_unavailable`, `low_confidence`, `timeout`, `classifier_error`,
-`unexpected_answer`, `aborted`, `invalid_path`, `too_many_paths`,
-`goal_invalid`, `goal_too_long`, `invalid_paths`, `no_paths`,
-`invalid_cwd`) — never a raw path fragment, prompt, or provider error
-string.
+`path_outside_repo`, `symlink`, `path_swapped`, `not_found`,
+`not_git_tracked`, `gitignored`, `sensitive_path`, `sensitive_content`,
+`binary_file`, `not_regular_file`, `oversized_file`, `total_bytes_exceeded`,
+`read_error`, `budget_exceeded`, `budget_unavailable`, `low_confidence`,
+`timeout`, `classifier_error`, `unexpected_answer`, `aborted`,
+`invalid_path`, `too_many_paths`, `goal_invalid`, `goal_too_long`,
+`invalid_paths`, `no_paths`, `invalid_cwd`) — never a raw path fragment,
+prompt, or provider error string.
 
 ## Why some candidates land in `items` (uncertain) and others in `skipped`
 
@@ -99,11 +99,22 @@ files.
   from the git repo root down to the file (inclusive) is `lstat`'d and
   rejected if any of them is a symlink — not just the final leaf. A plain
   `realpathSync` round-trip check backs this up.
-- The file is then opened with `O_RDONLY | O_NOFOLLOW` and read from the
-  resulting file descriptor (never re-opened by path), closing the
+- The file is then opened with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` and read
+  from the resulting file descriptor (never re-opened by path), closing the
   symlink-swap TOCTOU window between the ancestor-chain check and the
-  actual read. `realpathSync` is checked once more immediately after the
-  read; a mismatch discards the content and reports `symlink`.
+  actual read. `O_NONBLOCK` specifically defends against a tracked regular
+  file being replaced by a writer-less FIFO at the same path: without it,
+  opening a FIFO for read-only blocks until something opens it for write,
+  which would otherwise hang the whole `scoutFiles()` call; `O_NONBLOCK` has
+  no effect on reads from an actual regular file, and the immediately-
+  following `fstat().isFile()` check rejects the FIFO as `not_regular_file`
+  either way. After the bounded read, BOTH `realpathSync` (path identity)
+  AND a fresh `lstatSync`'s `dev`/`ino` compared against the opened fd's own
+  `fstat` (inode identity) are re-checked; a mismatch on either discards the
+  content and reports `symlink` or `path_swapped` respectively. The inode
+  check specifically catches a same-path unlink+recreate race that never
+  involves a symlink at all (verified with a synthetic `fsImpl` in tests,
+  since winning a real race deterministically isn't possible).
 - The read is hard-bounded to `MAX_FILE_BYTES + 1` bytes regardless of what
   `stat`/`fstat` claims the size is.
 - Git truth (tracked, not ignored) is established by shelling out to the
@@ -180,7 +191,17 @@ files.
   the caller's own `AbortSignal` — both abort the in-flight classifier
   request itself (a shared `AbortController` threaded through), not merely a
   local backstop timer. `maxRetries: 0` is passed to the classifier on every
-  call.
+  call. The deadline is re-checked (not just computed once) at the start of
+  each candidate's processing AND again immediately after that candidate's
+  own (synchronous, subprocess-spawning) git preflight calls, so a slow
+  filesystem/git cannot let several candidates' worth of blocking preflight
+  work silently run past the shared bound before any per-call remaining-time
+  check ever executes.
+- Reported token usage is only ever trusted when it is a non-negative safe
+  integer; a negative, fractional, or otherwise malformed value from a
+  misbehaving classifier implementation is treated as unknown (counted in
+  `stats.unknownCostCalls`) rather than producing a negative number in the
+  returned `usage` aggregate or under-settling the budget reservation.
 
 ## Verification performed on this host
 

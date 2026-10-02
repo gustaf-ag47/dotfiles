@@ -697,6 +697,31 @@ test("usage aggregate accumulates known tokens; missing usage is tracked as unkn
   assert.equal(out.usage.output, 7);
 });
 
+test("negative or non-integer usage values are treated as unknown, never refunding the budget or producing negative usage", async () => {
+  const root = makeRepo();
+  writeTracked(root, "a.js", "x");
+  const env = tmpHomeEnv();
+  const out = await scoutFiles(
+    baseParams(root, {
+      paths: ["a.js"],
+      env,
+      classifyFn: async () => ({
+        stopReason: "stop",
+        answers: { file_relevance: { type: "choice", choice: "relevant", confidence: 0.9 } },
+        usage: { input: -500, output: 2.5 }, // malicious/buggy: negative and fractional
+      }),
+    }),
+  );
+  assert.equal(out.stats.unknownCostCalls, 1);
+  assert.equal(out.usage.input, 0);
+  assert.equal(out.usage.output, 0);
+  assert.ok(out.usage.input >= 0 && out.usage.output >= 0);
+  assert.ok(out.stats.estimatedCostUsd >= 0);
+  const evt = ledgerLines(env)[0];
+  assert.equal(evt.input_tokens, null);
+  assert.equal(evt.output_tokens, null);
+});
+
 test("relevanceQuestions() exposes exactly the three whitelisted classes", () => {
   const q = relevanceQuestions();
   const classes = Object.keys(q.file_relevance.criteria);
@@ -720,4 +745,89 @@ test("defaultGit() fails closed (tri-state \"error\") on a non-repo directory in
   const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "jev-scout-plain-"));
   const git = defaultGit();
   assert.equal(git.repoRoot(notARepo), null);
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests: parent review of 381fe4b
+// ---------------------------------------------------------------------------
+
+test("a tracked path replaced by a writer-less FIFO is rejected as not_regular_file, not hung on open", async () => {
+  const root = makeRepo();
+  const abs = writeTracked(root, "was-a-file.js", "x");
+  fs.unlinkSync(abs);
+  sh("mkfifo", [abs], root);
+  const start = Date.now();
+  const out = await scoutFiles(baseParams(root, { paths: ["was-a-file.js"] }));
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 2000, `expected no hang opening the FIFO, took ${elapsed}ms`);
+  assert.equal(out.skipped[0].reason, "not_regular_file");
+});
+
+test("a tracked file swapped for a different regular file at the identical path mid-pipeline is rejected on inode mismatch, not silently classified", async () => {
+  const root = makeRepo();
+  const abs = writeTracked(root, "swap.js", "original content for the goal");
+  // Simulate the TOCTOU window with no symlink involved at all: a plain
+  // unlink+recreate race at the identical path between the ancestor-chain
+  // safety check (1st lstat of this path) and readFileBounded()'s post-read
+  // identity re-check (2nd lstat of this path). The fd opened in between
+  // still refers to the ORIGINAL inode (POSIX semantics), so its fstat()
+  // will disagree with the swapped file's lstat() -- that's exactly the
+  // mismatch readFileBounded() must catch.
+  let lstatCallsForSwapPath = 0;
+  const fsImpl = {
+    ...fs,
+    lstatSync: (p, opts) => {
+      if (path.resolve(String(p)) === path.resolve(abs)) {
+        lstatCallsForSwapPath += 1;
+        if (lstatCallsForSwapPath === 2) {
+          fs.unlinkSync(abs);
+          fs.writeFileSync(abs, "swapped content, different inode, same path");
+        }
+      }
+      return fs.lstatSync(p, opts);
+    },
+  };
+  const out = await scoutFiles(baseParams(root, { paths: ["swap.js"], fsImpl }));
+  assert.equal(out.skipped[0].reason, "path_swapped");
+});
+
+test("overall deadline is re-checked after each git preflight call, not only at dispatch time, so slow git calls cannot silently extend the shared ~15s bound", async () => {
+  const root = makeRepo();
+  writeTracked(root, "a.js", "x");
+  writeTracked(root, "b.js", "y");
+  let fakeNow = 1_000_000;
+  const now = () => fakeNow;
+  const realGit = defaultGit();
+  const git = {
+    repoRoot: (cwd) => realGit.repoRoot(cwd),
+    isTracked: (relPath, repoRoot) => {
+      fakeNow += 8000; // simulate one slow git subprocess call
+      return realGit.isTracked(relPath, repoRoot);
+    },
+    isIgnored: (relPath, repoRoot) => realGit.isIgnored(relPath, repoRoot),
+  };
+  let dispatched = 0;
+  const out = await scoutFiles(
+    baseParams(root, {
+      paths: ["a.js", "b.js"],
+      now,
+      git,
+      classifyFn: async () => {
+        dispatched += 1;
+        return okClassifier()();
+      },
+    }),
+  );
+  // Concurrency-2 lanes claim "a.js" then "b.js" in order, each running its
+  // own fully-synchronous prefix (including the git calls) before either
+  // yields at its first await: by the time "b.js"'s post-git deadline check
+  // runs, the fake clock has already advanced past the ~15s overall
+  // deadline anchored at call entry, so it must be skipped as "aborted"
+  // rather than dispatched, even though no real wall-clock time passed.
+  assert.equal(dispatched, 1);
+  assert.equal(out.items.length, 1);
+  assert.equal(out.items[0].path, "a.js");
+  const aborted = out.skipped.find((s) => s.path === "b.js");
+  assert.ok(aborted, "expected b.js to be skipped");
+  assert.equal(aborted.reason, "aborted");
 });
