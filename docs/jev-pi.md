@@ -104,8 +104,9 @@ budget exhaustion or timeouts must leave the ordinary launch path unchanged.
 
 This pilot deliberately leaves `llm-failover.ts`, `routes.json`, `classes.json`,
 `goal.ts`, and compaction untouched. Evaluate representative task labels and
-actual downstream outcomes before proposing automatic routing. File triage needs
-separate privacy controls and is not part of this milestone.
+actual downstream outcomes before proposing automatic routing. File triage is a separate opt-in capability with its own privacy controls;
+see [context-efficient reads and file scouting](jev-context.md). It does not
+change this task-classification pilot's routing policy.
 
 ## Verification on this host (2026-10-02)
 

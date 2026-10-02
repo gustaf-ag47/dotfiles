@@ -89,7 +89,7 @@ export function sha256Hex(buffer) {
 export function readFileBounded(fsImpl, absPath, maxBytes = MAX_HASHABLE_BYTES) {
   let fd;
   try {
-    fd = fsImpl.openSync(absPath, "r");
+    fd = fsImpl.openSync(absPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch {
     return { ok: false, reason: "open_failed" };
   }

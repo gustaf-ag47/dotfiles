@@ -23,6 +23,7 @@ EXTENSIONS=(
 	anthropic-pool.ts
 	grok-build.ts
 	jev.ts
+	jev-context.ts
 	goal.ts
 	llm-usage.ts
 	llm-failover.ts

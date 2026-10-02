@@ -87,6 +87,7 @@ All configurations are organized in the `config/` directory:
 - Complete keybinding reference: [KEYBINDINGS.md](KEYBINDINGS.md)
 - [Grok CLI OAuth in Pi and LLM usage](docs/grok-pi.md)
 - [Jev observation-only classification and accounting](docs/jev-pi.md)
+- [Context-efficient reads and opt-in Jev file scouting](docs/jev-context.md)
 - Installation troubleshooting in individual config directories
 
 ---

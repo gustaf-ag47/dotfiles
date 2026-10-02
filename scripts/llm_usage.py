@@ -398,6 +398,7 @@ JEV_CLASSIFIER_ACTIVITY_SCHEMA = 'jev-classifier-activity.v1'
 JEV_VALID_STATUSES = {'ok', 'abstained', 'error', 'skipped', 'cache_hit'}
 JEV_VALID_SOURCES = {'delegate', 'pi'}
 JEV_TASK_CLASSES = {'interactive', 'build', 'research', 'mechanical'}
+JEV_PURPOSES = {'task-class', 'file-scout'}
 JEV_VALID_COST_SOURCES = {'published-rate', 'unknown', 'cache'}
 JEV_MAX_LEDGER_BYTES = 5 * 1024 * 1024
 JEV_MAX_EVENTS = 50_000
@@ -488,6 +489,7 @@ def jev_validate_event(record):
         return None
     return {
         'day': day, 'source': jev_enum(record.get('source'), JEV_VALID_SOURCES), 'status': status,
+        'purpose': jev_enum(record.get('purpose', 'task-class'), JEV_PURPOSES),
         'class': jev_enum(record.get('class'), JEV_TASK_CLASSES),
         'confidence': jev_finite(record.get('confidence')),
         'model': jev_safe_token(record.get('model')),
@@ -559,11 +561,13 @@ JEV_NETWORK_STATUSES = {'ok', 'abstained', 'error'}
 
 def jev_aggregate(events):
     """Shadow-only aggregate counts. Unknown cost/tokens stay explicitly unknown, never silently zero."""
-    by_status, by_class, latencies = {}, {}, []
+    by_status, by_class, by_purpose, latencies = {}, {}, {}, []
     input_tokens = output_tokens = tokens_unknown_calls = 0
     estimated_cost_usd = cost_unknown_calls = applied_count = network_calls = 0
     for event in events:
         by_status[event['status']] = by_status.get(event['status'], 0) + 1
+        purpose = event.get('purpose') or 'unknown'
+        by_purpose[purpose] = by_purpose.get(purpose, 0) + 1
         if event['status'] in JEV_NETWORK_STATUSES:
             network_calls += 1
         if event['class']:
@@ -586,6 +590,7 @@ def jev_aggregate(events):
             applied_count += 1
     return {
         'calls': len(events), 'network_calls': network_calls, 'by_status': by_status, 'by_class': by_class,
+        'by_purpose': by_purpose,
         'ok': by_status.get('ok', 0), 'abstained': by_status.get('abstained', 0),
         'errors': by_status.get('error', 0), 'skipped': by_status.get('skipped', 0),
         'cache_hits': by_status.get('cache_hit', 0),
@@ -648,6 +653,9 @@ def jev_classifier_lines(activity):
         if today['latency_ms_summary']:
             lat = today['latency_ms_summary']
             lines.append(f"  latency ms avg={lat['avg']} min={lat['min']} max={lat['max']} (n={lat['count']})")
+        if today.get('by_purpose'):
+            purposes = ', '.join(f'{name}={count}' for name, count in sorted(today['by_purpose'].items()))
+            lines.append(f'  purposes: {purposes}')
         if today['by_class']:
             classes = ', '.join(f'{name}={count}' for name, count in sorted(today['by_class'].items()))
             lines.append(f'  observed suggestions: {classes}')

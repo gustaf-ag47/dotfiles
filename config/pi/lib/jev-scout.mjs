@@ -172,11 +172,14 @@ function containsSecretLiteral(content) {
 }
 
 function looksBinary(buf) {
-  const len = Math.min(buf.length, 8000);
-  for (let i = 0; i < len; i++) {
-    if (buf[i] === 0) return true;
+  // Candidates are at most 16 KiB: inspect all bytes, not just a prefix.
+  if (buf.includes(0)) return true;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(buf);
+    return false;
+  } catch {
+    return true;
   }
-  return false;
 }
 
 function safePath(candidate) {

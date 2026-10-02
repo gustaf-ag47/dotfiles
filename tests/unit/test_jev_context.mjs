@@ -869,21 +869,54 @@ test("scout_files refuses to run until mode is on, and refuses on cwd/consent mi
   assert.match(mismatchResult.content[0].text, /cwd/);
 });
 
-test("scout_files: a sibling module error is sanitized before reaching the model (no raw error text)", { skip: skipReason }, async (t) => {
+test("scout_files: a module error is sanitized before reaching the model (no raw error text)", { skip: skipReason }, async () => {
   const factory = await loadExtension();
   const { pi, commands } = makeFakePi();
-  factory(pi);
+  factory(pi, async () => { throw new Error("RAW_PROVIDER_SECRET_MUST_NOT_LEAK"); });
   const dir = tmpDir();
   await commands.get("jev-context").handler("on", makeFakeCommandCtx({ hasUI: true, confirmResult: true, cwd: dir }));
   const scoutTool = pi.registeredTools.get("scout_files");
   const ctx = makeFakeToolCtx({ cwd: dir, fakeReadImpl: async () => { throw new Error("unused"); } });
 
-  // The sibling module genuinely doesn't exist in this checkout yet (owned by a sibling task), so
-  // this call exercises the real "module unavailable" path -- it must fail as a clean, bounded
-  // isError result, never throw an unsanitized error up through the tool boundary.
+  // Inject module failure: works whether or not the real scouting library is installed,
+  // never reads credentials, and cannot accidentally call the provider.
   const result = await scoutTool.execute("s1", { goal: "find the config loader", paths: ["a.ts"] }, undefined, undefined, ctx);
   assert.ok(result.isError);
   assert.match(result.content[0].text, /scout_files/);
+  assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_SECRET/);
+});
+
+test("hashing a FIFO returns without waiting for a writer", { skip: process.platform === 'win32' }, () => {
+  const fifo = path.join(tmpDir(), 'pipe');
+  const created = spawnSync('mkfifo', [fifo]);
+  assert.equal(created.status, 0);
+  const moduleUrl = new URL('../../config/pi/lib/jev-context.mjs', import.meta.url).href;
+  const script = `import fs from 'node:fs'; import {readFileBounded} from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(readFileBounded(fs, ${JSON.stringify(fifo)})));`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000 });
+  assert.equal(result.status, 0, 'hash preflight must not hang before the native read permission/validation path');
+  assert.deepEqual(JSON.parse(result.stdout), { ok: false, reason: 'not_a_file' });
+});
+
+test("scout_files passes native usage through without exposing source", { skip: skipReason }, async () => {
+  const factory = await loadExtension();
+  const { pi, commands } = makeFakePi();
+  const dir = tmpDir();
+  const usage = { input: 30, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 35,
+    cost: { input: 0.00000126, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.00000126 } };
+  factory(pi, async () => ({ scoutFiles: async (args) => {
+    assert.equal(args.enabled, true);
+    assert.deepEqual(args.paths, ['safe.ts']);
+    return { items: [{ path: 'safe.ts', relevance: 'relevant', confidence: 0.95 }], skipped: [],
+      stats: { networkCalls: 1, inputTokens: 30, estimatedCostUsd: usage.cost.total }, usage };
+  } }));
+  await commands.get('jev-context').handler('on', makeFakeCommandCtx({ cwd: dir }));
+  const result = await pi.registeredTools.get('scout_files').execute('s1',
+    { goal: 'Investigate refresh handling', paths: ['safe.ts'] }, undefined, undefined,
+    makeFakeToolCtx({ cwd: dir, fakeReadImpl: async () => { throw new Error('unused'); } }));
+  assert.deepEqual(result.usage, usage);
+  assert.match(result.content[0].text, /safe\.ts/);
+  assert.match(result.content[0].text, /0\.95/);
+  assert.doesNotMatch(JSON.stringify(result), /Investigate refresh handling/);
 });
 
 test("hooks tolerate bash/other tool-result messages without throwing and without affecting unrelated entries", { skip: skipReason }, async () => {

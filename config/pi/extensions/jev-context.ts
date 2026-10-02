@@ -103,7 +103,10 @@ interface ReadContextDetails {
 	bypassReason?: string;
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (
+	pi: ExtensionAPI,
+	loadScoutModule: () => Promise<any> = () => import(/* @vite-ignore */ SCOUT_MODULE_URL),
+) {
 	let mode: Mode = "off";
 	const cacheState = createCacheState();
 	let scoutController: AbortController | null = null;
@@ -384,7 +387,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			let scoutFiles: (args: unknown) => Promise<any>;
 			try {
-				const mod: any = await import(/* @vite-ignore */ SCOUT_MODULE_URL);
+				const mod: any = await loadScoutModule();
 				scoutFiles = mod.scoutFiles;
 				if (typeof scoutFiles !== "function") throw new Error("scoutFiles export missing");
 			} catch {
