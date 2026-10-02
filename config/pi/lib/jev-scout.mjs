@@ -588,6 +588,7 @@ export async function scoutFiles(params = {}) {
   if (!Array.isArray(paths)) return allSkipped([], "invalid_paths");
   if (paths.length === 0) return allSkipped([], "no_paths");
   if (paths.length > MAX_PATHS_PER_CALL) return allSkipped(paths, "too_many_paths");
+  if (containsSecretLiteral(goal)) return allSkipped(paths, "sensitive_goal");
 
   // --- Gate 3: config + mode + credential + classifier dependency, same as jev.mjs.
   let config;

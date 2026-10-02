@@ -34,6 +34,13 @@ test('credential literals and binary data never reach classifier', async () => {
       assert.equal(result.skipped[0]?.reason, reason);
       assert.equal(result.stats.networkCalls, 0);
     }
+    const sensitiveGoal = await scoutFiles({
+      cwd: root, goal: 'Find xai-' + 'c'.repeat(32), paths: ['sample.json'], enabled: true,
+      env: { HOME: root, TYPESAFE_API_KEY: 'test', PI_JEV_MODE: 'observe' },
+      config: DEFAULT_CONFIG, stateDir: path.join(root, '.state'),
+      classifyFn: async () => { calls++; throw new Error('must not execute'); },
+    });
+    assert.equal(sensitiveGoal.skipped[0]?.reason, 'sensitive_goal');
     assert.equal(calls, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
