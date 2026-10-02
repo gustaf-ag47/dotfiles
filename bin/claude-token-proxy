@@ -1016,12 +1016,105 @@ def deepseek(auth: dict) -> dict:
             "note": "Balance is not a subscription quota or a session cost estimate."}
 
 
-PROVIDER_ADAPTERS = {"openai-codex": codex, "deepseek": deepseek}
+# cli-chat-proxy.grok.com is the Grok Build CLI's own backend, not the documented
+# xAI Inference API (docs/research/grok-oauth-pi-community.md). This mirrors the
+# community adapter's reverse-engineered quota probe. Never used for inference
+# here, and -- like the Codex adapter above -- reads only the token Pi's own
+# grok-build OAuth provider already resolved into auth.json; never touches
+# ~/.grok/auth.json directly and never refreshes anything.
+GROK_BASE_URL = "https://cli-chat-proxy.grok.com/v1"
+GROK_DEFAULT_CLIENT_VERSION = "1.0.5"
+
+
+def grok_money(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        inner = value.get("val")
+        if isinstance(inner, (int, float)) and not isinstance(inner, bool):
+            return inner
+    return None
+
+
+def grok_clamp_percent(value) -> float | None:
+    n = numeric(value)
+    return max(0.0, min(100.0, float(n))) if n is not None else None
+
+
+def grok_ratio_percent(used, limit) -> float | None:
+    if isinstance(used, (int, float)) and isinstance(limit, (int, float)) and limit > 0:
+        return grok_clamp_percent(100.0 * used / limit)
+    return None
+
+
+def grok_build(auth: dict) -> dict:
+    """Grok quota via Pi's grok-build OAuth credential in auth.json, read-only.
+
+    Pi's native OAuth login/refresh for grok-build is owned elsewhere (sibling
+    work); this reads only the access token Pi already resolved, exactly like
+    the Codex adapter above, and never refreshes it itself.
+    """
+    credential = auth.get("grok-build") or {}
+    if credential.get("type") != "oauth" or not credential.get("access"):
+        return {"status": "unavailable", "reason": "Log in to grok-build in Pi."}
+    access = credential["access"]
+    email = None
+    try:
+        segment = access.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+        if isinstance(claims, dict) and isinstance(claims.get("email"), str):
+            email = claims["email"]
+    except (IndexError, ValueError, TypeError, UnicodeDecodeError):
+        pass
+    email = email or (credential.get("email") if isinstance(credential.get("email"), str) else None)
+    who = email or "this account"
+    if not numeric(credential.get("expires")) or credential["expires"] <= time.time() * 1000:
+        return {"status": "unavailable", "account": {"email": email},
+                "reason": f"OAuth for {who} expired; use Pi to refresh/login. This reader never refreshes tokens."}
+    headers = {"Authorization": "Bearer " + access, "X-XAI-Token-Auth": "xai-grok-cli",
+               "x-authenticateresponse": "authenticate-response",
+               "x-grok-client-version": os.environ.get("GROK_CLIENT_VERSION") or GROK_DEFAULT_CLIENT_VERSION,
+               "x-grok-client-identifier": os.environ.get("GROK_CLIENT_NAME") or "pi",
+               "x-grok-client-mode": "interactive"}
+    try:
+        user = get_json(GROK_BASE_URL + "/user?include=subscription", headers)
+        billing = get_json(GROK_BASE_URL + "/billing?format=credits", headers)
+    except urllib.error.HTTPError as error:
+        return {"status": "unavailable", "account": {"email": email},
+                "reason": f"Quota endpoint HTTP {error.code} for {who}; inference may still work."}
+    user = user if isinstance(user, dict) else {}
+    billing = billing if isinstance(billing, dict) else {}
+    config = billing.get("config") if isinstance(billing.get("config"), dict) else {}
+    period = config.get("currentPeriod") if isinstance(config.get("currentPeriod"), dict) else {}
+    is_weekly = period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY"
+    resets_at = period.get("end") or config.get("billingPeriodEnd")
+    resets_at = resets_at if isinstance(resets_at, str) else None
+    monthly_limit = grok_money(config.get("monthlyLimit"))
+    used = grok_money(config.get("used"))
+    used_percent = grok_clamp_percent(config.get("creditUsagePercent"))
+    if used_percent is None:
+        used_percent = grok_ratio_percent(used, monthly_limit)
+    windows = [{"name": "weekly" if is_weekly else "monthly", "used_percent": used_percent, "used": used,
+                "limit": monthly_limit, "unit": "credits", "resets_at": resets_at}]
+    on_demand_cap = grok_money(config.get("onDemandCap"))
+    if on_demand_cap is not None and on_demand_cap > 0:
+        windows.append({"name": "on_demand_cap", "used_percent": None, "used": None, "limit": on_demand_cap,
+                        "unit": "credits", "resets_at": resets_at})
+    tier = user.get("subscriptionTier") if isinstance(user.get("subscriptionTier"), str) else None
+    account_email = email or (user.get("email") if isinstance(user.get("email"), str) else None)
+    return {"status": "ok", "kind": "subscription quota", "account": {"email": account_email, "plan": tier},
+            "windows": windows,
+            "note": "Grok Build CLI OAuth session via the unofficial cli-chat-proxy.grok.com backend "
+                    "(reverse-engineered, not an xAI-documented API); read-only, never refreshes."}
+
+
+PROVIDER_ADAPTERS = {"openai-codex": codex, "deepseek": deepseek, "grok-build": grok_build}
 PROVIDER_SOURCES = {
     "openai-codex": "ChatGPT Codex wham/usage (private endpoint)",
     "deepseek": "DeepSeek balance API",
+    "grok-build": "Grok Build CLI quota probe (cli-chat-proxy.grok.com, unofficial)",
 }
-PROVIDER_CONFIDENCE = {"openai-codex": "medium", "deepseek": "high"}
+PROVIDER_CONFIDENCE = {"openai-codex": "medium", "deepseek": "high", "grok-build": "low"}
 PROVIDER_STATE: dict[str, dict] = {
     name: {"status": "unavailable", "reason": "not polled yet", "checked_at": None}
     for name in PROVIDER_ADAPTERS
