@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import statistics
 import math
+import subprocess
 import tempfile
 import time
 import urllib.error
@@ -238,11 +239,44 @@ def deepseek(auth):
 # xAI Inference API; see docs/research/grok-oauth-pi-community.md and
 # docs/research/grok-usage-implementation.md. This adapter mirrors the community
 # adapter's reverse-engineered quota probe (GET /v1/user, GET /v1/billing) but
-# never calls it for inference, and -- like every other adapter in this file --
-# reads only the token Pi's own grok-build OAuth provider already resolved into
-# auth.json; it never touches ~/.grok/auth.json and never refreshes anything.
+# never calls it for inference. Two read-only token sources, tried in order:
+# (1) Pi's own grok-build OAuth credential in auth.json (sibling work); (2) if
+# absent, the sibling-owned read-only CLI bridge (bin/grok-oauth-token /
+# scripts/grok_oauth.py) that reads an existing `grok login --device-auth`
+# session from $GROK_HOME/auth.json. Neither path writes or refreshes anything
+# -- this file never touches ~/.grok/auth.json directly itself.
 GROK_BASE_URL = 'https://cli-chat-proxy.grok.com/v1'
 GROK_DEFAULT_CLIENT_VERSION = '1.0.5'
+GROK_CLI_BRIDGE_ENV = 'GROK_OAUTH_BRIDGE'  # override the bridge script path (mainly for tests/alt installs)
+
+
+def grok_cli_bridge_path():
+    override = text(os.environ.get(GROK_CLI_BRIDGE_ENV))
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent.parent / 'bin' / 'grok-oauth-token'
+
+
+def grok_cli_fallback_token():
+    """Explicit, mockable seam: the current Grok CLI session's access token, or
+    (None, reason). Shells out to the sibling-owned read-only bridge script,
+    which itself never writes to or refreshes $GROK_HOME/auth.json -- the Grok
+    CLI remains its sole owner. No output besides the bare token is ever kept;
+    stderr is a short, non-secret message by that script's own contract, but is
+    still length-capped here before use.
+    """
+    script = grok_cli_bridge_path()
+    if not script.exists():
+        return None, 'No Pi grok-build credential, and the Grok CLI OAuth bridge is not installed.'
+    try:
+        result = subprocess.run([str(script)], capture_output=True, text=True, timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None, 'Grok CLI OAuth bridge failed to run.'
+    if result.returncode != 0:
+        reason = (result.stderr or '').strip().splitlines()[-1] if result.stderr else ''
+        return None, (reason or 'No Grok CLI session found; run `grok login --device-auth`.')[:300]
+    token = (result.stdout or '').strip()
+    return (token, None) if token else (None, 'Grok CLI OAuth bridge printed no token.')
 
 
 def grok_money(value):
@@ -266,23 +300,40 @@ def grok_ratio_percent(used, limit):
     return None
 
 
-def grok_build(auth):
-    """Grok quota via Pi's grok-build OAuth credential in auth.json, read-only.
-
-    Pi's native OAuth login/refresh for grok-build is owned elsewhere (sibling
-    work); this adapter only reads the access token Pi already resolved, exactly
-    like the Codex adapter above, and never refreshes it itself.
+def grok_build_token(auth):
+    """Resolve a read-only Grok access token: Pi's own grok-build OAuth
+    credential in auth.json first; if absent, fall back to the Grok CLI's own
+    session via the read-only bridge script. Returns (access, email_hint,
+    source, error) where exactly one of (access, error) is set. Never
+    refreshes anything in either path.
     """
-    credential = auth.get('grok-build') or {}
-    if credential.get('type') != 'oauth' or not credential.get('access'):
-        return {'status': 'unavailable', 'reason': 'Log in to grok-build in Pi.'}
-    access = credential['access']
+    credential = auth.get('grok-build')
+    if isinstance(credential, dict) and credential.get('type') == 'oauth' and credential.get('access'):
+        access = credential['access']
+        claims = decode_jwt_payload(access) or {}
+        email = text(claims.get('email')) or text(credential.get('email'))
+        who = email or 'this account'
+        if not numeric(credential.get('expires')) or credential['expires'] <= time.time() * 1000:
+            return None, email, 'pi-auth.json', \
+                f'OAuth for {who} expired; use Pi to refresh/login. This reader never refreshes tokens.'
+        return access, email, 'pi-auth.json', None
+    access, reason = grok_cli_fallback_token()
+    if not access:
+        return None, None, 'grok-cli-session', reason or 'Log in to grok-build in Pi, or run `grok login --device-auth`.'
     claims = decode_jwt_payload(access) or {}
-    email = text(claims.get('email')) or text(credential.get('email'))
+    return access, text(claims.get('email')), 'grok-cli-session', None
+
+
+def grok_build(auth):
+    """Grok quota, read-only. Token source is Pi's grok-build OAuth credential
+    in auth.json when present, else the Grok CLI's own session (read-only
+    bridge, never refreshed) -- see `grok_build_token`. Neither path refreshes
+    or writes any credential; this function only ever performs GET requests.
+    """
+    access, email, source, token_error = grok_build_token(auth)
+    if not access:
+        return {'status': 'unavailable', **({'account': {'email': email}} if email else {}), 'reason': token_error}
     who = email or 'this account'
-    if not numeric(credential.get('expires')) or credential['expires'] <= time.time() * 1000:
-        return {'status': 'unavailable', 'account': {'email': email},
-                'reason': f'OAuth for {who} expired; use Pi to refresh/login. This reader never refreshes tokens.'}
     headers = {'Authorization': 'Bearer ' + access, 'X-XAI-Token-Auth': 'xai-grok-cli',
                'x-authenticateresponse': 'authenticate-response',
                'x-grok-client-version': text(os.environ.get('GROK_CLIENT_VERSION')) or GROK_DEFAULT_CLIENT_VERSION,
@@ -313,6 +364,7 @@ def grok_build(auth):
                         'unit': 'credits', 'resets_at': resets_at})
     account = {'email': email or text(user.get('email')), 'plan': text(user.get('subscriptionTier'))}
     return {'status': 'ok', 'kind': 'subscription quota', 'account': account, 'windows': windows,
+            'credential_source': source,
             'note': 'Grok Build CLI OAuth session via the unofficial cli-chat-proxy.grok.com backend '
                     '(reverse-engineered, not an xAI-documented API); read-only, never refreshes.'}
 

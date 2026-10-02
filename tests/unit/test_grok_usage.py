@@ -1,14 +1,22 @@
 """grok-build adapter tests for scripts/llm_usage.py.
 
 Offline and credential-free: every network call is mocked via `usage.get_json`,
-and the Grok OAuth credential always comes from an in-memory `auth` dict rather
-than any real file, so these tests never touch a real ~/.grok/auth.json or
-~/.pi/agent/auth.json, make no live requests, and write no real cache files.
+and (for the isolated test classes) the Grok CLI fallback is mocked via the
+explicit `usage.grok_cli_fallback_token` seam, so these tests never touch a
+real ~/.pi/agent/auth.json, make no live requests, and write no real cache
+files. `GrokCliBridgeIntegrationTests` is the deliberate exception: it points
+`GROK_OAUTH_BRIDGE` at a throwaway script under a temp directory and sets a
+temp `GROK_HOME`, so the real subprocess/stdout/exit-code plumbing in
+`grok_cli_fallback_token` is genuinely exercised end to end -- isolation comes
+from the temp paths, not from stubbing the functionality away.
 """
 import base64
 import importlib.util
 import json
+import os
 from pathlib import Path
+import stat
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -48,23 +56,33 @@ class GrokBuildAdapterTests(unittest.TestCase):
             result = usage.grok_build(GROK_AUTH)
         return result, fetch
 
-    def test_no_credential_is_unavailable_without_any_request(self):
-        with patch.object(usage, 'get_json') as fetch:
+    def test_no_credential_falls_back_to_cli_seam_and_reports_its_reason(self):
+        # No Pi credential: grok_build must consult the explicit CLI fallback
+        # seam (mocked here for isolation -- see GrokCliFallbackTests and
+        # GrokCliBridgeIntegrationTests for the fallback's own behavior) and
+        # never performs a quota request when that seam has no token either.
+        with patch.object(usage, 'get_json') as fetch, \
+                patch.object(usage, 'grok_cli_fallback_token', return_value=(None, 'no cli session')) as cli:
             result = usage.grok_build({})
         fetch.assert_not_called()
-        self.assertEqual(result, {'status': 'unavailable', 'reason': 'Log in to grok-build in Pi.'})
+        cli.assert_called_once_with()
+        self.assertEqual(result, {'status': 'unavailable', 'reason': 'no cli session'})
 
     def test_non_oauth_credential_is_unavailable(self):
-        with patch.object(usage, 'get_json') as fetch:
+        with patch.object(usage, 'get_json') as fetch, \
+                patch.object(usage, 'grok_cli_fallback_token', return_value=(None, 'no cli session')):
             result = usage.grok_build({'grok-build': {'type': 'api_key', 'key': 'x'}})
         fetch.assert_not_called()
         self.assertEqual(result['status'], 'unavailable')
 
-    def test_expired_oauth_does_not_refresh_or_request(self):
+    def test_expired_pi_oauth_does_not_refresh_request_or_fall_back_to_cli(self):
+        # A present-but-expired Pi credential is a deliberate Pi-side login,
+        # not an absence of one: it must not silently swap to the CLI session.
         auth = {'grok-build': {'type': 'oauth', 'access': GROK_JWT, 'expires': 1}}
-        with patch.object(usage, 'get_json') as fetch:
+        with patch.object(usage, 'get_json') as fetch, patch.object(usage, 'grok_cli_fallback_token') as cli:
             result = usage.grok_build(auth)
         fetch.assert_not_called()
+        cli.assert_not_called()
         self.assertEqual(result['status'], 'unavailable')
         self.assertIn('grok@example.test', result['reason'])
         self.assertIn('never refreshes', result['reason'])
@@ -154,6 +172,157 @@ class GrokBuildAdapterTests(unittest.TestCase):
         with patch.dict(usage.os.environ, {'GROK_CLIENT_NAME': 'custom-client'}):
             _, fetch = self.fetch(user_payload(), billing_payload())
         self.assertEqual(fetch.call_args_list[0].args[1]['x-grok-client-identifier'], 'custom-client')
+
+
+class GrokCliFallbackTests(unittest.TestCase):
+    """Isolated tests for the explicit, mockable `grok_build_token` seam
+    decision logic. The CLI fallback itself (`grok_cli_fallback_token`'s real
+    subprocess/file behavior) is covered separately in
+    `GrokCliBridgeIntegrationTests`.
+    """
+
+    def test_present_valid_pi_credential_skips_the_cli_fallback_entirely(self):
+        with patch.object(usage, 'grok_cli_fallback_token') as cli:
+            access, email, source, error = usage.grok_build_token(GROK_AUTH)
+        cli.assert_not_called()
+        self.assertEqual((access, email, source, error), (GROK_JWT, 'grok@example.test', 'pi-auth.json', None))
+
+    def test_absent_pi_credential_uses_the_cli_fallback_token(self):
+        cli_jwt = fake_jwt({'email': 'cli-session@example.test'}, canary='CLICANARY')
+        with patch.object(usage, 'grok_cli_fallback_token', return_value=(cli_jwt, None)) as cli:
+            access, email, source, error = usage.grok_build_token({})
+        cli.assert_called_once_with()
+        self.assertEqual((access, email, source, error), (cli_jwt, 'cli-session@example.test', 'grok-cli-session', None))
+
+    def test_cli_fallback_failure_is_reported_without_a_quota_request(self):
+        with patch.object(usage, 'get_json') as fetch, \
+                patch.object(usage, 'grok_cli_fallback_token', return_value=(None, 'No Grok CLI session found.')):
+            result = usage.grok_build({'grok-build': {'type': 'api_key', 'key': 'irrelevant'}})
+        fetch.assert_not_called()
+        self.assertEqual(result, {'status': 'unavailable', 'reason': 'No Grok CLI session found.'})
+
+    def test_cli_fallback_token_feeds_the_real_quota_request(self):
+        cli_jwt = fake_jwt({'email': 'cli-session@example.test'}, canary='CLICANARY2')
+        with patch.object(usage, 'grok_cli_fallback_token', return_value=(cli_jwt, None)), \
+                patch.object(usage, 'get_json', side_effect=[user_payload(email='cli-session@example.test'),
+                                                             billing_payload()]) as fetch:
+            result = usage.grok_build({})
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['credential_source'], 'grok-cli-session')
+        self.assertEqual(fetch.call_args_list[0].args[1]['Authorization'], 'Bearer ' + cli_jwt)
+        self.assertNotIn('CLICANARY2', json.dumps(result))
+
+
+class GrokCliBridgeIntegrationTests(unittest.TestCase):
+    """Exercises the real `grok_cli_fallback_token` subprocess/file-reading
+    path against a temp `GROK_HOME`, with `GROK_OAUTH_BRIDGE` pointed at a
+    throwaway bridge script under a temp directory. Nothing here is mocked:
+    this is the "temp GROK_HOME/HOME" isolation the integration gap asked
+    for, proving the seam's actual plumbing (argv, env passthrough, stdout
+    capture, non-zero exit handling, timeout) rather than just its call
+    signature.
+
+    The throwaway script re-implements the sibling's documented, narrow
+    contract (scripts/grok_oauth.py / docs/research/grok-pi-auth-implementation.md
+    in the feat/grok-pi-auth worktree: fixed entry key, auth_mode == "oidc",
+    expires_at skew, print bare token or exit non-zero) because that real
+    script is owned by a sibling change not yet merged into this branch; it
+    is a test double for *this test file's own* subprocess-integration
+    assertions, not a copy shipped in the adapter.
+    """
+
+    BRIDGE_SOURCE = '''#!/usr/bin/env python3
+import json, os, sys, time
+from pathlib import Path
+home = Path(os.environ.get("GROK_HOME") or os.path.expanduser("~/.grok"))
+try:
+    data = json.loads((home / "auth.json").read_text())
+except (OSError, ValueError):
+    sys.exit("no auth file")
+entry = data.get("https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828")
+if not isinstance(entry, dict) or entry.get("auth_mode") != "oidc" or not entry.get("key"):
+    sys.exit("no session")
+expires = entry.get("expires_at")
+if isinstance(expires, (int, float)) and expires <= time.time():
+    sys.exit("expired")
+print(entry["key"])
+'''
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.grok_home = root / 'grok-home'
+        self.grok_home.mkdir()
+        self.bridge = root / 'bridge.py'
+        self.bridge.write_text(self.BRIDGE_SOURCE)
+        self.bridge.chmod(self.bridge.stat().st_mode | stat.S_IEXEC)
+
+    def write_auth(self, **entry_overrides):
+        entry = {'key': 'cli-session-token-value', 'auth_mode': 'oidc'}
+        entry.update(entry_overrides)
+        (self.grok_home / 'auth.json').write_text(json.dumps(
+            {'https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828': entry}))
+
+    def call(self):
+        with patch.dict(os.environ, {'GROK_HOME': str(self.grok_home), 'GROK_OAUTH_BRIDGE': str(self.bridge)}):
+            return usage.grok_cli_fallback_token()
+
+    def test_real_session_in_a_temp_home_yields_the_token(self):
+        self.write_auth()
+        token, reason = self.call()
+        self.assertEqual(token, 'cli-session-token-value')
+        self.assertIsNone(reason)
+
+    def test_missing_auth_file_in_temp_home_is_a_clean_failure(self):
+        token, reason = self.call()
+        self.assertIsNone(token)
+        self.assertTrue(reason)
+        self.assertNotIn('Traceback', reason)
+
+    def test_expired_session_in_temp_home_is_not_treated_as_a_token(self):
+        self.write_auth(expires_at=time.time() - 3600)
+        token, reason = self.call()
+        self.assertIsNone(token)
+        self.assertTrue(reason)
+
+    def test_wrong_auth_mode_in_temp_home_is_rejected(self):
+        self.write_auth(auth_mode='legacy')
+        token, reason = self.call()
+        self.assertIsNone(token)
+
+    def test_bridge_script_absent_is_unavailable_not_an_exception(self):
+        missing = Path(self.tmp.name) / 'does-not-exist.py'
+        with patch.dict(os.environ, {'GROK_HOME': str(self.grok_home), 'GROK_OAUTH_BRIDGE': str(missing)}):
+            token, reason = usage.grok_cli_fallback_token()
+        self.assertIsNone(token)
+        self.assertTrue(reason)
+
+    DEFAULT_BRIDGE = Path(__file__).resolve().parents[2] / 'bin' / 'grok-oauth-token'
+
+    @unittest.skipUnless(DEFAULT_BRIDGE.exists(),
+                         'sibling feat/grok-pi-auth bridge not merged into this branch yet')
+    def test_default_bridge_path_resolves_to_the_merged_sibling_script(self):
+        """Once bin/grok-oauth-token (feat/grok-pi-auth) lands on this branch,
+        the default (no GROK_OAUTH_BRIDGE override) path must find it -- the
+        real coordination point between the two changes, not just the override
+        env var used everywhere else in this file for isolation.
+        """
+        with patch.dict(os.environ, {'GROK_OAUTH_BRIDGE': ''}, clear=False):
+            self.assertEqual(usage.grok_cli_bridge_path(), self.DEFAULT_BRIDGE)
+
+    def test_full_adapter_path_through_the_real_bridge_and_temp_home(self):
+        """End-to-end: no Pi credential, real subprocess reads a real (temp)
+        GROK_HOME/auth.json, and the resulting token drives a (mocked) quota
+        request -- the only remaining mock is the network call itself.
+        """
+        self.write_auth(key=GROK_JWT)
+        with patch.dict(os.environ, {'GROK_HOME': str(self.grok_home), 'GROK_OAUTH_BRIDGE': str(self.bridge)}), \
+                patch.object(usage, 'get_json', side_effect=[user_payload(), billing_payload()]) as fetch:
+            result = usage.grok_build({})
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['credential_source'], 'grok-cli-session')
+        self.assertEqual(fetch.call_args_list[0].args[1]['Authorization'], 'Bearer ' + GROK_JWT)
 
 
 class GrokBuildNormalizeAndRenderTests(unittest.TestCase):

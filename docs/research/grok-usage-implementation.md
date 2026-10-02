@@ -161,3 +161,109 @@ llm-usage --provider grok-build
 llm-usage --provider grok-build --json
 curl -s http://127.0.0.1:8788/_usage | jq .providers.'"grok-build"'
 ```
+
+## Follow-up: Grok CLI session fallback (parent check-in, same day)
+
+Parent flagged an integration gap before merge: the sibling `feat/grok-pi-auth`
+branch (worktree `/home/gustaf/.cache/grok-research/worktrees/auth`, commit
+`65b2205`) supports **two** credential paths for `grok-build` — Pi's own native
+OAuth login (`/login grok-build`, stored in `auth.json`, as assumed above) *and* a
+read-only bridge to an **existing `grok login --device-auth`** CLI session via
+`scripts/grok_oauth.py` / `bin/grok-oauth-token` (reads `$GROK_HOME/auth.json`,
+default `~/.grok/auth.json`; fixed, hardcoded issuer/client id; never writes or
+refreshes). The actual user already has the CLI session, not (yet) a Pi login, so
+the original adapter above, which only ever checked `auth.json`, would report
+`unavailable` for them even though a perfectly good read-only token exists.
+
+### What changed
+
+`grok_build()` in both files now resolves its token through a new
+`grok_build_token(auth)` helper, tried in this strict order:
+
+1. **Pi's `auth.json["grok-build"]`**, exactly as before — if present with
+   `type: "oauth"` and `access`, it is used (and its own `expires` is still
+   honored; an *expired* Pi credential does **not** fall through to the CLI
+   session, since a present-but-expired Pi credential means the user
+   deliberately chose the Pi login path and the honest answer is "log back in
+   to Pi", not a silent swap to a different account/session).
+2. **The Grok CLI's own session**, only when no Pi credential is present at
+   all, via a new explicit, mockable seam: `grok_cli_fallback_token()`. This
+   shells out to the sibling-owned bridge script (`bin/grok-oauth-token`,
+   located via `Path(__file__).resolve().parent[.parent]/'bin'/'grok-oauth-token'`,
+   overridable with `GROK_OAUTH_BRIDGE` for tests/alt installs), captures only
+   its stdout (the bare token) on a zero exit code, and on any failure (missing
+   script, non-zero exit, timeout, no stdout) returns `(None, reason)` where
+   `reason` is the bridge's own short, non-secret stderr message (length-capped
+   to 300 chars as a defensive bound, never a stack trace or file content per
+   that script's documented contract).
+
+Both paths are still strictly read-only and still never refresh anything —
+the bridge script's own contract (documented in
+`docs/research/grok-pi-auth-implementation.md` on the sibling branch) is that
+it never writes to or refreshes `$GROK_HOME/auth.json`; the Grok CLI remains
+its sole owner. This file calls it fresh on every quota probe, same as Pi's
+own `!command` resolution does, so a given refresh token is still only ever
+rotated by one process. A successful result's `credential_source` field now
+records which path supplied the token (`"pi-auth.json"` or
+`"grok-cli-session"`) for observability, without ever surfacing the token
+itself.
+
+### No change to routing or quota-enabling guarantees
+
+Still no write path, no refresh, and — critically — still no quota
+invention: an unresolved token from *either* source produces the same
+`{"status": "unavailable", ...}` shape as before, and a resolved token still
+feeds the exact same `GET /v1/user` + `GET /v1/billing` probe and the same
+`used_percent: None`-on-unknown handling. Nothing here changes which
+providers are eligible for routing (`routes.json`/`classes.json` are still
+untouched by this change, and still unaffected by this follow-up).
+
+### Test isolation for the fallback
+
+Per the parent's explicit instruction, isolation was preserved by **adding**
+a seam to mock, not by removing the subprocess functionality to make testing
+easier:
+
+- `GrokCliFallbackTests` (both test files): isolated unit tests that mock
+  `grok_cli_fallback_token`/`grok_build_token` entirely, covering the
+  decision order (Pi credential present → CLI never even consulted;
+  absent → CLI seam called exactly once; its result feeds the real quota
+  call).
+- `GrokCliBridgeIntegrationTests` (both test files, new): deliberately
+  **does not** mock `grok_cli_fallback_token`. It points `GROK_OAUTH_BRIDGE`
+  at a throwaway script under a `tempfile.TemporaryDirectory()` and sets
+  `GROK_HOME` to a temp directory alongside it, then calls the real function,
+  so the actual subprocess invocation, argv, env inheritance, stdout capture,
+  non-zero-exit handling, and "script missing" handling are all genuinely
+  exercised — never against any real `$HOME`. The throwaway script
+  re-implements the sibling's documented, narrow contract (fixed entry key
+  `https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828`, `auth_mode ==
+  "oidc"`, `expires_at` skew, bare token on stdout or non-zero exit) as a test
+  double for this file's own subprocess-plumbing assertions, since the real
+  `scripts/grok_oauth.py` lives on the not-yet-merged sibling branch and this
+  change must still only commit its own files.
+- `test_default_bridge_path_resolves_to_the_merged_sibling_script` (both test
+  files): `@unittest.skipUnless(...)`-guarded on the real
+  `bin/grok-oauth-token` existing at its default (no-override) path. It is
+  skipped today (two skips, confirmed below) and was manually verified to
+  **pass** by temporarily copying the sibling's actual
+  `scripts/grok_oauth.py`/`bin/grok-oauth-token` from the `feat/grok-pi-auth`
+  worktree into this one, running the full suite, confirming green, then
+  deleting the copies before committing (never part of this branch's history
+  or working tree) — this is the "coordinate the helper path with the
+  sibling worktree" verification, without owning or shipping their files.
+
+### Commands and results
+
+```sh
+python3 -m unittest tests.unit.test_grok_usage -v      # 32 tests, 1 skip, OK
+python3 -m unittest tests.unit.test_proxy_grok -v       # 18 tests, 1 skip, OK
+python3 -m unittest discover -s tests/unit -t tests/unit # 224 tests, 3 skips (1 pre-existing + these 2), OK
+```
+
+Also spot-checked: ran the full suite once more without any env overrides on
+this development host (which does have a real `~/.grok/auth.json` session) and
+grepped output for the real account email — no match, confirming none of the
+non-integration tests reach the real filesystem/network now that the fallback
+seam is mocked everywhere except the dedicated temp-`GROK_HOME` integration
+class.
