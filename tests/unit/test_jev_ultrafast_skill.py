@@ -81,8 +81,9 @@ class DoctorTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
             self.assertFalse(payload["checkout"]["present"])
-            self.assertFalse(payload["ready_for_inspect"])
-            self.assertFalse(payload["ready_for_execute"])
+            self.assertFalse(payload["prerequisites_present_for_inspect"])
+            self.assertFalse(payload["prerequisites_present_for_execute"])
+            self.assertEqual(payload["browser_connectivity"], "not_verified (doctor.py makes no live browser/CDP call; only checks binaries/profile presence)")
             self.assertFalse(payload["credentials"]["typesafe_key_configured"])
 
     def test_doctor_never_prints_key_value(self):

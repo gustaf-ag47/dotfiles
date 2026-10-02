@@ -116,11 +116,19 @@ def build_report(env: dict) -> dict:
             "mode_ok": state_dir_mode_ok(state_dir),
         },
     }
-    ready_for_inspect = cstatus["present"] and cstatus["pinned"] and vstatus["has_python"] and report["tools"]["chrome"]
-    ready_for_execute = ready_for_inspect and report["credentials"]["typesafe_key_configured"]
-    report["ready_for_inspect"] = ready_for_inspect
-    report["ready_for_execute"] = ready_for_execute
-    report["ready_for_type_text"] = ready_for_execute and report["credentials"]["text_model_api_key_configured"]
+    # "clean" (not dirty) is required, not just a matching HEAD: a dirty tree
+    # at the pinned commit can still run code that doesn't match the pin.
+    clean_pin = cstatus["present"] and cstatus["pinned"] and cstatus["dirty"] is False
+    prerequisites_for_inspect = clean_pin and vstatus["has_python"] and report["tools"]["chrome"]
+    prerequisites_for_execute = prerequisites_for_inspect and report["credentials"]["typesafe_key_configured"]
+    # This is a prerequisite check only -- doctor.py makes no live browser or
+    # network call, so actual Chrome/CDP connectivity is never verified here.
+    report["browser_connectivity"] = "not_verified (doctor.py makes no live browser/CDP call; only checks binaries/profile presence)"
+    report["prerequisites_present_for_inspect"] = prerequisites_for_inspect
+    report["prerequisites_present_for_execute"] = prerequisites_for_execute
+    report["prerequisites_present_for_type_text"] = (
+        prerequisites_for_execute and report["credentials"]["text_model_api_key_configured"]
+    )
     return report
 
 
@@ -146,9 +154,10 @@ def main(argv: list[str]) -> int:
     s = report["state_dir"]
     print(f"State dir: {s['path']} exists={s['exists']} mode_ok={s['mode_ok']}")
     print()
-    print(f"ready_for_inspect:  {report['ready_for_inspect']}")
-    print(f"ready_for_execute:  {report['ready_for_execute']} (TypeSafe key required)")
-    print(f"ready_for_type_text: {report['ready_for_type_text']} (also needs TEXT_MODEL_API_KEY)")
+    print(f"browser_connectivity: {report['browser_connectivity']}")
+    print(f"prerequisites_present_for_inspect:  {report['prerequisites_present_for_inspect']} (binaries/pin/clean-tree only, not a live check)")
+    print(f"prerequisites_present_for_execute:  {report['prerequisites_present_for_execute']} (also needs TypeSafe key)")
+    print(f"prerequisites_present_for_type_text: {report['prerequisites_present_for_type_text']} (also needs TEXT_MODEL_API_KEY)")
     if not c["present"]:
         print("\nNext: run scripts/setup.sh to clone the pinned checkout.")
     elif not v["has_python"]:

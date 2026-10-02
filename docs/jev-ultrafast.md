@@ -36,12 +36,17 @@ calls. `run.py`/`doctor.py` never print the key value; it is passed to the `uv r
 through the environment, never argv.
 
 `TYPE_TEXT` (typing a value into a field) needs a **second, separately configured** OpenAI-compatible
-text model (`TEXT_MODEL_API_KEY`, optional `TEXT_MODEL_BASE_URL`/`TEXT_MODEL`). This skill does not
-default to, assume, or silently route to OpenRouter or any Pi-managed model — see
-[`references/text-model.md`](../config/pi/skills/jev-ultrafast/references/text-model.md) for the
+text model: `TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`, and `TEXT_MODEL` must **all three be set
+together, or none at all**. Upstream's own `field_text()` (`model.py`) silently defaults the base
+URL/model to `https://api.deepseek.com/v1`/`deepseek-chat` the moment a key alone is present, which
+would otherwise make a real, billed call to a specific provider the user never explicitly named; `run.py
+--execute` detects a partial config (e.g. key set, base URL/model not) and refuses to run at all rather
+than let that default fire, and separately requires the base URL to be HTTPS with no embedded
+credentials. With **none** of the three set, `--execute` still proceeds for CLICK/SELECT/WAIT/DONE-only
+goals, with an explicit warning that any `TYPE_TEXT` step will fail loudly. See
+[`references/text-model.md`](../config/pi/skills/jev-ultrafast/references/text-model.md) for the full
 reasoning and the explicit follow-up this leaves for the parent (a possible future Pi-OAuth-backed
-shim). `doctor.py`/`run.py` report whether this is configured; `run.py --execute` proceeds without it
-(only `TYPE_TEXT` steps fail at the point they'd be needed) rather than blocking the whole run.
+shim) — not attempted in this closeout.
 
 ## Execution bounds actually implemented
 
@@ -65,31 +70,48 @@ shim). `doctor.py`/`run.py` report whether this is configured; `run.py --execute
   logged-in session the user doesn't want touched should only be used with per-step approval, never
   `--auto-approve`.
 - The redacted trace written to `${XDG_STATE_HOME:-$HOME/.local/state}/jev-ultrafast/traces/*.json`
-  contains operation, truncated element label, probability/confidence, latency, and a SHA-256 of the
-  goal text (not the goal itself) — never raw DOM/page text, request/response bodies, or credentials.
+  contains only operation, probability/confidence, latency, whether the page changed, whether *some*
+  text was entered (never the text itself), and a SHA-256 of the goal text (not the goal itself) —
+  never an element label, a URL with its query string, a page title, request/response bodies, or
+  credentials. Written atomically at 0600 in a 0700 directory.
 
 ## What was verified in this environment
 
-This worktree has **no network access authorization** and this implementation did not clone upstream,
-run `uv sync`, install Browser Harness, or make any TypeSafe/text-model call. Verified offline:
+Offline (no network, no credentials read beyond a boolean presence check, no paid calls), every commit
+on this branch:
 
-- `python3 -m unittest tests.unit.test_jev_ultrafast_skill -v` — 15/15 passed (see exact output in
+- `python3 -m unittest tests.unit.test_jev_ultrafast_skill tests.unit.test_jev_ultrafast_closeout -v` —
+  all passing (see exact output and count in
   [`docs/research/jev-ultrafast-implementation.md`](research/jev-ultrafast-implementation.md)). Covers:
-  SKILL.md frontmatter/discovery, script syntax (`py_compile` + `bash -n`), `doctor.py`'s missing-checkout
-  report, that neither `doctor.py` nor `run.py` ever prints a configured key's value, `PI_JEV_KEY_FILE`
-  override resolution, `run.py`'s dry-run/`--inspect`/`--execute` argument contract, step/time bound
-  rejection above the hard caps, and refusal to `--execute` without a TypeSafe key — all before any
-  subprocess or network call would occur.
-- Manual runs of `doctor.py` and `run.py` (no flags) against this host's real environment: correctly
-  detected the existing TypeSafe key at the shared canonical path (configured by the earlier shadow
-  classifier pilot), reported "not ready" for the (not-yet-cloned) pinned checkout, found `git`/`uv`/
-  `node`/`chromium` on `PATH`, and printed no secret value.
-- `git diff --check` clean (see implementation doc).
+  SKILL.md frontmatter/discovery, script syntax (`py_compile` + `bash -n`), `doctor.py`'s readiness
+  report (including that it never claims verified browser connectivity), that neither `doctor.py` nor
+  `run.py` ever prints a configured key's value, `run.py`'s dry-run/`--inspect`/`--execute` argument
+  contract, non-finite (`NaN`/`inf`) and out-of-range step/time bound rejection, http(s)-only/
+  no-embedded-credential URL validation, the text-model all-three-or-none routing rule (a bare
+  `TEXT_MODEL_API_KEY` is refused, never silently reaches upstream's DeepSeek default), a hard-walled
+  subprocess timeout that kills a hanging child's whole process group, trace metadata/permissions
+  (0600 file in a 0700 dir, atomic write, no label/URL-query/title/goal text), and dirty-pinned-checkout
+  rejection (`setup.sh`'s `verify_pinned_clean()` sourced directly against local git fixtures, and
+  `run.py`'s own independent `checkout_ready()` dirty check) — all offline, no real upstream clone
+  needed for any of it.
+- `git diff --check` clean on every commit.
 
-**Not verified**: a real `scripts/setup.sh` clone/`uv sync`, a real Browser Harness/Chrome connection, a
-real TypeSafe or text-model call, or a real bounded `--execute` run end-to-end. That requires network
-access and a live paid TypeSafe key dispatch, which is explicitly the parent's call per the handover
-brief ("Parent owns review, integration, live install and any paid smoke tests").
+Live, network-authorized, on this host (second commit on this branch — see
+[`docs/research/jev-ultrafast-implementation.md`](research/jev-ultrafast-implementation.md) for the full
+write-up): `scripts/setup.sh` ran for real — cloned the actual upstream repo at the pinned commit and
+ran `uv sync` cleanly. `doctor.py` correctly reported readiness and found the pre-existing shared
+TypeSafe key without printing it. `run.py --inspect` surfaced a clean upstream error tracing to Chrome's
+`chrome://inspect` remote-debugging **consent toggle never having been enabled** on this host's regular
+Chromium profile — a one-time interactive step upstream itself documents. That toggle flips the
+profile's CDP/debugging posture and was deliberately **not** flipped automatically (would mutate the
+user's regular browser without consent); the Chromium window Browser Harness launched during diagnosis
+was closed immediately once the cause was isolated.
+
+**Still not verified**: a real TypeSafe or text-model call, or a full bounded `--execute` run end-to-end
+(predict → approval prompt → act → observe). Both need the one-time Chrome consent step above, a live
+paid TypeSafe key dispatch, and (for `TYPE_TEXT`) a fully-configured text-model backend — explicitly the
+parent's call per the handover brief ("Parent owns review, integration, live install and any paid smoke
+tests").
 
 ## Open items for the parent
 

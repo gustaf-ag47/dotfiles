@@ -3,43 +3,46 @@
 
 Not meant to be invoked directly; run.py launches this as a subprocess with
 TYPESAFE_API_KEY / TEXT_MODEL_API_KEY inherited through the environment, never
-through argv. Implements the step-by-step approval gate this skill requires on
-top of upstream's Agent class: every CLICK/TYPE_TEXT/SELECT decision is printed
-and confirmed (unless --auto-approve) before upstream's own .command("act") is
+through argv, and always under its own hard wall-clock timeout (see
+_bounded.run_bounded) that kills this process's entire group on expiry --
+this script's own loop-level bounds below are a second, inner layer, not the
+only one.
+
+Implements the step-by-step approval gate this skill requires on top of
+upstream's Agent class: every CLICK/TYPE_TEXT/SELECT decision is printed and
+confirmed (unless --auto-approve) before upstream's own .command("act") is
 called. DONE/BLOCKED never mutate the page and are never prompted.
 
-Only ever prints: operation, a truncated element label, confidence, latency,
-URL/title. Never prints raw page text, the TypeSafe/text-model request or
-response body, or any credential.
+Every *prediction attempt* counts against --max-steps, not only an approved,
+executed action -- an unapproved or non-mutating decision (DONE/BLOCKED,
+disapproval) still costs one billed TypeSafe call and must not let the loop
+keep calling predict() forever.
+
+Exit code is never a bare 0/1 "success/fail": see _bounded.EXIT_* and
+STATUS_FOR_EXIT_CODE. Only ever prints: operation, confidence, latency,
+redacted URL. Never prints a raw traceback or an upstream exception's full
+text (see _bounded.safe_error_text); never writes an element label, a raw
+URL/title, or the goal text to the trace file (see _trace.py).
 """
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
 
+from _bounded import (
+    EXIT_BLOCKED,
+    EXIT_DONE,
+    EXIT_ERROR,
+    EXIT_NOT_APPROVED,
+    EXIT_STEP_BUDGET_EXHAUSTED,
+    EXIT_TIME_BUDGET_EXHAUSTED,
+    safe_error_text,
+)
+import _trace
+
 from jev_ultrafast import Agent  # noqa: E402  (installed in this venv by uv sync)
-
-
-def truncate(label: str, limit: int = 80) -> str:
-    label = label or ""
-    return label if len(label) <= limit else label[: limit - 1] + "\u2026"
-
-
-def redacted_step(step: dict) -> dict:
-    return {
-        "step": step.get("step"),
-        "operation": step.get("operation"),
-        "action_label": truncate(step.get("action")),
-        "probability": step.get("probability"),
-        "confidence": step.get("confidence"),
-        "latency_ms": step.get("latency_ms"),
-        "text_entered": step.get("text") is not None,  # presence only, never the value
-        "page_changed": step.get("page_changed"),
-        "elapsed_ms": step.get("elapsed_ms"),
-    }
 
 
 def main(argv: list[str]) -> int:
@@ -52,76 +55,80 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--trace-path", required=True)
     args = parser.parse_args(argv)
 
-    trace = {
-        "schema": "jev-ultrafast-trace.v1",
-        "url": args.url,
-        "goal_sha256_only": None,  # goal text itself is not written to the trace
-        "max_steps": args.max_steps,
-        "max_seconds": args.max_seconds,
-        "auto_approve": args.auto_approve,
-        "steps": [],
-        "final_status": None,
-        "final_url": None,
-        "final_title": None,
-    }
-    import hashlib
-
-    trace["goal_sha256_only"] = hashlib.sha256(args.goal.encode("utf-8")).hexdigest()
-
+    trace = _trace.build_trace(
+        url=args.url, goal=args.goal, max_steps=args.max_steps, max_seconds=args.max_seconds,
+        auto_approve=args.auto_approve,
+    )
     deadline = time.monotonic() + args.max_seconds
+    predict_count = 0
+    exit_code = EXIT_ERROR
+
     try:
         with Agent(args.url, args.goal) as agent:
-            print(f"Observed: {agent.state['page']['url']!r} ({agent.state['page']['title']!r})", file=sys.stderr)
+            print(f"Observed: {_trace.redact_url(agent.state['page']['url'])!r}", file=sys.stderr)
             while True:
                 if agent.state["status"] in {"done", "blocked"}:
+                    exit_code = EXIT_DONE if agent.state["status"] == "done" else EXIT_BLOCKED
                     break
-                if len(agent.state["history"]) >= args.max_steps:
-                    print(f"Stopped: reached --max-steps={args.max_steps}", file=sys.stderr)
+                if predict_count >= args.max_steps:
+                    exit_code = EXIT_STEP_BUDGET_EXHAUSTED
                     break
                 if time.monotonic() >= deadline:
-                    print(f"Stopped: reached --max-seconds={args.max_seconds}", file=sys.stderr)
+                    exit_code = EXIT_TIME_BUDGET_EXHAUSTED
                     break
 
+                # Count the attempt before dispatch: a TypeSafe call that was
+                # sent still bounds the budget even if its result is never
+                # approved or never becomes a mutating action.
+                predict_count += 1
                 agent.command("predict")
                 decision = agent.state["decision"]
                 if decision is None:
+                    exit_code = EXIT_ERROR
                     break
                 op = decision["operation"]
                 print(
-                    f"Decision: operation={op} choice={decision['choice']!r} "
+                    f"Decision {predict_count}/{args.max_steps}: operation={op} "
                     f"confidence={decision['confidence']:.3f} latency_ms={decision['latency_ms']}",
                     file=sys.stderr,
                 )
 
                 mutating = op not in {"DONE", "BLOCKED"}
                 if mutating and not args.auto_approve:
+                    # Shown only on the interactive terminal, never persisted
+                    # to the trace file.
                     reply = input(f"Approve {op} on {decision['choice']!r}? [y/N] ").strip().lower()
                     if reply != "y":
-                        print("Not approved; stopping.", file=sys.stderr)
+                        exit_code = EXIT_NOT_APPROVED
                         break
 
                 agent.command("act", {"fingerprint": agent.state["page"]["fingerprint"]})
                 if agent.state["history"]:
-                    trace["steps"].append(redacted_step(agent.state["history"][-1]))
+                    trace["steps"].append(_trace.redact_step(agent.state["history"][-1], predict_count))
 
             trace["final_status"] = agent.state["status"]
-            trace["final_url"] = agent.state["page"]["url"]
-            trace["final_title"] = agent.state["page"]["title"]
-            print(
-                f"Final: status={agent.state['status']} url={agent.state['page']['url']!r} "
-                f"title={agent.state['page']['title']!r}",
-                file=sys.stderr,
-            )
-            print(
-                "NOTE: a 'done' status is Jev's own belief, not independent proof. "
-                "Verify the goal was actually achieved yourself.",
-                file=sys.stderr,
-            )
+            trace["final_url"] = _trace.redact_url(agent.state["page"]["url"])
+            trace["exit_code"] = exit_code
+            print(f"Final: status={agent.state['status']} predict_calls={predict_count}", file=sys.stderr)
+            if agent.state["status"] == "done":
+                print(
+                    "NOTE: DONE is Jev's own belief, not independent proof. Verify the goal yourself.",
+                    file=sys.stderr,
+                )
+            else:
+                print("NOTE: run did not complete; treat as incomplete, not success.", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 -- must never leak a raw traceback/body
+        trace["final_status"] = "error"
+        trace["exit_code"] = EXIT_ERROR
+        print(f"Error: {safe_error_text(exc)}", file=sys.stderr)
+        exit_code = EXIT_ERROR
     finally:
-        Path(args.trace_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.trace_path).write_text(json.dumps(trace, indent=2))
+        try:
+            _trace.write_trace_atomic(Path(args.trace_path), trace)
+        except OSError as exc:
+            print(f"Warning: could not write trace: {safe_error_text(exc)}", file=sys.stderr)
 
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
