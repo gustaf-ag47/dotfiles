@@ -1,0 +1,20 @@
+{
+  "schema": "jev-config.v1",
+  "mode": "observe",
+  "model": "jev-1.13.0",
+  "rubricVersion": "task-class.v1",
+  "classes": ["interactive", "build", "research", "mechanical"],
+  "minConfidence": 0.6,
+  "timeoutMs": 3000,
+  "budget": {
+    "maxCallsPerDay": 100,
+    "maxCostPerDayUsd": 0.05
+  },
+  "cache": {
+    "ttlSeconds": 86400,
+    "maxEntries": 500
+  },
+  "costPerMillionInputUsd": 0.042,
+  "costOutputFree": true,
+  "_comment": "Shadow-mode Jev classifier config. mode is overridden at runtime by PI_JEV_MODE=off|observe. Never set mode to anything that applies routing changes; this helper has no 'apply' mode. Pricing per TypeSafe's own docs (docs.typesafe.ai), not Pi's bundled catalog which under-reports this route as free -- see docs/research/jev-helper-implementation.md. Per-call budget reservation is computed from a conservative worst-case byte bound (MAX_TASK_CHARS + exact rubric size), not configurable here -- see worstCaseRequestBytes() in config/pi/lib/jev.mjs. A config that fails validation (bad types, out-of-range numbers, unknown classes, timeoutMs above the hard 5000ms ceiling) makes every call abstain with status:'skipped' rather than silently falling back to defaults."
+}

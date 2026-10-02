@@ -1,0 +1,124 @@
+#!/usr/bin/env node
+// Shadow-mode Jev (TypeSafe System One) task classifier CLI.
+//
+// Usage:
+//   bin/jev-classify --task-stdin --source delegate   # reads task text on stdin
+//   bin/jev-classify --status                          # read-only status, no classification
+//
+// Contract (see docs/research/jev-helper-implementation.md and
+// docs/handover/implement-jev-helper.md):
+//   - Emits exactly one JSON object to stdout, nothing else.
+//   - Exit code 0 for every ordinary classification/skip/error outcome; the
+//     caller must never branch its own launch decision on this CLI's output
+//     or exit code beyond optional logging. Non-zero exit is reserved for
+//     CLI usage mistakes (unknown/invalid flags), not classification
+//     outcomes.
+//   - Reads only short task text from stdin (max 2000 chars, enforced again
+//     below at the raw-byte level before that). It never reads a task from a
+//     file path, never runs a command, and never accepts arbitrary files as
+//     input. It does read small local files unrelated to task content: the
+//     API key file and the JSON config file (see jev.mjs), plus its own
+//     local state (ledger/cache/budget) -- none of that is task data.
+//   - Default mode is "observe"; set PI_JEV_MODE=off to disable entirely.
+//     There is no flag or mode that applies a classification result to
+//     anything -- this tool only ever observes and reports.
+"use strict";
+
+import { classifyTask, getStatus } from "../config/pi/lib/jev.mjs";
+
+// Generous relative to MAX_TASK_CHARS (2000) so ordinary UTF-8 task text
+// never hits this ceiling; it exists only to bound how much stdin this
+// process will ever buffer, independent of the character-count check inside
+// classifyTask().
+const MAX_STDIN_BYTES = 8192;
+
+function usageError(message) {
+  process.stderr.write(`jev-classify: ${message}\n`);
+  process.stderr.write("usage: jev-classify --task-stdin [--source delegate|pi] | --status\n");
+  process.exit(2);
+}
+
+const KNOWN_SOURCES = new Set(["delegate", "pi"]);
+
+/** Reads stdin up to maxBytes. Returns `{ text }` on success or `{ overflow: true }` if the stream exceeded the bound. */
+async function readStdin(maxBytes) {
+  if (process.stdin.isTTY) return { text: "" };
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      process.stdin.destroy();
+      return { overflow: true };
+    }
+    chunks.push(chunk);
+  }
+  return { text: Buffer.concat(chunks).toString("utf8") };
+}
+
+function parseArgs(argv) {
+  const args = argv.slice(2);
+  const parsed = { status: false, taskStdin: false, source: "delegate" };
+  const consumed = new Set();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--status") {
+      parsed.status = true;
+      continue;
+    }
+    if (arg === "--task-stdin") {
+      parsed.taskStdin = true;
+      continue;
+    }
+    if (arg === "--source") {
+      const value = args[i + 1];
+      if (!KNOWN_SOURCES.has(value)) usageError('--source must be "delegate" or "pi"');
+      parsed.source = value;
+      consumed.add(i + 1);
+      i += 1;
+      continue;
+    }
+    if (consumed.has(i)) continue;
+    usageError(`unknown argument at position ${i}`); // never echo the argument's own text
+  }
+  return parsed;
+}
+
+async function main(argv) {
+  const parsed = parseArgs(argv);
+
+  if (parsed.status && parsed.taskStdin) usageError("--status and --task-stdin are mutually exclusive");
+
+  if (parsed.status) {
+    const status = getStatus({});
+    process.stdout.write(`${JSON.stringify(status)}\n`);
+    return;
+  }
+
+  if (!parsed.taskStdin) {
+    usageError("missing --task-stdin or --status");
+    return;
+  }
+
+  const read = await readStdin(MAX_STDIN_BYTES);
+  if (read.overflow) {
+    // Oversized input is rejected outright, never classified from a
+    // truncated prefix: a silently truncated task could change its meaning
+    // (e.g. losing a qualifying clause) without the caller knowing.
+    process.stdout.write(`${JSON.stringify({ status: "skipped", applied: false, reason: "task_too_long" })}\n`);
+    return;
+  }
+
+  const task = read.text.trim();
+  const result = await classifyTask({ task, source: parsed.source });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+main(process.argv).catch((err) => {
+  // Defensive only: classifyTask() itself never throws for ordinary failure
+  // modes. A throw here means something unexpected (e.g. a bug), so report
+  // the safest possible envelope rather than letting the caller see nothing.
+  process.stdout.write(`${JSON.stringify({ status: "error", applied: false, reason: "internal_error" })}\n`);
+  process.exitCode = 0;
+  void err;
+});
