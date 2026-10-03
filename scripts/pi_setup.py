@@ -39,6 +39,7 @@ def plan(agent, private, binary):
                   ('link', dependency, agent / 'node_modules/@earendil-works/pi-ai')]
     for source, target in [(ROOT / 'config/pi/extensions', agent / 'extensions'),
                            (ROOT / 'config/pi/lib', agent / 'lib'),
+                           (ROOT / 'config/pi/bin', agent / 'bin'),
                            (ROOT / 'config/pi/skills', agent / 'skills'),
                            (private / 'skills', agent / 'skills')]:
         for file in source_files(source):

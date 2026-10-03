@@ -1,7 +1,7 @@
 #!/bin/bash
 # Compatibility shim (2026-09-27): plain `pi` now routes Anthropic through
 # claude-token-proxy by itself via the global anthropic-pool extension
-# (config/pi/extensions/anthropic-pool.ts, linked by pi-link-extensions), so
+# (config/pi/extensions/anthropic-pool.ts, linked by pi-setup), so
 # this wrapper has nothing left to add. Kept only so existing loops that call
 # `pi-claude-sub` keep working; new scripts should call `pi` directly.
 #

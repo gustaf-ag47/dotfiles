@@ -50,6 +50,22 @@ class AdoptionTests(unittest.TestCase):
                 setup.rollback(next((root / 'state').glob('*/manifest.json')))
             self.assertEqual(target.read_text(), 'user edit after adoption')
 
+    def test_plan_links_agent_bin_from_config_pi_bin(self):
+        # pi-scratch lived only in ~/.pi/agent/bin for weeks (one disk failure
+        # from gone); the plan must cover config/pi/bin so adopted agent tools
+        # are provisioned like extensions, libs and skills.
+        self.assertTrue((setup.ROOT / 'config/pi/bin/pi-scratch').is_file())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = setup.pi_ai_path
+            setup.pi_ai_path = lambda binary: root / 'pi-ai'
+            try:
+                ops = setup.plan(root / 'agent', root / 'private', 'pi')
+            finally:
+                setup.pi_ai_path = original
+        targets = [dst for kind, _, dst in ops if kind == 'link']
+        self.assertIn(root / 'agent/bin/pi-scratch', targets)
+
     def test_source_enumeration_excludes_dependencies_and_keeps_siblings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

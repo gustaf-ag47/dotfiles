@@ -1,0 +1,188 @@
+#!/bin/bash
+set -euo pipefail
+
+MIN_FREE_GB="${PI_SCRATCH_MIN_FREE_GB:-5}"
+GC_AGE_HOURS="${PI_SCRATCH_GC_AGE_HOURS:-24}"
+
+fstype() { stat -f -c %T "$1" 2>/dev/null || echo unknown; }
+avail_gb() { df -BG --output=avail "$1" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+is_tmpfs() { case "$(fstype "$1")" in tmpfs | ramfs) return 0 ;; *) return 1 ;; esac; }
+
+pick_base() {
+	if [ -n "${PI_SCRATCH_BASE:-}" ]; then
+		mkdir -p "$PI_SCRATCH_BASE"
+		if is_tmpfs "$PI_SCRATCH_BASE"; then
+			echo "pi-scratch: WARNING PI_SCRATCH_BASE=$PI_SCRATCH_BASE is tmpfs" >&2
+		fi
+		printf '%s\n' "$PI_SCRATCH_BASE"
+		return 0
+	fi
+	local cand
+	for cand in /mnt/my_encrypted_nvme/sync/tmp/pi-scratch "$HOME/.cache/pi-scratch" "$HOME/.local/state/pi/scratch"; do
+		local parent="${cand%/*}"
+		[ -d "$parent" ] || continue
+		is_tmpfs "$parent" && continue
+		local free; free="$(avail_gb "$parent")"
+		[ -n "$free" ] && [ "$free" -ge "$MIN_FREE_GB" ] || continue
+		mkdir -p "$cand"
+		printf '%s\n' "$cand"
+		return 0
+	done
+	echo "pi-scratch: no persistent base with >= ${MIN_FREE_GB}G free; refusing tmpfs" >&2
+	return 1
+}
+
+cmd_base() { pick_base; }
+
+cmd_dir() {
+	local name="${1:?usage: pi-scratch dir <name>}"
+	local base; base="$(pick_base)" || return 1
+	local d="$base/$name"
+	mkdir -p "$d"
+	printf '%s\n' "$d"
+}
+
+cmd_worktree_base() {
+	local base; base="$(pick_base)" || return 1
+	mkdir -p "$base/worktrees"
+	printf '%s\n' "$base/worktrees"
+}
+
+PROC_CWDS=""
+load_proc_cwds() {
+	[ -n "$PROC_CWDS" ] && return 0
+	PROC_CWDS="$(for p in /proc/[0-9]*/cwd; do readlink "$p" 2>/dev/null; done | sort -u)"
+}
+held_by_process() {
+	local d="$1"
+	load_proc_cwds
+	# A live process whose cwd is this worktree (or below it) is using it. A
+	# mere mention in another process's args (a pi session name) is not.
+	printf '%s\n' "$PROC_CWDS" | grep -qE "^${d//./\\.}(/|$)" && return 0
+	return 1
+}
+
+worktree_dirty() {
+	local wt="$1"
+	[ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ] && return 0
+	return 1
+}
+
+# Fully merged into the base branch = its commits are all reachable from
+# origin/HEAD, so removing the checkout loses nothing. This never fetches, so it
+# is a local, side-effect-free read; a branch that only exists locally and is
+# ahead of base is deliberately NOT reclaimable (its commits are unpushed work).
+MERGE_KIND=""
+MERGED_PR_ANSWER=""
+declare -A MERGED_PR_HEADS=()
+
+merged_pr_heads() {
+	local wt="$1" br="$2"
+	local common; common="$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+	local key="$common|$br"
+	if [ -z "${MERGED_PR_HEADS[$key]+set}" ]; then
+		local heads
+		if heads="$(cd "$wt" && timeout 20 gh pr list --head "$br" --state merged --limit 20 --json headRefOid -q '.[].headRefOid' 2>/dev/null)"; then
+			MERGED_PR_HEADS[$key]="ok ${heads//$'\n'/ }"
+		else
+			MERGED_PR_HEADS[$key]="unreachable"
+		fi
+	fi
+	MERGED_PR_ANSWER="${MERGED_PR_HEADS[$key]}"
+}
+
+squash_merged_at_head() {
+	local wt="$1" br="$2"
+	command -v gh >/dev/null 2>&1 || return 1
+	local head; head="$(git -C "$wt" rev-parse HEAD 2>/dev/null)" || return 1
+	merged_pr_heads "$wt" "$br" || return 1
+	case "$MERGED_PR_ANSWER" in ok*) ;; *) return 1 ;; esac
+	local oid
+	for oid in ${MERGED_PR_ANSWER#ok}; do
+		[ "$oid" = "$head" ] && return 0
+	done
+	return 1
+}
+
+branch_fully_merged() {
+	local wt="$1"
+	MERGE_KIND=""
+	local br; br="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+	if [ "$br" = "HEAD" ]; then
+		worktree_dirty "$wt" && return 1
+		[ -n "$(git -C "$wt" for-each-ref --count=1 --contains HEAD refs/heads refs/remotes 2>/dev/null)" ] || return 1
+		MERGE_KIND="detached, commit kept by a ref"
+		return 0
+	fi
+	local root; root="$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null)" || return 1
+	worktree_dirty "$wt" && return 1
+	local basehead; basehead="$(git -C "$root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
+	git -C "$root" merge-base --is-ancestor HEAD "$basehead" 2>/dev/null && { MERGE_KIND="ancestor"; return 0; }
+	squash_merged_at_head "$wt" "$br" && { MERGE_KIND="squash-merged PR at HEAD"; return 0; }
+	return 1
+}
+
+cmd_gc() {
+	local force=0 dir
+	[ "${1:-}" = "--force" ] && force=1
+	local roots=(/tmp "$HOME/.cache/pi-scratch" "/mnt/my_encrypted_nvme/sync/tmp" "$HOME/.local/state/pi/scratch")
+	local default_base; default_base="$(pick_base 2>/dev/null || true)"
+	[ -n "$default_base" ] && roots+=("$default_base")
+	[ -n "${PI_SCRATCH_BASE:-}" ] && roots+=("$PI_SCRATCH_BASE")
+	git worktree list --porcelain >/dev/null 2>&1 || true
+	for base in "${roots[@]}"; do
+		[ -d "$base" ] || continue
+		for dir in "$base"/wt-* "$base"/worktrees/*; do
+			[ -d "$dir" ] || continue
+			git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
+			local reason=""
+			if held_by_process "$dir"; then
+				echo "keep  (in use)      $dir"
+				continue
+			fi
+			if branch_fully_merged "$dir"; then
+				reason="merged: $MERGE_KIND, clean, unheld"
+			else
+				echo "keep  (unmerged/dirty) $dir"
+				continue
+			fi
+			if [ "$force" = 1 ]; then
+				local common; common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+				if [ -n "$common" ] && git --git-dir="$common" worktree remove --force "$dir" 2>/dev/null; then
+					:
+				else
+					rm -rf "$dir"
+				fi
+				[ -n "$common" ] && git --git-dir="$common" worktree prune 2>/dev/null || true
+				echo "removed ($reason)   $dir"
+			else
+				echo "would remove ($reason)  $dir"
+			fi
+		done
+	done
+	[ "$force" = 1 ] || echo "pi-scratch gc: dry run; re-run with --force to act"
+}
+
+case "${1:-}" in
+base) shift; cmd_base "$@" ;;
+dir) shift; cmd_dir "$@" ;;
+worktree-base) shift; cmd_worktree_base "$@" ;;
+gc) shift; cmd_gc "$@" ;;
+*)
+	cat >&2 <<'USAGE'
+pi-scratch — pick a persistent scratch location (never tmpfs) and clean up after.
+
+  pi-scratch base            print/create a safe persistent base dir
+  pi-scratch dir <name>      print/create <base>/<name> for logs, diffs, temp files
+  pi-scratch worktree-base   print/create the base used for git worktrees
+  pi-scratch gc [--force]    list (or remove) stale/unheld worktrees under known bases
+
+Env: PI_SCRATCH_BASE (override), PI_SCRATCH_MIN_FREE_GB (default 5),
+     PI_SCRATCH_GC_AGE_HOURS (default 24).
+
+Use this instead of /tmp: the host /tmp is an 8G tmpfs and filling it crashes pi
+with ENOSPC (2026-09-23 incident).
+USAGE
+	exit 2
+	;;
+esac

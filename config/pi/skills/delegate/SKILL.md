@@ -91,7 +91,7 @@ notify : watching (nudges Work-Driver:speedup ci on idle)
 ```
 
 **In-band delivery (2026-10-03).** Parents that are pi sessions load
-`delegate-mailbox.ts` (via `pi-link-extensions`), which watches the mailbox from
+`delegate-mailbox.ts` (via `pi-setup`), which watches the mailbox from
 inside the session and injects records addressed to its `$TMUX_PANE` with
 `pi.sendMessage(..., {triggerTurn: true})`, auto-acking on delivery. Keystroke
 nudges below are the fallback for parents without the extension — measured

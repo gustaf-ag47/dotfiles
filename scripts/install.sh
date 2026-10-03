@@ -273,10 +273,13 @@ if [ -d "$DOTFILES/local/bin" ]; then
     done
 fi
 
-# Pi: symlink the allowlisted dotfiles extensions into ~/.pi/agent/extensions so
-# plain `pi` loads /usage, /failover and /goal. Idempotent; never touches auth.
+# Pi: provision extensions, libs, bin, and skills (public + private) into
+# ~/.pi/agent via pi-setup. File-level symlinks, reversible backups; never
+# touches auth.json, settings.json or runtime state. pi-setup replaced the
+# older pi-link-extensions, which linked extensions WITHOUT config/pi/lib and
+# so broke every new pi session on ../lib imports (2026-10-03).
 if command -v pi >/dev/null 2>&1; then
-    "$DOTFILES/bin/pi-link-extensions" || echo "  warning: pi-link-extensions reported conflicts" >&2
+    "$DOTFILES/bin/pi-setup" --apply || echo "  warning: pi-setup reported problems" >&2
 fi
 
 # Link Claude Code user configuration
