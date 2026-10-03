@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'bin/pi-link-extensions'
-ALLOWLIST = ('anthropic-pool.ts', 'delegate-mailbox.ts', 'grok-build.ts', 'jev.ts', 'jev-context.ts', 'goal.ts', 'llm-usage.ts', 'llm-failover.ts')
+ALLOWLIST = ('anthropic-pool.ts', 'delegate-mailbox.ts', 'merge-blockers.ts', 'grok-build.ts', 'jev.ts', 'jev-context.ts', 'goal.ts', 'llm-usage.ts', 'llm-failover.ts')
 
 
 class LinkExtensionsTests(unittest.TestCase):
