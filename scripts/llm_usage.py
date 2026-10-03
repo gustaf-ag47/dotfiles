@@ -113,7 +113,7 @@ def anthropic(_auth):
                 source = 'header observation (may be stale)'
             if used is not None or name in ('five_hour', 'seven_day', 'seven_day_overage_included'):
                 subject = 'Fable' if name == 'seven_day_overage_included' else 'quota'
-                unknown_reason = f'no current {subject} reading'
+                unknown_reason = f'no current {subject} reading on this proxy'
                 if token.get('quota_scope_denied'):
                     unknown_reason += '; quota API lacks user:profile'
                 forecast_key = {'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d_oi'}.get(name)
@@ -1000,7 +1000,7 @@ def routing_lines(routing, labels):
                 mark = paint('\u2715', '31')
                 detail = paint(row.get('reason') or 'ineligible', '31')
             if util is None:
-                detail += ' · ' + ('no current Fable reading' if key == 'oi' else 'no current quota reading')
+                detail += ' · ' + ('no current Fable reading on this proxy' if key == 'oi' else 'no current quota reading on this proxy')
             lines.append(f"      {mark} {account_name(row['fp'], labels):<{width}}  {left}  {detail}")
     return lines
 

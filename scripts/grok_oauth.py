@@ -98,7 +98,7 @@ def main() -> int:
         sys.exit("Grok CLI auth entry has no access token; run `grok login --device-auth`.")
 
     if _expired(entry):
-        sys.exit("Grok CLI OAuth session has expired; run `grok login --device-auth` again.")
+        sys.exit("Grok CLI OAuth session has expired; run `grok models` to refresh it, or `grok login --device-auth` if refresh fails.")
 
     print(token)
     return 0

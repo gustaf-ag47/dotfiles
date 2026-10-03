@@ -28,7 +28,9 @@ Two separate paths are supported:
   `bin/grok-oauth-token`, reading the current OAuth access token from
   `$GROK_HOME/auth.json` (default `~/.grok/auth.json`). No token is copied into
   Pi's credential store. The helper never refreshes or writes that file. Keep
-  the CLI session current; if it expires, use `grok login --device-auth` again.
+  the CLI session current; if it expires, run `grok models` to let the official
+  CLI refresh it without generating model output. Use `grok login --device-auth`
+  if refresh fails.
 - **Pi-managed login:** `/login` → Grok CLI → OAuth reuses Pi's built-in xAI
   device flow and refresh implementation, storing a separate credential under
   `grok-build` in Pi's `auth.json`. This avoids sharing a rotating refresh token

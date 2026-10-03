@@ -26,7 +26,14 @@ For the account requested by the operator, the live proxy exposed:
 - an older rate-limited Fable request in retained logs, followed by successful Opus
   traffic without a new Fable bucket observation.
 
-This explains the question marks without a new inference probe or changing credentials.
+The second host had a Fable reading for the same account while the laptop did not:
+proxies observe their own traffic, so a response received on one host does not refresh
+the other host's cache. Its running proxy was also older than the checkout. The
+coordinator updated it at an idle-connection boundary; normal subsequent Fable traffic
+provided a new timestamped reading. No cached value was copied between hosts or marked
+fresh merely because it was received from a second machine.
+
+This explains the question marks without a new inference probe or changing Anthropic credentials.
 Account-identifying evidence stays in the operator's private state, not this document.
 
 ## Reporting corrections

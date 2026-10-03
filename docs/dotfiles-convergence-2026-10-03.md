@@ -45,6 +45,15 @@ Neovim's installed plugin data may differ until `:Lazy restore` is performed in 
 safe editor-maintenance window. The source lock/specs are authoritative; this
 closeout does not silently replace plugin trees underneath active editors.
 
+Skrubben's proxy process was older than its checkout. It was restarted after two
+idle-connection checks to load the current Grok observer and header timestamps.
+The old process had no persistence file at the expected location, so the attempted
+pre-restart file backup was absent and the header cache initially became unknown.
+Normal subsequent Fable traffic repopulated a timestamped reading; the new process
+persists it, and a private post-upgrade state backup was taken. Future migrations
+from old versions should capture the live `/_usage` view as well as any on-disk
+state before restart. No missing observations were invented or copied across hosts.
+
 ## Follow-up completed
 
 After source/resource convergence, the laptop Fable `??` reading was traced to a
@@ -52,4 +61,21 @@ scope-denied quota endpoint plus a missing current Fable-specific header, not a
 percentage calculation failure. The reporter now keeps the unknown bucket visible,
 explains why, avoids a fabricated full allowance after resets, and distinguishes a
 real zero-usage observation from missing data. See [quota-reading semantics](llm-usage-unknown.md).
-No credentials, account settings, inference probes or routing policy were changed.
+No Anthropic credentials, account settings, inference probes or routing policy were changed.
+
+## Additional work that arrived during closeout
+
+A Google Code Assist proxy experiment was created in another pane while this closeout
+was running. Its work is preserved and pushed on `feat/google-code-assist-proxy`.
+It is **explicitly held, not an active master feature**: direct inference failed in
+the tested account/project configuration, and the optional CLI fallback is another
+agent process rather than faithful Pi tool execution. The service is disabled and
+the stale local model entry was backed up privately and removed. No new subscription,
+authorization workaround, or default-provider change was made. This is a documented
+experimental disposition, not silently abandoned uncommitted work.
+
+During runtime checks, the copied Grok access token on the PC had expired while the
+laptop's CLI had refreshed its own. Running the official `grok models` command on the
+PC refreshed successfully without a new login or an inference request. This is the
+recommended first recovery step for an expired CLI-backed token; interactive login
+is the fallback if refresh fails. Credentials are still host-local runtime data.
