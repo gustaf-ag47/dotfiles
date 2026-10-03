@@ -34,6 +34,31 @@ Minimum contents:
 - **Where to record findings** — an in-repo path it commits.
 - **Cost guidance** — and what to do when blocked instead of burning budget.
 
+## Coordination contract
+
+The child sends **one result or blocker**, never a chat ACK, receipt or relay:
+`<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
+Use a real commit SHA (at least 7 hex digits) or literal `none`, and a real path
+without spaces or angle-bracket placeholders. The watcher recognizes this line
+and the older `PARENT: … done|accepted` handshake. A BLOCKER or FAILED line
+ends automatic `/goal` retries; it does not claim that work passed.
+Keep reports in their designated path; never git-commit or push the operator Vault.
+At about 80% context, write a handover with remaining work, evidence and paths,
+report that pointer and stop. A parent verifies results against gates and CI itself.
+
+One coordinator owns the queue. Owners merge their own reviewed, green PRs unless
+the brief assigns merge ownership to the coordinator or declares a deploy hold;
+do not add an unassigned slot round trip. After delegation,
+decide and record rather than asking repeatedly. A genuine fork gets at most one
+question, at the top, with a recommended default. Before closing a PR as superseded,
+check local branches and worktrees for unpushed work. Before cancelling a deploy,
+read its current stage. Reviews block only for a failing Gate, an AGENTS.md violation
+or an evidenced defect. A brief must not invent policy: verify the enforcement
+reader before claiming a ratchet blocks.
+
+`pi-claude-sub` is a compatibility shim to `pi`, not a separate orchestration skill;
+the same coordination contract applies when it launches a child.
+
 ## Options
 
 | Flag | Purpose |
@@ -71,7 +96,7 @@ committing has done nothing.
 ## The feedback loop
 
 **Self-continue (2026-09-28).** Briefed children get a default `PI_DELEGATE_GOAL`; the first
-time the watcher sees the child idle *without* a `PARENT: … done` handshake it sends
+time the watcher sees the child idle without a results/blocker line it sends
 `/goal <condition>` so `goal.ts` keeps the child working (up to `PI_GOAL_MAX_TURNS`, 25)
 instead of stopping after one slice and calling the rest "blocked". Only a second idle
 nudges the parent. Watchers now run as `systemd-run --user` units (fallback `setsid`) because
@@ -115,7 +140,7 @@ root either way.
 
 **Parent duty — if you spawned children, this is on you:**
 - When you process a completion (via nudge OR by reading the pane/output yourself),
-  **ack it**: `mv <record> ~/.pi/agent/delegate-mailbox/ack/`. An unacked record means
+  **ack the durable mailbox record** (this is bookkeeping, not a child chat ACK): `mv <record> ~/.pi/agent/delegate-mailbox/ack/`. An unacked record means
   re-nudges keep landing in your input box.
 - At the start of any turn where you suspect a child finished (or after being away),
   **sweep the mailbox**: `ls ~/.pi/agent/delegate-mailbox/*.md` — any record there is a
@@ -124,7 +149,10 @@ root either way.
 It watches **from the outside**, so a child that crashes, wedges, or simply forgets to
 report is still reported — the loop must not depend on the child's cooperation.
 
-Three verdicts: `idle` (finished), `never-started (prompt dropped)`, `window-gone`.
+Watcher verdicts identify idle, never-started prompts and missing windows; idle
+alone is not proof of completion. The watcher does not yet distinguish an idle
+provider error from other idle stops. Its mailbox record includes the pane tail
+for diagnosis.
 That second one matters: a child that never received its task must not be reported as
 finished.
 

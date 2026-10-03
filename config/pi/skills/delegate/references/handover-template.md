@@ -43,9 +43,16 @@ will find a better route than a step list written by someone not looking at the 
 
 ## Where to record findings
 
-Write to `<in-repo path>`, commit it, and push. Include: what you changed, what you
-verified (by name), what you could not verify, and anything you found that is out of
-scope but someone should know. Raw evidence beats summary — keep the command output.
+Write decisions and durable findings to `<in-repo path>`; keep raw reports at
+`<report path>` (an operator Vault report is not a git artifact). Commit and push
+repo changes only when the task calls for them. Include what changed, gates run,
+limits and evidenced out-of-scope findings. Never commit or push the operator Vault.
+
+Send the parent **one results-or-blocker line only**:
+`<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
+No ACK, receipt, progress relay or repeated unchanged verification. At about 80%
+context, write a handover file with state, remaining work, evidence and paths;
+send its path in the line above and stop.
 
 ## When blocked
 

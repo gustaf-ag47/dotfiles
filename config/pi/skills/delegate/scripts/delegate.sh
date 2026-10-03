@@ -306,7 +306,7 @@ if [ -n "$BRIEF" ]; then
 	prompt="$prompt Read ${brief_rel} in full — it is your complete brief — then execute it."
 fi
 [ -n "$TASK" ] && prompt="$prompt Task: ${TASK}"
-prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting, record findings in-repo rather than only in your context, and state clearly when you are done or blocked."
+prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings in-repo. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. No ACK, receipt or relay messages. At about 80% context, write a handover file with remaining work and evidence, send its path in that line, and stop."
 
 # -l sends the string literally: without it tmux parses words like "Enter" or
 # "Space" inside the prompt as key names. Submit separately, and send Enter
@@ -370,7 +370,7 @@ fi
 WATCHER="$(dirname "$0")/watch-child.sh"
 # Default self-continue condition for briefed children (see watch-child.sh).
 if [ -n "$BRIEF" ] && [ -z "${PI_DELEGATE_GOAL:-}" ]; then
-	PI_DELEGATE_GOAL="every numbered item under Your job in ${brief_rel:-$BRIEF} is implemented and committed, every gate named in the brief has been run and is green, the report file named in the brief is written and pushed, and the PARENT handshake line has been printed. Remaining work is never a blocker; only a missing credential or permission is."
+	PI_DELEGATE_GOAL="every numbered item under Your job in ${brief_rel:-$BRIEF} is completed or has a documented operator decision, applicable gates have been run and reported, and findings are recorded at the path in the brief. Report blockers truthfully; never commit or push the operator Vault. Send the parent one result or blocker line with a report path."
 fi
 export PI_DELEGATE_GOAL
 if [ "${NOTIFY:-1}" = "1" ] && [ -x "$WATCHER" ]; then

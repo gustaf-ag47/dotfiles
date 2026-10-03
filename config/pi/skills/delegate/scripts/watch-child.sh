@@ -82,9 +82,13 @@ seen_busy=0
 goal_sent=0
 verdict="idle"
 
-# The brief's handshake line; a child that printed it is genuinely finished.
-child_reported_done() {
-	tmux capture-pane -t "$TARGET" -p -S -400 2>/dev/null | grep -qE '^ ?PARENT: .*\b(done|accepted)\b'
+# A result or blocker is terminal for the watcher, not proof the work passed.
+# Keep the old PARENT handshake for children launched before this contract.
+# Exclude template placeholders and ACK/progress chatter from the new format.
+child_reported_result() {
+	local pane
+	pane=$(tmux capture-pane -t "$TARGET" -p -S -400 2>/dev/null) || return 1
+	printf '%s\n' "$pane" | grep -qE '^ ?PARENT: .*\b(done|accepted)\b|^[[:space:]]*[^[:space:]:<>][^:<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+'
 }
 
 while :; do
@@ -106,11 +110,11 @@ while :; do
 		if [ "$streak" -ge "$IDLE_STREAK" ] && [ "$elapsed" -ge "$MIN_GRACE" ] &&
 			{ [ "$seen_busy" = "1" ] || pane_started; }; then
 			# Self-continue before bothering the parent: a child that stops after one
-			# slice without a done-handshake gets a /goal (goal.ts keeps it working
+			# slice without a result or blocker gets a /goal (goal.ts keeps it working
 			# until an evaluator confirms the condition, PI_GOAL_MAX_TURNS turns).
 			# Measured 2026-09-28: 7/7 gpt-6-luna delegates stopped after one slice
 			# calling remaining work "blocked"; each cost a parent round-trip.
-			if [ -n "${PI_DELEGATE_GOAL:-}" ] && [ "$goal_sent" = "0" ] && ! child_reported_done; then
+			if [ -n "${PI_DELEGATE_GOAL:-}" ] && [ "$goal_sent" = "0" ] && ! child_reported_result; then
 				goal_sent=1
 				tmux send-keys -t "$TARGET" C-u 2>/dev/null || true
 				sleep 0.4
