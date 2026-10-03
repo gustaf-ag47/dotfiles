@@ -3,6 +3,8 @@
 
 return {
   'ThePrimeagen/refactoring.nvim',
+  branch = '1.0',
+  version = false,
   dependencies = {
     'nvim-lua/plenary.nvim',
     'nvim-treesitter/nvim-treesitter',
