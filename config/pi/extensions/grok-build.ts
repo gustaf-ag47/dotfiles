@@ -32,8 +32,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model, ProviderHeaders, RefreshModelsContext } from "@earendil-works/pi-ai";
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
-import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { resolveGrokCliBridgeToken } from "../lib/grok-cli-bridge.mjs";
 
 export const GROK_BUILD_PROVIDER_ID = "grok-build";
@@ -172,6 +173,14 @@ export default function (pi: ExtensionAPI) {
           return { type: "api_key" as const, key: "grok-cli-session-bridge" };
         },
         async resolve() {
+          // Auth contract: `undefined` means "not configured". A missing Grok
+          // CLI auth file is "never ran grok login", not a failure - without
+          // this check pi's startup availability refresh executed the bridge
+          // and printed its error banner in every session on machines that
+          // simply don't use Grok (2026-10-03). A present-but-broken file
+          // still throws loudly below, which is the correct signal.
+          const grokHome = process.env.GROK_HOME || join(homedir(), ".grok");
+          if (!existsSync(join(grokHome, "auth.json"))) return undefined;
           return { auth: { apiKey: resolveGrokCliBridgeToken(bridgeScript) }, source: "Grok CLI session (grok login)" };
         },
       },
