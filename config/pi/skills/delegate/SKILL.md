@@ -90,6 +90,14 @@ and, when the child goes idle, writes a durable record and nudges the parent:
 notify : watching (nudges Work-Driver:speedup ci on idle)
 ```
 
+**In-band delivery (2026-10-03).** Parents that are pi sessions load
+`delegate-mailbox.ts` (via `pi-link-extensions`), which watches the mailbox from
+inside the session and injects records addressed to its `$TMUX_PANE` with
+`pi.sendMessage(..., {triggerTurn: true})`, auto-acking on delivery. Keystroke
+nudges below are the fallback for parents without the extension — measured
+2026-10-03: a child finished, 8 keystroke nudges fired, none reached the
+parent's context; the operator closed the loop by hand.
+
 **Two channels, deliberately.** The nudge is a keystroke, and keystrokes get dropped — a
 TUI mid-turn swallows them without trace. So the *state* goes to a mailbox on persistent
 disk (`~/.pi/agent/delegate-mailbox`, **not** a tmpfs worktree) and only the *pointer*
