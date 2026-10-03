@@ -43,11 +43,12 @@ from _bounded import (
     TEXT_MODEL_INVALID_BASE_URL,
     TEXT_MODEL_PARTIAL,
     InvalidUrlError,
-    resolve_text_model_config,
     run_bounded,
     validate_url,
 )
 import _trace
+from _text_backend import resolve_text_backend, pin_backend_env
+from _pi_text import prerequisites as pi_text_prerequisites
 
 PINNED_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
 MAX_STEPS_CAP = 20
@@ -137,12 +138,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the per-step y/N prompt (step/time bounds still apply). Default is per-step approval.",
     )
     parser.add_argument("--trace-path", help="Override the redacted trace output path.")
+    parser.add_argument("--text-backend", choices=('pi', 'api', 'none'), help="Explicit typing backend; otherwise uses environment/private saved config.")
+    parser.add_argument("--pi-text-model", help="Exact Pi provider/model (openai-codex, anthropic, or grok-build); implies pi unless overridden.")
     return parser
 
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     env = dict(os.environ)
+    if args.text_backend:
+        env['TEXT_MODEL_BACKEND'] = args.text_backend
+    if args.pi_text_model:
+        env['PI_TEXT_MODEL'] = args.pi_text_model
+        if not args.text_backend:
+            env['TEXT_MODEL_BACKEND'] = 'pi'
+    selection = resolve_text_backend(env)
 
     try:
         validate_url(args.url)
@@ -178,7 +188,7 @@ def main(argv: list[str]) -> int:
         # reaching https://api.deepseek.com/v1 (deepseek-chat). Refuse a
         # partial config outright -- all three or none, never a silent
         # partial default -- and require HTTPS with no embedded credentials.
-        text_status, text_detail = resolve_text_model_config(env)
+        text_status, text_detail = selection['status'], selection['reason']
         if text_status == TEXT_MODEL_PARTIAL:
             print(
                 "run.py: TEXT_MODEL_API_KEY / TEXT_MODEL_BASE_URL / TEXT_MODEL must all be set together, or "
@@ -189,6 +199,12 @@ def main(argv: list[str]) -> int:
             return EXIT_ERROR
         if text_status == TEXT_MODEL_INVALID_BASE_URL:
             print(f"run.py: invalid TEXT_MODEL_BASE_URL: {text_detail}", file=sys.stderr)
+            return EXIT_ERROR
+        if text_status == 'invalid_config':
+            print(f"run.py: invalid text backend configuration ({text_detail})", file=sys.stderr)
+            return EXIT_ERROR
+        if text_status == 'pi_configured' and not all(pi_text_prerequisites(env).values()):
+            print("run.py: Pi typing needs Node and the installed Pi SDK; run pi-setup/doctor first.", file=sys.stderr)
             return EXIT_ERROR
 
     checkout = checkout_dir(env)
@@ -201,13 +217,10 @@ def main(argv: list[str]) -> int:
 
     if not args.inspect and not args.execute:
         key_present = resolve_typesafe_key(env) is not None
-        text_status, _ = resolve_text_model_config(env)
         print(f"TypeSafe key configured: {key_present}")
-        print(
-            f"Text-model backend status: {text_status} (TEXT_MODEL_API_KEY + TEXT_MODEL_BASE_URL + TEXT_MODEL "
-            "must all be set together, or none at all; required for TYPE_TEXT steps only, no default backend "
-            "is ever chosen for you)"
-        )
+        print(f"Text-model backend status: {selection['status']}")
+        if selection['backend'] == 'pi':
+            print(f"Pi typing model: {selection['model']} (existing Pi credentials; no tools/session context)")
         print("Dry run only: pass --inspect to observe, or --execute --max-steps N --max-seconds S to run.")
         return 0 if ready else EXIT_ERROR
 
@@ -218,7 +231,7 @@ def main(argv: list[str]) -> int:
     if args.inspect:
         proc_env = dict(env)
         cmd = [
-            "uv", "run", "--project", str(checkout), "python",
+            "uv", "run", "--frozen", "--project", str(checkout), "python",
             str(SKILL_DIR / "_inspect_driver.py"),
             "--url", args.url, "--goal", args.goal,
         ]
@@ -236,8 +249,10 @@ def main(argv: list[str]) -> int:
         )
         return EXIT_ERROR
     # (bounds and text-model routing already validated above, before the checkout was even consulted)
-    text_status, _ = resolve_text_model_config(env)
-    if text_status == TEXT_MODEL_CONFIGURED:
+    text_status = selection['status']
+    if text_status == 'pi_configured':
+        print(f"Pi typing model: {selection['model']} (existing credentials; provider usage may be billed).", file=sys.stderr)
+    elif text_status == TEXT_MODEL_CONFIGURED:
         print("Text-model backend configured (all three of API key/base URL/model set). TYPE_TEXT steps can run.", file=sys.stderr)
     else:
         print(
@@ -250,10 +265,10 @@ def main(argv: list[str]) -> int:
     trace_dir = xdg_state_home(env) / "jev-ultrafast" / "traces"
     trace_path = Path(args.trace_path) if args.trace_path else trace_dir / f"{int(time.time())}.json"
 
-    proc_env = dict(env)
+    proc_env = pin_backend_env(env, selection)
     proc_env["TYPESAFE_API_KEY"] = typesafe_key  # passed via env only, never argv/log
     cmd = [
-        "uv", "run", "--project", str(checkout), "python",
+        "uv", "run", "--frozen", "--project", str(checkout), "python",
         str(SKILL_DIR / "_agent_driver.py"),
         "--url", args.url, "--goal", args.goal,
         "--max-steps", str(args.max_steps),

@@ -13,7 +13,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _bounded import TEXT_MODEL_CONFIGURED, resolve_text_model_config
+from _bounded import TEXT_MODEL_CONFIGURED
+from _text_backend import resolve_text_backend
+from _pi_text import prerequisites as pi_text_prerequisites
 from _trace import redact_url
 
 PINNED_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
@@ -96,7 +98,9 @@ def build_report(env: dict) -> dict:
     cstatus = checkout_status(checkout)
     vstatus = venv_status(checkout) if cstatus["present"] else {"present": False, "has_python": False}
     state_dir = xdg_state_home(env) / "jev-ultrafast"
-    text_status, _ = resolve_text_model_config(env)
+    selection = resolve_text_backend(env)
+    text_status = selection['status']
+    pi_ready = pi_text_prerequisites(env) if selection['backend'] == 'pi' else {}
     report = {
         "pinned_commit": PINNED_COMMIT,
         "checkout_dir": str(checkout),
@@ -114,6 +118,8 @@ def build_report(env: dict) -> dict:
             "text_model_api_key_configured": bool((env.get("TEXT_MODEL_API_KEY") or "").strip()),
             "text_model_base_url": redact_url(env["TEXT_MODEL_BASE_URL"]) if env.get("TEXT_MODEL_BASE_URL") else "(not configured; no automatic backend)",
             "text_model_backend_status": text_status,
+            "pi_text_model": selection['model'],
+            "pi_text_prerequisites": pi_ready,
         },
         "state_dir": {
             "path": str(state_dir),
@@ -125,14 +131,15 @@ def build_report(env: dict) -> dict:
     # at the pinned commit can still run code that doesn't match the pin.
     clean_pin = cstatus["present"] and cstatus["pinned"] and cstatus["dirty"] is False
     prerequisites_for_inspect = clean_pin and vstatus["has_python"] and report["tools"]["chrome"]
-    prerequisites_for_execute = prerequisites_for_inspect and report["credentials"]["typesafe_key_configured"]
+    text_config_ok = text_status in ('unset', TEXT_MODEL_CONFIGURED) or (text_status == 'pi_configured' and all(pi_ready.values()))
+    prerequisites_for_execute = prerequisites_for_inspect and report["credentials"]["typesafe_key_configured"] and text_config_ok
     # This is a prerequisite check only -- doctor.py makes no live browser or
     # network call, so actual Chrome/CDP connectivity is never verified here.
     report["browser_connectivity"] = "not_verified (doctor.py makes no live browser/CDP call; only checks binaries/profile presence)"
     report["prerequisites_present_for_inspect"] = prerequisites_for_inspect
     report["prerequisites_present_for_execute"] = prerequisites_for_execute
     report["prerequisites_present_for_type_text"] = (
-        prerequisites_for_execute and text_status == TEXT_MODEL_CONFIGURED
+        prerequisites_for_execute and text_status in (TEXT_MODEL_CONFIGURED, 'pi_configured')
     )
     return report
 
@@ -155,7 +162,11 @@ def main(argv: list[str]) -> int:
     print(f"Tools: git={t['git']} uv={t['uv']} node={t['node']} chrome={t['chrome']}")
     cr = report["credentials"]
     print(f"TypeSafe key configured: {cr['typesafe_key_configured']} (file: {cr['key_file']})")
-    print(f"Text model key configured: {cr['text_model_api_key_configured']} (base: {cr['text_model_base_url']})")
+    print(f"Text backend: {cr['text_model_backend_status']}")
+    if cr['pi_text_model']:
+        print(f"Pi typing model: {cr['pi_text_model']} (Pi owns auth/refresh; no separate text API key)")
+    else:
+        print(f"Text model key configured: {cr['text_model_api_key_configured']} (base: {cr['text_model_base_url']})")
     s = report["state_dir"]
     print(f"State dir: {s['path']} exists={s['exists']} mode_ok={s['mode_ok']}")
     print()

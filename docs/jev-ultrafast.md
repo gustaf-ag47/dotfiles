@@ -35,18 +35,31 @@ and `bin/jev-classify`'s daily budget caps in `config/llm-proxy/jev.json` do not
 calls. `run.py`/`doctor.py` never print the key value; it is passed to the `uv run` subprocess only
 through the environment, never argv.
 
-`TYPE_TEXT` (typing a value into a field) needs a **second, separately configured** OpenAI-compatible
-text model: `TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`, and `TEXT_MODEL` must **all three be set
-together, or none at all**. Upstream's own `field_text()` (`model.py`) silently defaults the base
-URL/model to `https://api.deepseek.com/v1`/`deepseek-chat` the moment a key alone is present, which
-would otherwise make a real, billed call to a specific provider the user never explicitly named; `run.py
---execute` detects a partial config (e.g. key set, base URL/model not) and refuses to run at all rather
-than let that default fire, and separately requires the base URL to be HTTPS with no embedded
-credentials. With **none** of the three set, `--execute` still proceeds for CLICK/SELECT/WAIT/DONE-only
-goals, with an explicit warning that any `TYPE_TEXT` step will fail loudly. See
-[`references/text-model.md`](../config/pi/skills/jev-ultrafast/references/text-model.md) for the full
-reasoning and the explicit follow-up this leaves for the parent (a possible future Pi-OAuth-backed
-shim) — not attempted in this closeout.
+`TYPE_TEXT` supports **Pi-backed typing** with existing credentials, or the original
+explicitly configured OpenAI-compatible API backend. See
+[`references/text-model.md`](../config/pi/skills/jev-ultrafast/references/text-model.md)
+for configuration and privacy details. For one run:
+
+```sh
+python3 ~/.pi/agent/skills/jev-ultrafast/scripts/run.py \
+  --url 'https://example.com' --goal 'one explicit task' \
+  --text-backend pi --pi-text-model openai-codex/gpt-5.6-luna \
+  --execute --max-steps 8 --max-seconds 60
+```
+
+A saved, non-secret preference in `~/.config/jev-ultrafast/text-model.json` can select
+that model without repeating flags. The adapter uses Pi's native `ModelRuntime`
+and credential refresh, not a full agent or another HTTP server. It loads no tools,
+conversation history, skills or project instructions; only the selected Anthropic/
+Grok provider factory is reused where necessary. State uses bounded stdin/stdout
+pipes, not command-line prompts or saved sessions. It makes one completion and
+accepts only a small, valid JSON field value. Model errors, quota exhaustion and
+invalid output stop typing without a fallback provider.
+
+The legacy API path still requires all of `TEXT_MODEL_API_KEY`,
+`TEXT_MODEL_BASE_URL`, and `TEXT_MODEL` together. Mixed/partial settings are rejected.
+No text backend configured means click-only mode, not permission to guess text.
+Using OAuth removes the need for another API key, **not** the provider's usage charges.
 
 ## Execution bounds actually implemented
 
@@ -111,11 +124,19 @@ profile's CDP/debugging posture and was deliberately **not** flipped automatical
 user's regular browser without consent); the Chromium window Browser Harness launched during diagnosis
 was closed immediately once the cause was isolated.
 
-**Still not verified**: a real TypeSafe or text-model call, or a full bounded `--execute` run end-to-end
-(predict → approval prompt → act → observe). Both need the one-time Chrome consent step above, a live
-paid TypeSafe key dispatch, and (for `TYPE_TEXT`) a fully-configured text-model backend — explicitly the
-parent's call per the handover brief ("Parent owns review, integration, live install and any paid smoke
-tests").
+**Pi typing verified (2026-10-03):** a synthetic destination-field request returned
+`London` via existing `openai-codex/gpt-5.6-luna` credentials in 4,936 ms (128 input,
+9 output tokens; $0.0000364 catalog-estimated cost). No additional text API key,
+agent tools, browser actions, or stored session were involved. Importing the pinned
+upstream also confirmed that `Agent.command` uses the substituted `field_text`
+callback. Anthropic/Grok provider registration and expected endpoints were checked
+without inference. Offline tests cover strict state/output contracts, explicit
+backend selection, callback pinning, subprocess timeout/output bounds, and no retry
+or provider fallback.
+
+**Still not verified:** browser connectivity on this host and the complete
+predict → approval → type → observe flow. Browser policy calls and Chrome's debug
+permission remain separate from this successful text-helper smoke test.
 
 ## Setup requirements and optional follow-ups
 
@@ -126,10 +147,10 @@ tests").
    `${XDG_CACHE_HOME}/jev-ultrafast/src`, since the upstream here is a Python library consumed via `uv`,
    not another skill directory to be symlinked into `~/.pi/agent/skills`. **Closeout decision:**
    keep this explicit library setup separate; `pi-setup` installs the skill resources only.
-2. **Text-model backend.** No default is wired. If you want `TYPE_TEXT` to work out of the box against
-   an existing Pi-managed subscription instead of a separately metered DeepSeek/OpenRouter key, that
-   needs a small local OpenAI-compatible shim in front of a Pi provider — not built here; flagged as
-   explicit follow-up in `references/text-model.md`.
+2. **Text-model backend.** The Pi adapter is implemented. Each host needs an explicit
+   model selection (flags/environment or its own saved preference) and that provider's
+   existing credentials. This host is configured for `openai-codex/gpt-5.6-luna`.
+   No text-provider API key or automatic model routing is required.
 3. **`classifier_activity`/ledger integration.** Not attempted. The browser-agent calls this skill makes
    are a different cost center from the task classifier's `classifier_activity` ledger; if you want them
    surfaced in `llm-usage` too, that needs a new event source/schema, proposed but not implemented here

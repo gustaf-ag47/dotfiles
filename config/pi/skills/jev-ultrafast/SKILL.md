@@ -1,6 +1,6 @@
 ---
 name: jev-ultrafast
-description: Drive a real Chrome tab toward one explicit goal+URL using browser-use/jev-ultrafast (TypeSafe Jev picks CLICK/TYPE_TEXT/SELECT targets from a DOM snapshot; a separately configured text model only fills TYPE_TEXT values). Opt-in, bounded, step-by-step approved — not for Jev's own classifyTask() task-routing helper. Use when asked to automate a browser task with jev-ultrafast, check whether jev-ultrafast is set up, or run/inspect a bounded browser agent step.
+description: Explicitly run or inspect a bounded Jev browser agent in Chrome, with human step approval and optional Pi-backed typing.
 disable-model-invocation: true
 ---
 
@@ -49,15 +49,19 @@ TypeSafe key (same canonical file the existing shadow classifier uses):
 reuses the shared `jev.mjs`/`bin/jev-classify` task-classifier budget, cache, or ledger — the two Jev
 uses are billed and tracked completely separately on TypeSafe's side.
 
-`TYPE_TEXT` steps (typing a value into a field) additionally need a **separately and explicitly
-configured** OpenAI-compatible text model: `TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`, and
-`TEXT_MODEL` **must all three be set together, or none at all**. Upstream's own `field_text()` silently
-defaults the base URL/model to `https://api.deepseek.com/v1`/`deepseek-chat` the instant a key alone is
-present — this skill refuses to `--execute` on a partial config instead of letting that default fire,
-and independently requires the base URL to be HTTPS with no embedded credentials. With none of the
-three set, `--execute` still proceeds for CLICK/SELECT/WAIT/DONE-only goals, with an explicit warning
-that any `TYPE_TEXT` step will fail loudly. No provider (not OpenRouter, not a Pi OAuth-backed model) is
-ever chosen for you. See [references/text-model.md](references/text-model.md) before setting this.
+For `TYPE_TEXT`, explicitly choose a backend:
+
+- **Pi credentials:** `--text-backend pi --pi-text-model openai-codex/gpt-5.6-luna`
+  (or a saved preference). No separate text API key. One tool-less completion gets
+  only the field context, not the agent's conversation or repository instructions.
+- **API:** configure all of `TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`, and
+  `TEXT_MODEL`. Partial or mixed-backend configuration is rejected.
+- **None:** click-only goals can run; a typing step stops rather than guessing.
+
+Read [references/text-model.md](references/text-model.md) for saved configuration,
+supported Pi providers, deadlines, privacy, and accounting. The model is pinned
+per run; no silent provider fallback or new login is performed. Provider usage
+may still consume paid credits/extra usage even when using OAuth.
 
 ## 4. Inspect a page without any model call (safe default)
 

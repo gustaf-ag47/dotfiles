@@ -27,6 +27,7 @@ URL/title, or the goal text to the trace file (see _trace.py).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -43,6 +44,8 @@ from _bounded import (
 import _trace
 
 from jev_ultrafast import Agent  # noqa: E402  (installed in this venv by uv sync)
+import jev_ultrafast.agent as agent_module
+from _pi_text import configure_text_backend
 
 
 def main(argv: list[str]) -> int:
@@ -64,6 +67,7 @@ def main(argv: list[str]) -> int:
     exit_code = EXIT_ERROR
 
     try:
+        configure_text_backend(agent_module, os.environ)
         with Agent(args.url, args.goal) as agent:
             print(f"Observed: {_trace.redact_url(agent.state['page']['url'])!r}", file=sys.stderr)
             while True:
