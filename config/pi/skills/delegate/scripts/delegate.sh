@@ -83,7 +83,11 @@ command -v "$AGENT" >/dev/null || die "$AGENT not in PATH"
 # ── the current tmux session ────────────────────────────────────────────────
 if [ -z "$SESSION" ]; then
 	if [ -n "${TMUX:-}" ]; then
-		SESSION="$(tmux display-message -p '#S')"
+		if [ -n "${TMUX_PANE:-}" ]; then
+			SESSION="$(tmux display-message -p -t "$TMUX_PANE" '#{session_id}')"
+		else
+			SESSION="$(tmux display-message -p '#{session_id}')"
+		fi
 	else
 		SESSION="$(tmux list-sessions -F '#{session_attached} #{session_name}' 2>/dev/null |
 			sort -rn | head -1 | cut -d' ' -f2-)"
@@ -264,7 +268,8 @@ if command -v llm-usage >/dev/null 2>&1; then
     fi
   fi
 fi
-tmux new-window -t "$SESSION" -n "$NAME" -c "$CWD" -d
+# The colon makes numeric names unambiguously session targets, not window indexes.
+tmux new-window -t "${SESSION}:" -n "$NAME" -c "$CWD" -d
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
 CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS")

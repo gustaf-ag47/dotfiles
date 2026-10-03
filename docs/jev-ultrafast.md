@@ -134,9 +134,45 @@ without inference. Offline tests cover strict state/output contracts, explicit
 backend selection, callback pinning, subprocess timeout/output bounds, and no retry
 or provider fallback.
 
-**Still not verified:** browser connectivity on this host and the complete
-predict → approval → type → observe flow. Browser policy calls and Chrome's debug
-permission remain separate from this successful text-helper smoke test.
+**Live browser verification completed (2026-10-03):** both laptop and skrubben
+used the explicitly selected Neko CDP browser. Production `--inspect` succeeded
+against example.com with no model call. The opt-in fixture test then created an
+owned about:blank tab with fixed synthetic HTML, used real Jev decisions and
+Pi-backed typing, executed `TYPE_TEXT → CLICK → DONE`, and independently checked
+that the input and result DOM both contained London. Three Jev calls and one Pi
+text call per host; 22.272 s on the laptop, 22.481 s on skrubben including startup.
+Each test closed its own tab and uniquely named daemon. No authenticated site or
+account action was used. This is one integration check, not a general reliability
+or speed benchmark. Production human approval controls remain separately covered
+by offline tests; the fixture's deterministic gate authorizes only its test nodes.
+
+## Neko connection on these two hosts
+
+There is no need to modify the normal desktop Chrome profile. Start the existing
+Neko co-browse service on skrubben explicitly, then select its CDP endpoint:
+
+```sh
+# Laptop (Tailscale connected):
+BU_NAME=jev-neko-laptop BU_CDP_URL=http://100.95.138.80:9224 \
+  python3 ~/.pi/agent/skills/jev-ultrafast/scripts/run.py \
+  --url https://example.com --goal 'Observe this page' --inspect
+
+# On skrubben:
+BU_NAME=jev-neko-skrubben BU_CDP_URL=http://127.0.0.1:9224 \
+  python3 ~/.pi/agent/skills/jev-ultrafast/scripts/run.py \
+  --url https://example.com --goal 'Observe this page' --inspect
+```
+
+Use a dedicated `BU_NAME` so other Browser Harness sessions are unaffected. Clear
+conflicting `BU_BROWSER_ID`/`BU_CDP_WS` overrides when choosing `BU_CDP_URL`.
+Neko tabs share its automation Chrome profile/cookies, not an isolated profile per
+task. Keep CDP on the trusted tailnet; never publish it to the Internet. `doctor.py`
+still does not actively probe connectivity; `--inspect` is the live check.
+
+The explicit, paid synthetic test is `tests/e2e/jev-ultrafast-fixture.py`, run through
+the pinned upstream venv with `--allow-model-calls` and `BU_CDP_URL`. It refuses
+cloud/default browser discovery, permits actions only on its own fixture controls,
+and bounds calls/time. Without the opt-in flag it does nothing.
 
 ## Setup requirements and optional follow-ups
 
@@ -156,6 +192,6 @@ permission remain separate from this successful text-helper smoke test.
    surfaced in `llm-usage` too, that needs a new event source/schema, proposed but not implemented here
    per the brief ("don't silently write invalid browser events or mislabel browser calls as task
    classification").
-4. **Live smoke test.** First real `--inspect` and a single approved `--execute` step against a
-   low-stakes public page (e.g. Wikipedia, matching upstream's own example) would be the natural next
-   step once the parent authorizes the pinned clone + a live TypeSafe key dispatch.
+4. **Further site testing.** Transport, typing and the synthetic browser loop are verified
+   above. Real tasks still require explicit user intent and the normal approval controls;
+   no purchases, bookings, account changes or arbitrary-site reliability are claimed.

@@ -87,8 +87,9 @@ verdict="idle"
 # Exclude template placeholders and ACK/progress chatter from the new format.
 child_reported_result() {
 	local pane
-	pane=$(tmux capture-pane -t "$TARGET" -p -S -400 2>/dev/null) || return 1
-	printf '%s\n' "$pane" | grep -qE '^ ?PARENT: .*\b(done|accepted)\b|^[[:space:]]*[^[:space:]:<>][^:<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+'
+	pane=$(tmux capture-pane -t "$TARGET" -J -p -S -400 2>/dev/null) || return 1
+	# Join terminal wrapping, and avoid grep -q/pipefail SIGPIPE on long histories.
+	grep -qE '^ ?PARENT: .*\b(done|accepted)\b|^[[:space:]]*[^[:space:]<>][^<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+[[:space:]]*$' <<< "$pane"
 }
 
 while :; do

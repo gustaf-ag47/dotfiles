@@ -21,7 +21,7 @@ Sources:
 | Goal-completion precheck / loop stalls | Prefer deterministic progress checks first; Jev must not declare work complete | Not changed |
 | Bash/write authorization or prompt-injection defense | Jev is advisory, not a security boundary | Not implemented as a permission mechanism |
 | Compaction cut-point selection | Needs a reliable outcome-quality evaluation | Not enabled |
-| Browser operation/target selection | Separate opt-in browser skill, not a repurposed task classifier | Wrapper and Pi-backed typing adapter integrated; explicit model selection and host-local Chrome verification remain prerequisites; no browser-action end-to-end run claimed |
+| Browser operation/target selection | Separate opt-in browser skill, not a repurposed task classifier | Wrapper and Pi-backed typing adapter integrated; synthetic TYPE_TEXT → CLICK → DONE flow independently verified from both hosts through Neko, with explicit CDP/model selection |
 
 The file-triage recommendation was originally conditional. The user subsequently
 requested its implementation, and the required privacy guards and opt-in surface

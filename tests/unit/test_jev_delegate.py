@@ -29,6 +29,7 @@ class JevDelegateTests(unittest.TestCase):
 printf '%s\\n' "$*" >> "$TEST_ROOT/tmux-calls"
 case "$1" in
   capture-pane) printf '1.0%%/256K\\n' ;;
+  display-message) printf '%s\\n' '$7' ;;
 esac
 exit 0
 ''')
@@ -96,6 +97,19 @@ printf '{"status":"ok","suggestion":"mechanical","confidence":1,"applied":false}
         self.helper.unlink()
         self.run_delegate()
         self.assert_launch_unchanged()
+
+    def test_numeric_session_is_not_treated_as_window_index(self):
+        self.run_delegate('--session', '3')
+        self.assertIn('new-window -t 3: ', (self.root / 'tmux-calls').read_text())
+
+    def test_automatic_session_uses_calling_pane_not_focused_client(self):
+        self.env.update(TMUX='fixture', TMUX_PANE='%fixture')
+        result = subprocess.run(['bash', str(self.script), '--task', 'fixture', '--cwd', str(self.root),
+                                 '--model', 'anthropic/fixed-model', '--no-probe', '--dry-run'],
+                                env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('session : $7', result.stdout)
+        self.assertIn('display-message -p -t %fixture #{session_id}', (self.root / 'tmux-calls').read_text())
 
     def test_dry_run_does_not_classify_or_launch(self):
         self.run_delegate('--dry-run')
