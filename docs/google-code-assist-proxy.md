@@ -10,6 +10,14 @@ pi ──(Gemini API, placeholder key)──> 127.0.0.1:8790 google-code-assist-
      ──(Bearer <agy OAuth>, {project, model, request})──> daily-cloudcode-pa.googleapis.com/v1internal
 ```
 
+## Status
+
+On `feat/google-code-assist-proxy`, **not promoted into active master config**;
+the coordinator's closeout hold (78d34c1) still applies until parent review.
+That hold's open question — entitlement vs project selection — is resolved:
+it was project selection plus model ids (see below), not a missing
+subscription. The `agy` subprocess fallback is removed entirely.
+
 ## Pieces
 
 | File | Role |
