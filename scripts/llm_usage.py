@@ -376,7 +376,37 @@ def grok_build(auth):
                     '(reverse-engineered, not an xAI-documented API); read-only, never refreshes.'}
 
 
-ADAPTERS = {'anthropic': anthropic, 'openai-codex': codex, 'deepseek': deepseek, 'grok-build': grok_build}
+GOOGLE_PROXY_PORT_ENV = 'GOOGLE_CODE_ASSIST_PORT'
+
+
+def google_antigravity(_auth):
+    """Antigravity (Gemini via agy OAuth) quota, read from the loopback shim's
+    /_usage (bin/google-code-assist-proxy). This reader never touches the
+    OAuth credential itself; the shim owns it."""
+    url = f"http://127.0.0.1:{os.environ.get(GOOGLE_PROXY_PORT_ENV, '8790')}/_usage"
+    try:
+        data = get_json(url)
+    except urllib.error.URLError:
+        return {'status': 'unavailable',
+                'reason': 'google-code-assist-proxy not running (systemctl --user start google-code-assist-proxy).'}
+    groups = {}
+    for name, model in (data.get('models') or {}).items():
+        if not isinstance(model, dict) or numeric(model.get('remaining_fraction')) is None:
+            continue
+        group = 'gemini_weekly' if name.startswith('gemini') else 'third_party_weekly'
+        current = groups.get(group)
+        if current is None or model['remaining_fraction'] < current['remaining_fraction']:
+            groups[group] = {'remaining_fraction': model['remaining_fraction'], 'reset_at': model.get('reset_time')}
+    windows = [{'name': group, 'used_percent': round(max(0.0, min(100.0, 100 * (1 - g['remaining_fraction']))), 1),
+                'resets_at': g['reset_at']} for group, g in sorted(groups.items())]
+    if not windows:
+        return {'status': 'unavailable', 'reason': 'Antigravity returned no model quota.'}
+    return {'status': 'ok', 'kind': 'subscription quota', 'windows': windows,
+            'note': 'Antigravity weekly buckets shared with agy; private Cloud Code Assist endpoint.'}
+
+
+ADAPTERS = {'anthropic': anthropic, 'openai-codex': codex, 'deepseek': deepseek, 'grok-build': grok_build,
+            'google-antigravity': google_antigravity}
 
 # The adapter payloads above intentionally remain provider-shaped for the
 # existing renderers and proxy integrations.  Consumers of the report should
@@ -387,6 +417,7 @@ REPORT_SOURCES = {
     'openai-codex': 'ChatGPT Codex wham/usage (private endpoint)',
     'deepseek': 'DeepSeek balance API',
     'grok-build': 'Grok Build CLI quota probe (cli-chat-proxy.grok.com, unofficial)',
+    'google-antigravity': 'Antigravity quota via google-code-assist-proxy /_usage (private endpoint)',
 }
 
 
@@ -766,7 +797,7 @@ def normalize_provider(provider, raw, checked_at):
         models = raw.get('models') if isinstance(raw.get('models'), dict) else {}
         availability = {'provider': boolean(raw.get('allowed')), 'models': models}
         confidence = 'medium'  # private Codex endpoint; useful but not a public contract
-    elif provider == 'grok-build':
+    elif provider in ('grok-build', 'google-antigravity'):
         windows_raw = raw.get('windows') if isinstance(raw.get('windows'), list) else []
         quota = [{'name': w.get('name'), 'used_percent': w.get('used_percent'),
                   'remaining_percent': None if numeric(w.get('used_percent')) is None else max(0, 100 - w['used_percent']),
@@ -808,7 +839,7 @@ def collect(auth, providers):
         return dict(pool.map(lambda p: safe_query(p, auth), providers))
 
 
-WINDOW_LABELS = {'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d fable',
+WINDOW_LABELS = {'gemini_weekly': '7d gemini', 'third_party_weekly': '7d 3p', 'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d fable',
                  'seven_day_opus': '7d opus', 'seven_day_sonnet': '7d sonnet'}
 BAR_WIDTH = 20
 
@@ -1093,8 +1124,15 @@ def grok_build_lines(info, now):
     return lines, False
 
 
+def google_antigravity_lines(info, now):
+    windows = info.get('windows') or []
+    exhausted = any(numeric(w.get('used_percent')) is not None and w['used_percent'] >= 100 for w in windows)
+    verdict = paint('EXHAUSTED', '31;1') if exhausted else paint('READY', '32;1')
+    return [f"  {paint('agy OAuth', '1')}  {verdict}"] + [window_line(w, now) for w in windows], False
+
+
 RENDERERS = {'anthropic': anthropic_lines, 'openai-codex': codex_lines, 'deepseek': deepseek_lines,
-             'grok-build': grok_build_lines}
+             'grok-build': grok_build_lines, 'google-antigravity': google_antigravity_lines}
 
 
 def waybar_payload(report):

@@ -68,7 +68,8 @@ failed only because of the request, not the account:
 ## Limits
 
 - Quota is the Antigravity weekly Gemini bucket shared with `agy`
-  (`GET /_usage`). Not yet in `llm-usage`, the route oracle or `llm-failover`.
+  (`GET /_usage`, shown by `llm-usage` as `google-antigravity`). Not in the
+  route oracle or `llm-failover`.
 - Model list in `models.json` is static; refresh it from `/_usage` when Google
   ships new ids.
 - Undocumented internal API; may change without notice.
