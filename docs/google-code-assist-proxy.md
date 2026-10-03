@@ -12,11 +12,16 @@ pi ──(Gemini API, placeholder key)──> 127.0.0.1:8790 google-code-assist-
 
 ## Status
 
-On `feat/google-code-assist-proxy`, **not promoted into active master config**;
-the coordinator's closeout hold (78d34c1) still applies until parent review.
-That hold's open question — entitlement vs project selection — is resolved:
-it was project selection plus model ids (see below), not a missing
-subscription. The `agy` subprocess fallback is removed entirely.
+The native Gemini implementation is on `master` (superseding the earlier
+text-only prototype and its closeout hold). The laptop service and Pi tool calling
+have been verified. The original 403 was resolved by using the discovered project
+and correct model IDs, not by purchasing a subscription. No `agy` subprocess is
+spawned by inference; the proxy preserves the native Gemini tool/thinking payloads.
+
+Each host needs its own explicitly provisioned Antigravity OAuth session and client
+installation for refresh support. Credentials are not in git and are not silently
+copied by `pi-setup`. The other host must not advertise this provider as ready
+before its credentials, service and live tool-call check succeed.
 
 ## Pieces
 

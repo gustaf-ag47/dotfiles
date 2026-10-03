@@ -65,14 +65,18 @@ No Anthropic credentials, account settings, inference probes or routing policy w
 
 ## Additional work that arrived during closeout
 
-A Google Code Assist proxy experiment was created in another pane while this closeout
-was running. Its work is preserved and pushed on `feat/google-code-assist-proxy`.
-It is **explicitly held, not an active master feature**: direct inference failed in
-the tested account/project configuration, and the optional CLI fallback is another
-agent process rather than faithful Pi tool execution. The service is disabled and
-the stale local model entry was backed up privately and removed. No new subscription,
-authorization workaround, or default-provider change was made. This is a documented
-experimental disposition, not silently abandoned uncommitted work.
+A Google Code Assist integration was created in another pane during closeout.
+The initial text-only/CLI-fallback prototype was held and preserved on
+`feat/google-code-assist-proxy`. Its owner subsequently fixed project/model selection,
+removed the second-agent fallback, and implemented a native Gemini API shim with
+real Pi tool calling and quota reporting. That revised implementation is now on
+`master`; the laptop service is active and verified. The earlier hold no longer
+applies to this native path. See [current status](google-code-assist-proxy.md).
+
+The PC did not have an Antigravity client or OAuth session at review time. Source
+and resources can be synchronized independently, but Google credential provisioning
+must be explicit; no Google credential is silently copied as part of a git update.
+No new subscription or default-provider change was made.
 
 During runtime checks, the copied Grok access token on the PC had expired while the
 laptop's CLI had refreshed its own. Running the official `grok models` command on the
