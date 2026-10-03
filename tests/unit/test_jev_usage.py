@@ -20,6 +20,12 @@ usage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(usage)
 
 
+# Tests that aggregate "today" must not depend on the wall clock: the fixture
+# timestamps are frozen, so the activity call's clock is frozen to match.
+# (Unpinned, these tests passed only on 2026-10-02 and went red at midnight.)
+FROZEN_NOW = datetime.datetime(2026, 10, 2, 18, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
+
+
 def event(**overrides):
     base = {
         'schema': 'jev-event.v1',
@@ -60,7 +66,7 @@ class LedgerPathTests(unittest.TestCase):
 class MissingAndEmptyLedgerTests(unittest.TestCase):
     def test_missing_ledger_is_quiet_and_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
-            activity = usage.jev_classifier_activity(ledger_path=Path(tmp) / 'nope' / 'events.jsonl')
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=Path(tmp) / 'nope' / 'events.jsonl')
         self.assertEqual(activity['schema'], 'jev-classifier-activity.v1')
         self.assertEqual(activity['ledger_status'], 'missing')
         self.assertEqual(activity['today']['calls'], 0)
@@ -73,7 +79,7 @@ class MissingAndEmptyLedgerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'events.jsonl'
             path.write_text('')
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         self.assertEqual(activity['ledger_status'], 'ok')
         self.assertEqual(activity['today']['calls'], 0)
 
@@ -85,7 +91,7 @@ class MissingAndEmptyLedgerTests(unittest.TestCase):
             try:
                 if os.access(path, os.R_OK):
                     self.skipTest('running as a user that bypasses file permissions (e.g. root)')
-                activity = usage.jev_classifier_activity(ledger_path=path)
+                activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
             finally:
                 os.chmod(path, 0o600)
         self.assertEqual(activity['ledger_status'], 'unreadable')
@@ -103,7 +109,7 @@ class ParsingAndValidationTests(unittest.TestCase):
                 json.dumps(event(status='not-a-real-status')),
                 json.dumps(event(timestamp='not-a-timestamp')),
             ])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         self.assertEqual(activity['retained_total']['calls'], 1)
         self.assertEqual(activity['parse_errors'], 1)
         self.assertEqual(activity['schema_errors'], 3)
@@ -116,7 +122,7 @@ class ParsingAndValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'events.jsonl'
             path.write_text(json.dumps(event()) + '\n' + json.dumps(event())[:20])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         self.assertEqual(activity['retained_total']['calls'], 1)
         self.assertEqual(activity['malformed_lines_skipped'], 0)
 
@@ -128,7 +134,7 @@ class ParsingAndValidationTests(unittest.TestCase):
                 event(status='error', input_tokens=None, output_tokens=None, estimated_cost_usd=None, cost_source=None),
                 event(estimated_cost_usd=0.00005, cost_source='published-rate', input_tokens=100, output_tokens=0),
             ])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         total = activity['retained_total']
         self.assertEqual(total['calls'], 3)
         self.assertEqual(total['tokens_unknown_calls'], 2)
@@ -141,7 +147,7 @@ class ParsingAndValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'events.jsonl'
             write_ledger(path, [event(applied=True)])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         self.assertEqual(activity['today']['applied_count'], 1)
         rendered = '\n'.join(usage.jev_classifier_lines(activity))
         self.assertIn('anomaly', rendered)
@@ -163,7 +169,7 @@ class HardeningTests(unittest.TestCase):
                 event(cost_source=['published-rate']),
             ])
             # Must not raise TypeError (unhashable type) anywhere in the read path.
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         # status is required/validated first: an unhashable status fails closed (schema error).
         self.assertEqual(activity['schema_errors'], 1)
         # unhashable source/cost_source don't invalidate the whole event; they just come back as None/unknown.
@@ -184,7 +190,7 @@ class HardeningTests(unittest.TestCase):
                 json.dumps(event(output_tokens=-1)),
                 json.dumps(event(confidence=float('inf'))),
             ])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         total = activity['retained_total']
         self.assertEqual(total['calls'], 8, 'events are still retained; only the bad field is dropped to None/unknown')
         # 3 of the 8 fixtures corrupt latency_ms itself (nan/inf/-5); the other
@@ -209,7 +215,7 @@ class HardeningTests(unittest.TestCase):
                 event(**{'class': 'apikey_SYNTHETIC_PRIVATE_VALUE'}),
                 event(**{'class': 'mechanical'}),  # only an actual task-class label passes
             ])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         by_class = activity['retained_total']['by_class']
         self.assertEqual(by_class, {'mechanical': 1})
         rendered = json.dumps(activity) + '\n'.join(usage.jev_classifier_lines(activity))
@@ -224,7 +230,7 @@ class HardeningTests(unittest.TestCase):
                 event(status='cache_hit', estimated_cost_usd=0, cost_source='cache',
                       input_tokens=0, output_tokens=0),
             ])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         today = activity['today']
         self.assertEqual(today['cost_unknown_calls'], 0, 'a cache hit with a known (zero) cost is not unknown-cost')
         self.assertEqual(today['estimated_cost_usd'], 0.0)
@@ -239,7 +245,7 @@ class HardeningTests(unittest.TestCase):
                 event(status='cache_hit'),
                 event(status='skipped'),
             ])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         today = activity['today']
         self.assertEqual(today['calls'], 5, 'calls = every retained observation, any status')
         self.assertEqual(today['network_calls'], 3, 'only ok/abstained/error actually reached the classifier')
@@ -312,7 +318,7 @@ class CacheIntegrationTests(unittest.TestCase):
             write_ledger(path, [event()])
             os.chmod(path, 0o600)
             os.chmod(path.parent, 0o700)
-            usage.jev_classifier_activity(ledger_path=path)
+            usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
 
@@ -322,7 +328,7 @@ class RenderAndSchemaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'events.jsonl'
             write_ledger(path, [event(), event(status='abstained', class_=None, applied=False)])
-            activity = usage.jev_classifier_activity(ledger_path=path)
+            activity = usage.jev_classifier_activity(now=FROZEN_NOW, ledger_path=path)
         report = {'schema': usage.REPORT_SCHEMA, 'generated_at': int(time.time()),
                   'providers': {'deepseek': {'status': 'ok', 'checked_at': int(time.time()),
                                               'normalized': {'freshness': {'state': 'fresh'}, 'confidence': 'high'}}},
