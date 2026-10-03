@@ -2,7 +2,7 @@ return {
   'nvim-treesitter/nvim-treesitter',
   lazy = false,
   build = ':TSUpdate',
-  -- main branch (Nvim 0.12+): setup() only accepts { install_dir }.
-  -- highlight/indent are Neovim built-ins; no configs.setup() needed.
+  -- Stay on the legacy master branch: go.nvim uses nvim-treesitter.configs,
+  -- ts_utils and locals, which are absent from the new main branch.
   -- Run :TSUpdate to refresh parsers after updates.
 }

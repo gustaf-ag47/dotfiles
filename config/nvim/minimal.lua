@@ -36,8 +36,9 @@ require('lazy').setup({
   {
     'nvim-treesitter/nvim-treesitter',
     build = ':TSUpdate',
-    -- nvim-treesitter v1.0+ (Neovim 0.12+): no setup() call needed,
-    -- highlight is enabled by default. Install parsers on demand via :TSInstall.
+    -- Main branch needs no setup() for defaults, but highlighting must be
+    -- enabled explicitly with vim.treesitter.start() for desired filetypes.
+    -- The full config pins legacy master for go.nvim compatibility.
   },
   { 'neovim/nvim-lspconfig' },
   { 'williamboman/mason.nvim', config = true },
