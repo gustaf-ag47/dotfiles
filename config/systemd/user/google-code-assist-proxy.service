@@ -1,5 +1,5 @@
 [Unit]
-Description=EXPERIMENTAL loopback Google Cloud Code Assist proxy for Pi (text-only, no tools)
+Description=Loopback Gemini API shim over Cloud Code Assist (Antigravity OAuth) for Pi
 Documentation=file://%h/sync/src/dotfiles/docs/google-code-assist-proxy.md
 After=network-online.target
 
@@ -11,9 +11,6 @@ RestartSec=5
 Environment=GOOGLE_CODE_ASSIST_HOST=127.0.0.1
 Environment=GOOGLE_CODE_ASSIST_PORT=8790
 Environment=GOOGLE_CODE_ASSIST_URL=https://daily-cloudcode-pa.googleapis.com
-# Consumer accounts get 403 on direct inference. Opt in to routing text-only
-# requests through a sandboxed `agy -p` subprocess (a second agent) with:
-#   systemctl --user edit google-code-assist-proxy  ->  Environment=GOOGLE_CODE_ASSIST_AGY_FALLBACK=1
 
 [Install]
 WantedBy=default.target
