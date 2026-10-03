@@ -4,6 +4,18 @@
 lets Pi reach Gemini through the OAuth session the Antigravity CLI (`agy`)
 already holds. It is **experimental, text-only, and not a default model**.
 
+## Closeout disposition (2026-10-03)
+
+Preserved on `feat/google-code-assist-proxy`, **not promoted into the active master
+configuration**. The live service is disabled and the stale local provider entry
+is removed by the coordinator. The successful earlier text probe does not establish
+safe tool-capable inference. Direct access currently fails in the tested account/
+project configuration; whether that is entitlement or project selection needs
+separate investigation. No subscription purchase or credential migration is implied.
+The opt-in `agy` path launches a second agent: sandboxing and an empty working
+directory are not proof of tool-less behavior or absence of global context. Do not
+use it as a transparent replacement for Pi's permission/tool execution model.
+
 ## Pieces
 
 | File | Role |
@@ -32,9 +44,10 @@ pi --no-tools --model google-cloud-code/gemini-3.8-flash-low
   read-only; never refreshes, writes, logs or echoes it. An expired token yields
   HTTP 503 "run `agy` once to refresh it". No request logging; upstream error
   bodies are not forwarded.
-- **Direct path.** `POST /v1internal:generateContent` on Cloud Code Assist. For
-  consumer (non-licensed) accounts Google currently answers
-  `403 SUBSCRIPTION_REQUIRED`, which the proxy reports as a 502 error.
+- **Direct path.** `POST /v1internal:generateContent` on Cloud Code Assist. The
+  tested account/project configuration returned `403 SUBSCRIPTION_REQUIRED`,
+  which the proxy reports as a 502 error. This is not proof that all consumer
+  accounts fail or that purchasing a subscription is the correct fix.
 - **`agy` fallback (opt-in).** With `GOOGLE_CODE_ASSIST_AGY_FALLBACK=1`, a 401/403
   makes the proxy run `agy --sandbox --disable-slash-commands -p=<transcript>` in
   an empty temp directory. That is a second agent process using the Antigravity
