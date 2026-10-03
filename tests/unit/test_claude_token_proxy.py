@@ -799,12 +799,14 @@ class OracleHttpTests(OracleFixture):
         proxy.restore_usage_state()
         self.assertEqual(replacement.u7_oi, 0.98)
         env = dict(os.environ, PI_ANTHROPIC_PROXY_URL=f"http://127.0.0.1:{self.server.server_address[1]}",
-                   XDG_CACHE_HOME=str(proxy.CONTROL_DIR), PI_CODING_AGENT_DIR=str(proxy.CONTROL_DIR))
+                   XDG_CACHE_HOME=str(proxy.CONTROL_DIR), XDG_STATE_HOME=str(proxy.CONTROL_DIR),
+                   PI_CODING_AGENT_DIR=str(proxy.CONTROL_DIR))
         cli = Path(__file__).resolve().parents[2] / "scripts/llm_usage.py"
         result = subprocess.run([sys.executable, str(cli), "--provider", "anthropic", "--refresh"],
                                 env=env, capture_output=True, text=True, timeout=10, check=True)
-        self.assertIn("~100% left", result.stdout)
-        self.assertIn("window reset; unconfirmed", result.stdout)
+        self.assertNotIn("~100% left", result.stdout)
+        self.assertIn("?% left", result.stdout)
+        self.assertIn("window reset; awaiting fresh reading", result.stdout)
         self.assertNotIn("EXHAUSTED", result.stdout)
         self.assertNotIn("NONE ROUTABLE", result.stdout)
         self.assert_no_secrets(result.stdout)

@@ -62,6 +62,51 @@ class FreshnessTests(unittest.TestCase):
         self.assertIsNone(normalized['availability']['provider'])
         self.assertNotEqual(normalized['freshness']['observed_at'], '1970-01-01T00:33:20Z')
 
+    def test_missing_fable_reading_remains_visible_and_explained(self):
+        token = {'fp': 'fixture', 'label': 'fixture-account', 'valid': True,
+                 'quota_scope_denied': True, 'u5': .3, 'u7': .49,
+                 'u7_oi': None, 'u7_oi_reset': None}
+        with patch.object(usage, 'get_json', return_value={'tokens': [token]}):
+            raw = usage.anthropic({})
+        fable = next(w for w in raw['accounts'][0]['windows'] if w['name'] == 'seven_day_overage_included')
+        self.assertIsNone(fable['used_percent'])
+        self.assertIn('user:profile', fable['unknown_reason'])
+        self.assertIn('Fable', fable['unknown_reason'])
+        with patch.object(usage, 'use_color', return_value=False):
+            line = usage.window_line(fable, 2000)
+        self.assertIn('?% left', line)
+        self.assertNotIn('100% left', line)
+        self.assertIn('user:profile', line)
+        normalized = usage.normalize_provider('anthropic', raw, 2000)
+        window = next(w for q in normalized['quota']['windows'] for w in q.get('windows', [])
+                      if w['name'] == 'seven_day_overage_included')
+        self.assertEqual(window['state'], 'unknown')
+        self.assertEqual(window['unknown_reason'], fable['unknown_reason'])
+
+    def test_observed_zero_usage_is_not_confused_with_missing_usage(self):
+        token = {'fp': 'fixture', 'valid': True, 'u7_oi': 0.0, 'u7_oi_reset': 9999999999}
+        with patch.object(usage, 'get_json', return_value={'tokens': [token]}):
+            raw = usage.anthropic({})
+        normalized = usage.normalize_provider('anthropic', raw, 2000)
+        window = next(w for q in normalized['quota']['windows'] for w in q.get('windows', [])
+                      if w['name'] == 'seven_day_overage_included')
+        self.assertEqual(window['used_percent'], 0)
+        self.assertEqual(window['remaining_percent'], 100)
+        self.assertIsNone(window['unknown_reason'])
+        for provider in ('openai-codex', 'grok-build'):
+            with self.subTest(provider=provider):
+                normalized = usage.normalize_provider(provider, {'status': 'ok', 'windows': [
+                    {'name': 'weekly', 'used_percent': 0}]}, 2000)
+                self.assertEqual(normalized['quota']['windows'][0]['remaining_percent'], 100)
+
+    def test_routing_unknown_fable_is_not_an_unexplained_question_mark(self):
+        routing = {'buckets': {'oi': {'would_pick': 'fixture', 'ranking': [
+            {'fp': 'fixture', 'utilization': None, 'eligible': True, 'pressure': 0.0}]}}}
+        with patch.object(usage, 'use_color', return_value=False):
+            text = '\n'.join(usage.routing_lines(routing, {'fixture': 'fixture-account'}))
+        self.assertIn('no current Fable reading', text)
+        self.assertIn('?% left', text)
+
     def test_warm_report_cache_does_not_hide_new_proxy_cooldown(self):
         with tempfile.TemporaryDirectory() as tmp:
             auth = Path(tmp) / 'auth.json'

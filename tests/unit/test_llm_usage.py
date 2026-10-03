@@ -367,8 +367,9 @@ class UsageTests(unittest.TestCase):
         with patch.object(usage, 'use_color', return_value=False):
             self.assertIn('UNKNOWN', usage.account_status(group, NOW))
             line = usage.window_line(window, NOW)
-        self.assertIn('~100% left', line)
-        self.assertIn('window reset; unconfirmed', line)
+        self.assertNotIn('100% left', line)
+        self.assertIn('?% left', line)
+        self.assertIn('window reset; awaiting fresh reading', line)
 
     def test_scoped_exhaustion_is_partial_and_expired_cooldowns_are_hidden(self):
         group = {'account': 'test', 'valid': True, 'windows': [

@@ -45,9 +45,11 @@ Neovim's installed plugin data may differ until `:Lazy restore` is performed in 
 safe editor-maintenance window. The source lock/specs are authoritative; this
 closeout does not silently replace plugin trees underneath active editors.
 
-## Ordered follow-up
+## Follow-up completed
 
-After source/resource convergence, diagnose laptop Fable `??` usage for the account
-identified by the user. Distinguish missing/expired response-header observations,
-OAuth usage scope denial, bucket mapping and rendering. Unknown is not zero or
-unlimited. That investigation should start read-only and retain credential privacy.
+After source/resource convergence, the laptop Fable `??` reading was traced to a
+scope-denied quota endpoint plus a missing current Fable-specific header, not a
+percentage calculation failure. The reporter now keeps the unknown bucket visible,
+explains why, avoids a fabricated full allowance after resets, and distinguishes a
+real zero-usage observation from missing data. See [quota-reading semantics](llm-usage-unknown.md).
+No credentials, account settings, inference probes or routing policy were changed.

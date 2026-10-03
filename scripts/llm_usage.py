@@ -111,14 +111,19 @@ def anthropic(_auth):
                 value = numeric(token.get(header)) if header else None
                 used = value * 100 if value is not None else None
                 source = 'header observation (may be stale)'
-            if used is not None or name in ('five_hour', 'seven_day'):
+            if used is not None or name in ('five_hour', 'seven_day', 'seven_day_overage_included'):
+                subject = 'Fable' if name == 'seven_day_overage_included' else 'quota'
+                unknown_reason = f'no current {subject} reading'
+                if token.get('quota_scope_denied'):
+                    unknown_reason += '; quota API lacks user:profile'
                 forecast_key = {'five_hour': '5h', 'seven_day': '7d', 'seven_day_overage_included': '7d_oi'}.get(name)
                 windows.append({'name': name, 'used_percent': used,
                                 'resets_at': bucket.get('resets_at') or bucket.get('reset_at') or token.get(reset),
                                 'observed_at': ((token.get('header_observed_at') or {}).get(header)
                                                 if source.startswith('header') else token.get('quota_checked_at')),
                                 'forecast': (token.get('forecast') or {}).get(forecast_key),
-                                'source': source if used is not None else 'unavailable'})
+                                'source': source if used is not None else 'unavailable',
+                                **({'unknown_reason': unknown_reason} if used is None else {})})
         counters = token.get('counters') or {}
         accounts.append({'account': token.get('fp'), 'label': token.get('label') or '', 'valid': token.get('valid'),
                          'forced_down': token.get('forced_down', False),
@@ -721,9 +726,10 @@ def normalize_provider(provider, raw, checked_at):
                     continue
                 item = {'account': account.get('account'), 'name': window.get('name'),
                         'used_percent': window.get('used_percent'), 'remaining_percent':
-                        None if not numeric(window.get('used_percent')) else max(0, 100 - window['used_percent']),
+                        None if numeric(window.get('used_percent')) is None else max(0, 100 - window['used_percent']),
                         'reset_at': window.get('resets_at') or window.get('reset_at'),
                         'source': window.get('source'),
+                        'unknown_reason': window.get('unknown_reason'),
                         'observed_at': window.get('observed_at'),
                         'age_seconds': (max(0, int(time.time() - observed))
                                         if (observed := to_epoch(window.get('observed_at'))) is not None else None),
@@ -746,7 +752,7 @@ def normalize_provider(provider, raw, checked_at):
     elif provider == 'openai-codex':
         windows = raw.get('windows') if isinstance(raw.get('windows'), list) else []
         quota = [{'name': w.get('name'), 'used_percent': w.get('used_percent'),
-                  'remaining_percent': None if not numeric(w.get('used_percent')) else max(0, 100-w['used_percent']),
+                  'remaining_percent': None if numeric(w.get('used_percent')) is None else max(0, 100-w['used_percent']),
                   'window_seconds': w.get('window_seconds'), 'reset_at': w.get('reset_at'), 'state': 'known'}
                  for w in windows if isinstance(w, dict)]
         raw_credits = raw.get('credits') if isinstance(raw.get('credits'), dict) else {}
@@ -763,7 +769,7 @@ def normalize_provider(provider, raw, checked_at):
     elif provider == 'grok-build':
         windows_raw = raw.get('windows') if isinstance(raw.get('windows'), list) else []
         quota = [{'name': w.get('name'), 'used_percent': w.get('used_percent'),
-                  'remaining_percent': None if not numeric(w.get('used_percent')) else max(0, 100 - w['used_percent']),
+                  'remaining_percent': None if numeric(w.get('used_percent')) is None else max(0, 100 - w['used_percent']),
                   'reset_at': w.get('resets_at'), 'state': 'known' if numeric(w.get('used_percent')) is not None else 'unknown'}
                  for w in windows_raw if isinstance(w, dict)]
         confidence = 'low'  # unofficial, reverse-engineered endpoint; schema not guaranteed by xAI
@@ -868,12 +874,14 @@ def window_line(window, now):
     used = window.get('used_percent')
     reset = to_epoch(window.get('resets_at') or window.get('reset_at'))
     label = window_label(window)
+    unknown_reason = window.get('unknown_reason')
     if reset is not None and reset <= now:
-        # Reset passed since the last reading: assume a fresh window (what the
-        # proxy's router assumes too) until the next response confirms it.
-        return f'    {label:<9} {bar(100)} {paint("~100% left", "32")}  window reset; unconfirmed'
+        # A reset invalidates the old reading; it does not prove unused capacity.
+        used = None
+        unknown_reason = 'window reset; awaiting fresh reading'
     if used is None:
-        return f'    {label:<9} {"?" * BAR_WIDTH}   ?% left'
+        suffix = f'  {unknown_reason}' if unknown_reason else ''
+        return f'    {label:<9} {"?" * BAR_WIDTH}   ?% left{suffix}'
     left = max(0.0, min(100.0, 100 - used))
     stale = window.get('source', '').startswith('header')
     tail = f'resets in {until(reset, now)}'
@@ -960,6 +968,8 @@ def routing_lines(routing, labels):
             else:
                 mark = paint('\u2715', '31')
                 detail = paint(row.get('reason') or 'ineligible', '31')
+            if util is None:
+                detail += ' · ' + ('no current Fable reading' if key == 'oi' else 'no current quota reading')
             lines.append(f"      {mark} {account_name(row['fp'], labels):<{width}}  {left}  {detail}")
     return lines
 
