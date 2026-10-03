@@ -19,6 +19,11 @@
 # the nudge is an at-least-once loop closed by an ACK: the parent acknowledges a
 # record by moving it to $MAILBOX/ack/, and until that happens the watcher waits
 # for the parent's pane to go idle and re-sends, up to PI_DELEGATE_MAX_NUDGES
+#
+# Primary channel (2026-10-03): pi parents running the delegate-mailbox.ts
+# extension ingest the record in-band (pi.sendMessage) and auto-ack within
+# seconds, so the keystroke path below usually never fires. It stays as the
+# fallback for parents without the extension.
 # attempts spaced PI_DELEGATE_RENUDGE_SECS apart.
 #
 # usage: watch-child.sh <session:window> <parent-window> <run-id> <cwd> [task]
@@ -229,6 +234,9 @@ while :; do
 			exit 0
 		fi
 	done
+	# Final check: the in-band extension may have acked while we waited; a
+	# keystroke nudge after that would C-u into the operator's input for nothing.
+	if acked; then break; fi
 	send_nudge "$attempt"
 	waited=0
 	while [ "$waited" -lt "$RENUDGE_SECS" ]; do
