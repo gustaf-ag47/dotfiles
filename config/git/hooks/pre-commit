@@ -141,7 +141,9 @@ declare -a secret_patterns=(
 # Check each pattern against ADDED lines only. Scanning the whole diff also
 # matches '-' deletions, which makes an already-flagged line impossible to ever
 # remove; the diff header ('+++ b/file') is dropped for the same reason.
-added_lines="$(git diff --cached | grep '^+' | grep -v '^+++')"
+# `|| true`: an all-deletion commit has no added lines, and grep's exit 1
+# would otherwise kill the hook via `set -e` with no error message.
+added_lines="$(git diff --cached | grep '^+' | grep -v '^+++' || true)"
 
 for pattern in "${secret_patterns[@]}"; do
     if printf '%s\n' "$added_lines" | grep -iE "$pattern" >/dev/null 2>&1; then
