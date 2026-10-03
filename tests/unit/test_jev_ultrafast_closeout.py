@@ -353,11 +353,19 @@ class CheckoutReadyDirtyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             repo.mkdir()
+            # Hermetic git: a host-global gitignore (e.g. one that hides .venv/)
+            # must not decide this test's outcome - it passed on dev boxes and
+            # failed in CI purely because CI has no global ignore for .venv/.
             env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+                    "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
             subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
             (repo / "f.txt").write_text("x\n")
-            subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True, env=env)
+            # The real pinned checkout ignores its own .venv/ (setup.sh creates it
+            # inside the repo); the fixture must mirror that or the untracked
+            # .venv/ alone reads as "local changes".
+            (repo / ".gitignore").write_text(".venv/\n")
+            subprocess.run(["git", "-C", str(repo), "add", "f.txt", ".gitignore"], check=True, env=env)
             subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "i"], check=True, env=env)
             commit = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True, env=env).strip()
             (repo / ".venv" / "bin").mkdir(parents=True)

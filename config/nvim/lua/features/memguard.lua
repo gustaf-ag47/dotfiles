@@ -28,11 +28,7 @@ end
 
 -- One-line snapshot of RSS, Lua heap and open buffers for the log.
 local function snapshot(kb)
-  return ('rss=%dMB lua=%dMB bufs=%d'):format(
-    math.floor(kb / 1024),
-    math.floor(collectgarbage 'count' / 1024),
-    #vim.api.nvim_list_bufs()
-  )
+  return ('rss=%dMB lua=%dMB bufs=%d'):format(math.floor(kb / 1024), math.floor(collectgarbage 'count' / 1024), #vim.api.nvim_list_bufs())
 end
 
 local function log_line(msg)
