@@ -1,58 +1,66 @@
-# Google Gemini in Pi via the Antigravity OAuth session (EXPERIMENTAL)
+# Gemini in Pi via the Antigravity OAuth session
 
-`bin/google-code-assist-proxy` is a loopback-only, OpenAI-compatible proxy that
-lets Pi reach Gemini through the OAuth session the Antigravity CLI (`agy`)
-already holds. It is **experimental, text-only, and not a default model**.
+Same pattern as the Claude subscription setup: Pi uses its **native** provider
+implementation (`google-generative-ai`: tools, thinking, thought signatures,
+images) against a loopback endpoint that holds the subscription credential.
+No second agent is spawned.
 
-## Closeout disposition (2026-10-03)
-
-Preserved on `feat/google-code-assist-proxy`, **not promoted into the active master
-configuration**. The live service is disabled and the stale local provider entry
-is removed by the coordinator. The successful earlier text probe does not establish
-safe tool-capable inference. Direct access currently fails in the tested account/
-project configuration; whether that is entitlement or project selection needs
-separate investigation. No subscription purchase or credential migration is implied.
-The opt-in `agy` path launches a second agent: sandboxing and an empty working
-directory are not proof of tool-less behavior or absence of global context. Do not
-use it as a transparent replacement for Pi's permission/tool execution model.
+```
+pi ──(Gemini API, placeholder key)──> 127.0.0.1:8790 google-code-assist-proxy
+     ──(Bearer <agy OAuth>, {project, model, request})──> daily-cloudcode-pa.googleapis.com/v1internal
+```
 
 ## Pieces
 
 | File | Role |
 | --- | --- |
-| `bin/google-code-assist-proxy` | Proxy on `127.0.0.1:8790` (refuses any other bind address) |
+| `bin/google-code-assist-proxy` | Shim: wraps Gemini requests in the Code Assist envelope, unwraps `{"response": …}` replies/SSE events |
 | `config/systemd/user/google-code-assist-proxy.service` | User unit (not enabled by `make install`) |
-| `config/pi/models.example.json` | `google-cloud-code` provider template for `~/.pi/agent/models.json` |
+| `config/pi/models.example.json` | `google-antigravity` provider block for `~/.pi/agent/models.json` |
 
 ## Activation (manual)
 
 ```bash
-agy                                  # sign in once; agy owns and refreshes the token
+agy                                  # sign in once
 ln -sfn "$DOTFILES/config/systemd/user/google-code-assist-proxy.service" ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now google-code-assist-proxy
-# copy the google-cloud-code provider block from config/pi/models.example.json into ~/.pi/agent/models.json
-pi --no-tools --model google-cloud-code/gemini-3.8-flash-low
+# merge the google-antigravity block from config/pi/models.example.json into ~/.pi/agent/models.json
+pi --model google-antigravity/gemini-3.8-flash-tiered
+curl -s 127.0.0.1:8790/_usage        # per-model remaining quota + reset time
 ```
 
-## Limitations / safety
+Not a default model; select it explicitly or via `/model`.
 
-- **No tool calling.** Requests containing `tools`, `tool_choice`, tool calls,
-  tool results or non-text content get HTTP 400. Pi's normal coding mode sends
-  tools, so use `--no-tools` (chat, review, summarisation). Nothing is silently
-  dropped and tool support is never claimed.
-- **Credential handling.** Reads `~/.gemini/antigravity-cli/antigravity-oauth-token`
-  read-only; never refreshes, writes, logs or echoes it. An expired token yields
-  HTTP 503 "run `agy` once to refresh it". No request logging; upstream error
-  bodies are not forwarded.
-- **Direct path.** `POST /v1internal:generateContent` on Cloud Code Assist. The
-  tested account/project configuration returned `403 SUBSCRIPTION_REQUIRED`,
-  which the proxy reports as a 502 error. This is not proof that all consumer
-  accounts fail or that purchasing a subscription is the correct fix.
-- **`agy` fallback (opt-in).** With `GOOGLE_CODE_ASSIST_AGY_FALLBACK=1`, a 401/403
-  makes the proxy run `agy --sandbox --disable-slash-commands -p=<transcript>` in
-  an empty temp directory. That is a second agent process using the Antigravity
-  quota; the prompt is passed on argv (visible in `ps` to the same user). Off by
-  default.
-- Streaming is emulated: the full answer arrives as one SSE chunk.
-- Not integrated with `llm-usage`, the Anthropic proxy route oracle, or
-  `llm-failover`. Antigravity quota is visible via `agy --output-format json -p='/usage'`.
+## What made direct calls work
+
+The Antigravity backend is the Code Assist `v1internal` API. Earlier attempts
+failed only because of the request, not the account:
+
+- **Project**: must be `cloudaicompanionProject` from `loadCodeAssist`
+  (`aicode-consumers` on the free "Antigravity" tier). `agy`'s local
+  `default-cli-project` gives `403 SUBSCRIPTION_REQUIRED`. Override with
+  `GOOGLE_CODE_ASSIST_PROJECT`.
+- **Model ids**: backend ids from `fetchAvailableModels`
+  (`gemini-3.8-flash-tiered`, `gemini-3.6-flash-high`, `gemini-3.1-pro-low`, …),
+  not agy's labels (`gemini-3.8-flash-low` → 404).
+
+## Credentials
+
+- Reads `~/.gemini/antigravity-cli/antigravity-oauth-token` (owned by `agy`),
+  never writes it; picks up agy's newer token whenever the file changes.
+- An expired access token is refreshed **in memory** with the stored refresh
+  token and agy's OAuth client: client id from the id_token `aud`, client secret
+  found in the installed `agy` binary at runtime (or
+  `GOOGLE_ANTIGRAVITY_CLIENT_SECRET`). Like the Claude Code OAuth reuse, this
+  presents as Google's own client; that is the policy trade-off of this setup.
+- No logging; Pi's placeholder key is ignored; upstream errors are reduced to
+  status, message and `ErrorInfo.reason` (so Pi's 429/503 retry still works).
+- Listens on `127.0.0.1` only (any other bind address is refused).
+
+## Limits
+
+- Quota is the Antigravity weekly Gemini bucket shared with `agy`
+  (`GET /_usage`). Not yet in `llm-usage`, the route oracle or `llm-failover`.
+- Model list in `models.json` is static; refresh it from `/_usage` when Google
+  ships new ids.
+- Undocumented internal API; may change without notice.
