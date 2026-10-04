@@ -60,6 +60,31 @@ def correct(source, target):
     return target.is_symlink() and target.resolve() == source.resolve()
 
 
+def prune_dangling(agent):
+    """Remove agent links that point into this repo but whose source is gone.
+
+    pi-setup only ever ADDED links, so a resource moved or deleted in the repo
+    left a dangling symlink behind - pi then fails loading it on session start
+    (seen when anthropic-subscription.ts moved from extensions/ to lib/).
+    Only links into ROOT are touched; foreign/private links are not ours.
+    """
+    removed = []
+    for sub in ('extensions', 'lib', 'bin', 'skills'):
+        base = agent / sub
+        if not base.is_dir():
+            continue
+        for link in base.rglob('*'):
+            if link.is_symlink() and not link.exists():
+                try:
+                    if Path(os.readlink(link)).is_relative_to(ROOT):
+                        link.unlink()
+                        removed.append(link)
+                except OSError:
+                    continue
+    for link in removed:
+        print(f'pruned dangling link: {link}')
+
+
 def apply(operations, state):
     changes = [(kind, src, dst) for kind, src, dst in operations if not (kind == 'link' and correct(src, dst))]
     if not changes:
@@ -177,7 +202,9 @@ def main():
         if args.rollback:
             rollback(args.rollback)
         else:
-            apply(plan(args.agent_dir.expanduser().absolute(), args.private_root.expanduser(), args.pi_bin), state)
+            agent = args.agent_dir.expanduser().absolute()
+            prune_dangling(agent)
+            apply(plan(agent, args.private_root.expanduser(), args.pi_bin), state)
 
 
 if __name__ == '__main__':
