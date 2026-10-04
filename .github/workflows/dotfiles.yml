@@ -43,9 +43,14 @@ jobs:
           # SC2115 (rm -rf on a maybe-empty var), SC2086/SC2046 (unquoted
           # expansion feeding rm/ln), SC2164 (unguarded cd).
           shellcheck -x -S warning scripts/*.sh tests/*.sh
+          # bin/ holds extensionless scripts in several languages; check the
+          # shell ones at the same severity.
+          mapfile -t bin_shell < <(find bin config/git/hooks -maxdepth 1 -type f \
+            -exec sh -c 'head -1 "$1" | grep -qE "^#!.*(bash|sh)" && echo "$1"' _ {} \;)
+          shellcheck -x -S warning "${bin_shell[@]}"
 
   unit:
-    name: python unit tests
+    name: python + node unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -53,7 +58,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: make test-unit
+      - run: make test-node
 
   install:
     name: make install on archlinux (${{ matrix.image }})

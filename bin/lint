@@ -70,6 +70,7 @@ Options:
     --luacheck      Run luacheck on Lua files
     --shfmt         Run shfmt formatter on shell scripts
     --yamllint      Run yamllint on YAML files
+    --stylua        Run stylua --check on nvim Lua (native tool; CI gate)
     --all           Run all linters on appropriate files
     --local         Force local tools (skip Docker)
     --docker        Force Docker mode
@@ -96,7 +97,7 @@ FILES=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --shellcheck|--luacheck|--shfmt|--yamllint)
+        --shellcheck|--luacheck|--shfmt|--yamllint|--stylua)
             ACTION="${1#--}"
             shift
             ;;
@@ -154,9 +155,14 @@ case $ACTION in
     shellcheck)
         echo "🔍 Running shellcheck..."
         if [[ ${#FILES[@]} -eq 0 ]]; then
-            FILES=(bin/*)
+            # CI parity: every bash/sh script in the same trees CI scans,
+            # filtered by shebang (bin/ holds python/node scripts too).
+            FILES=()
+            while IFS= read -r f; do
+                head -1 "$f" | grep -qE '^#!.*(bash|sh)' && FILES+=("$f")
+            done < <(find bin scripts tests config/git/hooks -maxdepth 1 -type f 2>/dev/null)
         fi
-        lint shellcheck -x "${FILES[@]}"
+        lint shellcheck -x -S warning "${FILES[@]}"
         ;;
     luacheck)
         echo "📝 Running luacheck..."
@@ -175,9 +181,21 @@ case $ACTION in
     yamllint)
         echo "📄 Running yamllint..."
         if [[ ${#FILES[@]} -eq 0 ]]; then
-            FILES=(*.yml *.yaml)
+            FILES=(.github/workflows/*.yml)
+            for f in *.yml *.yaml; do [[ -f "$f" ]] && FILES+=("$f"); done
         fi
-        lint yamllint "${FILES[@]}" 2>/dev/null || true
+        lint yamllint "${FILES[@]}"
+        ;;
+    stylua)
+        echo "🎨 Running stylua (native; CI nvim.yml gates on this)..."
+        if ! command -v stylua &>/dev/null; then
+            echo -e "${YELLOW}⚠️  stylua not installed (cargo install stylua / pacman -S stylua)${NC}"
+            exit 1
+        fi
+        if [[ ${#FILES[@]} -eq 0 ]]; then
+            FILES=(config/nvim/)
+        fi
+        stylua --check "${FILES[@]}"
         ;;
     all)
         echo "🚀 Running all linters..."
@@ -188,6 +206,7 @@ case $ACTION in
         echo ""
         $0 --yamllint
         echo ""
+        command -v stylua &>/dev/null && { $0 --stylua; echo ""; }
         echo -e "${GREEN}✅ All linters complete${NC}"
         ;;
     "")

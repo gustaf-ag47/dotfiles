@@ -1,4 +1,4 @@
-.PHONY: help install test test-unit test-install lint lint-shell lint-lua lint-yaml lint-build
+.PHONY: help install test test-unit test-node test-bootstrap test-install lint lint-shell lint-lua lint-yaml lint-stylua lint-build
 
 # Default target - show help
 help:
@@ -6,26 +6,37 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make install       - Install dotfiles and create symlinks"
-	@echo "  make test          - Run E2E tests (requires docker compose)"
+	@echo "  make test          - Run all unit tests (python + node)"
 	@echo "  make test-unit     - Run Python unit tests (tests/unit/)"
+	@echo "  make test-node     - Run Node unit tests (tests/unit/*.mjs, node >= 22.6)"
+	@echo "  make test-bootstrap- Run bootstrap-kit round-trip tests (needs age)"
 	@echo "  make test-install  - Run the real installer + assertions in Docker (CI parity)"
 	@echo "  make lint          - Run all linters (Docker-based)"
 	@echo "  make lint-shell    - Run shellcheck on shell scripts"
 	@echo "  make lint-lua      - Run luacheck on Lua files"
-	@echo "  make lint-yaml     - Run yamllint on YAML files"
+	@echo "  make lint-yaml     - Run yamllint on YAML files (incl. workflows)"
+	@echo "  make lint-stylua   - Run stylua --check on nvim Lua (CI gate)"
 	@echo "  make lint-build    - Build/rebuild Docker linter image"
 	@echo "  make help          - Show this help message"
 	@echo ""
 	@echo "For more information, see docs/README.md and docs/LINTING.md"
 
 install:
-	@sh ./scripts/install.sh
+	@bash ./scripts/install.sh
 
-test:
-	@sh ./scripts/test.sh
+test: test-unit test-node
 
 test-unit:
 	@python3 -m unittest discover -s tests/unit -t tests/unit -v
+
+# PI_LLM_CLASS leaks from agent shells into class-sensitive tests; strip it.
+test-node:
+	@env -u PI_LLM_CLASS -u PI_LLM_CLASS_ESCALATE \
+		node --test --experimental-strip-types tests/unit/*.mjs
+
+test-bootstrap:
+	@bash tests/bootstrap-preflight.sh
+	@bash tests/bootstrap-kit.sh
 
 # Same commands the `install` job runs in .github/workflows/dotfiles.yml, so a
 # CI failure reproduces locally with one target.
@@ -52,6 +63,9 @@ lint-lua:
 
 lint-yaml:
 	@bin/lint --yamllint
+
+lint-stylua:
+	@bin/lint --stylua
 
 lint-build:
 	@bin/lint --build

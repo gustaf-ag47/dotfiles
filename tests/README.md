@@ -4,98 +4,53 @@ This directory contains tests for the dotfiles system.
 
 ```
 tests/
-├── e2e/    # Hurl HTTP tests (require running services)
-└── unit/   # Python unit tests for bin/ utilities
+├── e2e/                    # Opt-in live tests (real inference/browsers; never run in CI)
+├── unit/                   # Python + Node unit tests (offline, CI-gated)
+├── bootstrap-kit.sh        # age bootstrap kit round-trip (CI bootstrap-kit job)
+├── bootstrap-preflight.sh  # bootstrap kit preconditions
+├── install-assertions.sh   # post-install state assertions (CI install job)
+└── idempotency.sh          # re-run safety + non-destructiveness (CI install job)
 ```
 
-## Unit Tests
+## Unit tests
 
-Python `unittest` tests covering scripts in `bin/`. No services or network required.
+Offline; no services, credentials or network. CI gates on both suites
+(`.github/workflows/dotfiles.yml`, `unit` job).
 
 ```bash
-make test-unit
+make test-unit    # Python: unittest discovery over tests/unit/test_*.py
+make test-node    # Node:   node --test over tests/unit/*.mjs (node >= 22.6)
+make test         # both
 
-# Or a single file
-python3 -m unittest discover -s tests/unit -t tests/unit -v
+# Single module
+python3 -m unittest tests.unit.test_llm_usage -v
+node --test --experimental-strip-types tests/unit/test_anthropic_pool.mjs
 ```
 
-Naming: `tests/unit/test_<script-name-with-underscores>.py`.
-Scripts in `bin/` have no `.py` extension, so load them with `SourceFileLoader`
-(see `test_claude_token_proxy.py` for the pattern).
+Naming: `tests/unit/test_<script-name-with-underscores>.py` / `.mjs`.
 
-## E2E Tests
+Conventions:
+- Scripts in `bin/` have no `.py` extension; load them with `SourceFileLoader`
+  (see `test_claude_token_proxy.py` for the pattern).
+- Modules that load `bin/claude-token-proxy` must keep its cache writes inside
+  a redirected `XDG_CACHE_HOME`; `test_proxy_isolation.py` discovers and
+  re-runs every such module to enforce this.
+- Node tests that depend on class routing must save/restore `PI_LLM_CLASS` —
+  agent shells export it (`make test-node` strips it for the whole run).
 
-End-to-end tests are written in [Hurl](https://hurl.dev/) format and located in `tests/e2e/`.
-
-### Prerequisites
-
-1. **Install Hurl:**
-   ```bash
-   # Arch Linux
-   sudo pacman -S hurl
-   
-   # Or from source
-   cargo install hurl
-   ```
-
-2. **Running Docker Compose:**
-   ```bash
-   docker compose up -d
-   ```
-
-### Running Tests
+## Install tests
 
 ```bash
-# Run all tests
-make test
-
-# Or directly
-./scripts/test.sh
+make test-install   # real installer + assertions + idempotency in an Arch container
+make test-bootstrap # bootstrap kit round-trip (needs `age`)
 ```
 
-### Test Structure
+Same commands as the CI `install` and `bootstrap-kit` jobs, so a CI failure
+reproduces locally.
 
-Tests should be placed in `tests/e2e/` with either `.hurl` or `.http` extensions.
+## E2E (opt-in, paid/live)
 
-Example test file structure:
-```hurl
-# Comment describing the test
-GET http://localhost:8080/api/endpoint
-HTTP 200
-[Asserts]
-status == 200
-jsonpath "$.field" == "expected_value"
-```
-
-### Features Supported
-
-- **HTTP Methods:** GET, POST, PUT, DELETE, PATCH, etc.
-- **Request Headers:** Custom headers and content types
-- **Request Body:** JSON, XML, form data
-- **Response Assertions:** Status codes, headers, JSON path
-- **Variables:** Capture and reuse values between requests
-- **Environment:** Support for different environments via variables
-
-### Test Organization
-
-- `example.hurl` - Basic health check example
-- `api-comprehensive.hurl` - Full CRUD operations test
-- Add more test files as needed for specific features
-
-### Configuration
-
-Test configuration is in `scripts/test.sh`:
-- `E2E_DIR` - Directory containing test files
-- `HURL_OPTIONS` - Hurl command options
-- Docker compose service validation
-
-### Debugging
-
-For verbose output and debugging:
-```bash
-# Run with debug output
-hurl --test --verbose tests/e2e/your-test.hurl
-
-# Run single test file
-hurl --test tests/e2e/api-comprehensive.hurl
-```
+`tests/e2e/` holds tests that drive real models or browsers. Each one is
+documented where its feature lives (e.g. `jev-ultrafast-fixture.py` in
+`docs/jev-ultrafast.md`) and requires explicit CLI opt-in flags. CI never runs
+them.

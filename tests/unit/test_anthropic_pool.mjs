@@ -135,7 +135,16 @@ test('class and escalation headers are sent only to Anthropic', () => {
   }
 });
 
-test('session header: anthropic only, stable per session, process fallback', () => {
+test('session header: anthropic only, stable per session, process fallback', (t) => {
+  // Agent shells export PI_LLM_CLASS; the default-class assertion below needs it unset.
+  const oldClass = process.env.PI_LLM_CLASS;
+  const oldEscalate = process.env.PI_LLM_CLASS_ESCALATE;
+  delete process.env.PI_LLM_CLASS;
+  delete process.env.PI_LLM_CLASS_ESCALATE;
+  t.after(() => {
+    if (oldClass !== undefined) process.env.PI_LLM_CLASS = oldClass;
+    if (oldEscalate !== undefined) process.env.PI_LLM_CLASS_ESCALATE = oldEscalate;
+  });
   const { handlers } = fakePi();
   const sm = { getSessionId: () => 'abc' };
   const h1 = {}; handlers.before_provider_headers({ headers: h1 }, { model: { provider: ANTHROPIC }, sessionManager: sm });

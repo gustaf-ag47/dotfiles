@@ -15,11 +15,15 @@ import sys
 import tempfile
 import unittest
 
-PROXY_SUITES = [
-    "tests.unit.test_claude_token_proxy", "tests.unit.test_proxy_cross_provider",
-    "tests.unit.test_proxy_deepseek_backstop", "tests.unit.test_proxy_observability",
-    "tests.unit.test_proxy_no_starvation", "tests.unit.test_proxy_task_classes",
-]
+# Discovered, not hand-maintained: every unit module that loads the proxy
+# script writes through its CONTROL_DIR and must honour the cache redirect.
+# A hard-coded list drifted (it missed test_proxy_grok, test_proxy_5h and
+# test_anthropic_usage_freshness).
+PROXY_SUITES = sorted(
+    "tests.unit." + path.stem
+    for path in Path(__file__).parent.glob("test_*.py")
+    if path.stem != Path(__file__).stem and "claude-token-proxy" in path.read_text()
+)
 
 
 class ProxyCacheIsolationTests(unittest.TestCase):

@@ -76,4 +76,24 @@ else
 	rc=1
 fi
 
+# A real (non-symlink) local/ directory holds private user data; install must
+# back it up, never rm -rf it (regression for the old destructive branch).
+echo "-- local/ preservation --"
+rm -f "$DOTFILES/local"
+mkdir -p "$DOTFILES/local/bin"
+echo 'precious-local-data' >"$DOTFILES/local/bin/keepme"
+make install >/tmp/idem4.log 2>&1
+if grep -rqx 'precious-local-data' "$DOTFILES"/local.bak.* 2>/dev/null; then
+	echo "  ok   real local/ backed up, not deleted"
+else
+	echo "  FAIL real local/ directory was destroyed"
+	rc=1
+fi
+if [ -L "$DOTFILES/local" ]; then
+	echo "  ok   local link restored after backup"
+else
+	echo "  FAIL local link not restored"
+	rc=1
+fi
+
 exit "$rc"

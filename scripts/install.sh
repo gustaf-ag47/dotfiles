@@ -49,10 +49,16 @@ if [ ! -d "$SYNC/dotfiles-local" ]; then
 	echo "✅ Created $SYNC/dotfiles-local/"
 fi
 
-# Create symlink from dotfiles/local to $SYNC/dotfiles-local
+# Create symlink from dotfiles/local to $SYNC/dotfiles-local.
+# A REAL local/ directory holds user data (private configs, keys): back it up
+# next to itself, never rm -rf it (same non-destructive rule as link_config).
 if [ ! -L "$DOTFILES/local" ]; then
+	if [ -d "$DOTFILES/local" ]; then
+		backup="$DOTFILES/local.bak.$(date +%Y%m%d%H%M%S)"
+		echo "Backing up real local/ to $backup"
+		mv "$DOTFILES/local" "$backup"
+	fi
 	echo "Creating symlink: $DOTFILES/local → $SYNC/dotfiles-local"
-	rm -rf "$DOTFILES/local"
 	ln -s "$SYNC/dotfiles-local" "$DOTFILES/local"
 	echo "✅ Local configurations will be stored in $SYNC/dotfiles-local"
 fi

@@ -66,7 +66,9 @@ jobs:
             ${{ runner.os }}-nvim-lazy-
 
       - name: Test config loads (minimal)
+        shell: bash
         run: |
+          set -o pipefail
           XDG_CONFIG_HOME=/tmp/nvim-ci-config \
           XDG_DATA_HOME=/tmp/nvim-ci-data \
           XDG_STATE_HOME=/tmp/nvim-ci-state \
@@ -74,7 +76,12 @@ jobs:
           nvim --headless -u config/nvim/minimal.lua \
             -c "lua vim.defer_fn(function() vim.cmd('qa!') end, 5000)" \
             2>&1 | tee /tmp/nvim-load.log
-          echo "Exit code: $?"
+          # tee hides nvim's exit code without pipefail, and a config error can
+          # still exit 0 - fail on any E###/stack trace in the log as well.
+          if grep -qE "^E[0-9]+:|Error detected while processing|stack traceback" /tmp/nvim-load.log; then
+            echo "::error::nvim reported errors while loading the config"
+            exit 1
+          fi
 
       - name: Upload load log on failure
         if: failure()
