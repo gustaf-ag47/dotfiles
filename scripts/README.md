@@ -9,7 +9,6 @@ Automatically scans your Neovim configuration and generates comprehensive keybin
 ✅ **Language-Specific Grouping** - Separates Go, Python, SQL keybindings  
 ✅ **Conflict Detection** - Identifies potential keymap conflicts  
 ✅ **Cross-Platform** - Works on Linux, macOS, Windows  
-✅ **Both Lua and Python Versions** - Use inside Neovim or standalone  
 
 ## Quick Start
 
@@ -138,12 +137,10 @@ python3 scripts/scan_keybindings.py --format json | jq '.grouped.by_leader'
 ### Automation
 ```bash
 # Add to your dotfiles update script
-python3 scripts/scan_keybindings.py --output docs/keybindings.md
+python3 scripts/scan_keybindings.py --output /tmp/keybindings-scan.md  # review before merging into docs/KEYBINDINGS.md
 
 # Generate for multiple configs
-for config in ~/.config/nvim ~/.config/lvim; do
-  python3 scripts/scan_keybindings.py "$config" --output "${config}/keybindings.md"
-done
+python3 scripts/scan_keybindings.py ~/.config/nvim --output /tmp/nvim-keybindings.md
 ```
 
 ## Benefits for Your Modular Setup
@@ -157,7 +154,6 @@ done
 ## Requirements
 
 - **Python Version**: Python 3.6+
-- **Neovim Version**: 0.7+ (for Lua version)
 - **Dependencies**: None (uses only standard library)
 
 ## Output Formats
