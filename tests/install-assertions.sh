@@ -43,6 +43,16 @@ for c in nvim git tmux lf hypr waybar alacritty dunst atuin; do
 done
 check "local/bin/git-setup-hooks exists" test -e "$HOME/.local/bin/git-setup-hooks"
 
+echo "-- machine overlays --"
+check "waybar profile overlay" test -e "$XDG_CONFIG_HOME/waybar/profile.jsonc"
+check "hypr host overlay" test -e "$XDG_CONFIG_HOME/hypr-host.conf"
+check "hypridle overlay" test -e "$XDG_CONFIG_HOME/hypridle-host.conf"
+check "alacritty overlay" test -e "$XDG_CONFIG_HOME/alacritty-host.toml"
+check "tmux overlay" test -e "$XDG_CONFIG_HOME/tmux-host.conf"
+check "environment.d overlay" test -e "$XDG_CONFIG_HOME/environment.d/50-host.conf"
+check "profile facts generated" test -s "$XDG_CONFIG_HOME/dotfiles-profile.env"
+check "profile facts export class" grep -q "PROFILE_CLASS=" "$XDG_CONFIG_HOME/dotfiles-profile.env"
+
 echo "-- resolvable through the link --"
 check "tmux.conf resolves" test -f "$XDG_CONFIG_HOME/tmux/tmux.conf"
 check "nvim init.lua resolves" test -f "$XDG_CONFIG_HOME/nvim/init.lua"

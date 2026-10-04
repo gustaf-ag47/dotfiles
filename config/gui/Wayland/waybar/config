@@ -1,8 +1,8 @@
 {
-  // Machine-specific overlay, symlinked by scripts/install.sh from
-  // profiles/<class>.jsonc. Waybar's include merge keeps values already set in
-  // THIS file (included values are ignored on conflict), so modules-right must
-  // live only in the profile; defining it here would override every host.
+  // Machine overlay, resolved by scripts/install.sh (hosts/<hostname>.jsonc,
+  // else class/<class>.jsonc). Waybar's include merge keeps values already set
+  // in THIS file (included values are ignored on conflict), so modules-right
+  // must live only in the overlay; defining it here would override every host.
   "include": ["~/.config/waybar/profile.jsonc"],
   "layer": "top",
   "position": "top", 

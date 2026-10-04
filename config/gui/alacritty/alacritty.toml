@@ -30,8 +30,11 @@ color = "0xff9e64"
 index = 17
 color = "0xdb4b4b"
 
-[font]
-size = 16
+# Font size lives in the machine overlay (class/<class>.toml or
+# hosts/<hostname>.toml). Imports are loaded first and THIS file wins
+# conflicts, so the base must not set font.size at all.
+[general]
+import = ["~/.config/alacritty-host.toml"]
 
 [font.bold]
 family = "Hack Nerd Font Mono"
