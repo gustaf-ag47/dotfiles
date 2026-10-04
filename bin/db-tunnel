@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # db-tunnel - Manage database tunnels for development
 #
@@ -276,7 +276,6 @@ cmd_status() {
     echo "========================"
     echo ""
 
-    local has_tunnels=false
 
     for env in $(list_envs); do
         local config port description status
@@ -286,7 +285,6 @@ cmd_status() {
 
         if is_tunnel_running "$port"; then
             status="${GREEN}RUNNING${NC}"
-            has_tunnels=true
         else
             status="${RED}STOPPED${NC}"
         fi

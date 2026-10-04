@@ -138,18 +138,5 @@ while True:
         quit_calc()
 "
 
-# Create a temporary Python script
-TEMP_SCRIPT="/tmp/calculator_$$.py"
-echo "$CALC_SCRIPT" > "$TEMP_SCRIPT"
-
 # Launch the calculator in a floating terminal
-if [ -n "$WAYLAND_DISPLAY" ]; then
-    # For Wayland/Hyprland
-    alacritty --class "floating-calculator" --title "Calculator" -e python3 "$TEMP_SCRIPT"
-else
-    # For X11
-    alacritty --class "floating-calculator" --title "Calculator" -e python3 "$TEMP_SCRIPT"
-fi
-
-# Clean up
-rm -f "$TEMP_SCRIPT"
+exec alacritty --class "floating-calculator" --title "Calculator" -e python3 -c "$CALC_SCRIPT"

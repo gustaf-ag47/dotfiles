@@ -5,25 +5,16 @@
 
 set -euo pipefail
 
-find_project_root() {
-    local dir="$PWD"
-    while [[ "$dir" != "/" ]]; do
-        [[ -f "$dir/composer.json" ]] && echo "$dir" && return 0
-        dir="$(dirname "$dir")"
-    done
-    return 1
-}
-
-PROJECT_ROOT="$(find_project_root 2>/dev/null || true)"
+HELPER="$(dirname "$(readlink -f "$0")")/php-container"
+PROJECT_ROOT=""
+CONTAINER=""
+if DISCOVERED="$("$HELPER" 2>/dev/null)"; then
+    PROJECT_ROOT="$(sed -n 1p <<<"$DISCOVERED")"
+    CONTAINER="$(sed -n 2p <<<"$DISCOVERED")"
+fi
 CONTAINER_ROOT="/srv"
 
-if [[ -n "$PROJECT_ROOT" && -f "$PROJECT_ROOT/docker-compose.yml" ]]; then
-    CONTAINER="$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" ps -q php 2>/dev/null | head -1)"
-    if [[ -z "$CONTAINER" ]]; then
-        PROJECT_NAME="$(basename "$PROJECT_ROOT")"
-        CONTAINER="$(docker ps --filter "name=${PROJECT_NAME}.*php" --format '{{.Names}}' 2>/dev/null | head -1)"
-    fi
-
+if true; then
     if [[ -n "$CONTAINER" ]]; then
         # Translate args: host paths → container paths.
         # If --log-junit points to a host temp path, redirect it to a container
@@ -48,7 +39,7 @@ if [[ -n "$PROJECT_ROOT" && -f "$PROJECT_ROOT/docker-compose.yml" ]]; then
                 JUNIT_CONTAINER_PATH="$CONTAINER_ROOT/var/neotest-junit-$$.xml"
                 ARGS+=("--log-junit=$JUNIT_CONTAINER_PATH")
             elif [[ "$arg" == "$PROJECT_ROOT"* ]]; then
-                ARGS+=("$CONTAINER_ROOT${arg#$PROJECT_ROOT}")
+                ARGS+=("$CONTAINER_ROOT${arg#"$PROJECT_ROOT"}")
             else
                 ARGS+=("$arg")
             fi

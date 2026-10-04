@@ -153,11 +153,10 @@ monitor_battery() {
 }
 
 # Run once or continuously
-if [[ "$1" == "--daemon" ]]; then
-    # Run as daemon
+if [[ "${1:-}" == "--daemon" ]]; then
     while true; do
         monitor_battery
-        sleep 60  # Check every minute
+        sleep 60
     done
 else
     # Run once

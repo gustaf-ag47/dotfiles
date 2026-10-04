@@ -1,46 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-# File manager launcher with fallbacks
+# File manager launcher with fallbacks.
+# Terminal probing is delegated to bin/terminal; keep one fallback chain.
 
-# Try terminal-based file managers first
-if command -v lf &>/dev/null; then
-    # Check for terminal emulator
-    if command -v alacritty &>/dev/null; then
-        exec alacritty -e lf "$@"
-    elif command -v kitty &>/dev/null; then
-        exec kitty -e lf "$@"
-    elif command -v foot &>/dev/null; then
-        exec foot lf "$@"
-    else
-        # Fallback to current terminal if available
-        exec lf "$@"
+HERE="$(dirname "$(readlink -f "$0")")"
+
+for fm in lf ranger nnn; do
+    if command -v "$fm" &>/dev/null; then
+        exec "$HERE/terminal" -e "$fm" "$@"
     fi
-elif command -v ranger &>/dev/null; then
-    if command -v alacritty &>/dev/null; then
-        exec alacritty -e ranger "$@"
-    elif command -v kitty &>/dev/null; then
-        exec kitty -e ranger "$@"
-    else
-        exec ranger "$@"
-    fi
-elif command -v nnn &>/dev/null; then
-    if command -v alacritty &>/dev/null; then
-        exec alacritty -e nnn "$@"
-    elif command -v kitty &>/dev/null; then
-        exec kitty -e nnn "$@"
-    else
-        exec nnn "$@"
-    fi
+done
+
 # GUI file managers as fallback
-elif command -v thunar &>/dev/null; then
-    exec thunar "$@"
-elif command -v nautilus &>/dev/null; then
-    exec nautilus "$@"
-elif command -v dolphin &>/dev/null; then
-    exec dolphin "$@"
-else
-    echo "Error: No file manager found" >&2
-    echo "Please install: lf, ranger, nnn, thunar, nautilus, or dolphin" >&2
-    exit 1
-fi
+for fm in thunar nautilus dolphin; do
+    if command -v "$fm" &>/dev/null; then
+        exec "$fm" "$@"
+    fi
+done
+
+echo "Error: No file manager found" >&2
+echo "Please install: lf, ranger, nnn, thunar, nautilus, or dolphin" >&2
+exit 1

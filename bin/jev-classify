@@ -6,7 +6,7 @@
 //   bin/jev-classify --status                          # read-only status, no classification
 //
 // Contract (see docs/research/jev-helper-implementation.md and
-// docs/handover/implement-jev-helper.md):
+// docs/research/jev-helper-implementation.md):
 //   - Emits exactly one JSON object to stdout, nothing else.
 //   - Exit code 0 for every ordinary classification/skip/error outcome; the
 //     caller must never branch its own launch decision on this CLI's output

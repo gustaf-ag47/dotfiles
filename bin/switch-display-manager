@@ -27,6 +27,6 @@ if [[ "$1" == "hyprland" ]]; then
 elif [[ "$1" == "i3" ]]; then
 	start_i3
 else
-	echo "Usage: ./switch_wm.sh [hyprland|i3]"
+	echo "Usage: switch-display-manager [hyprland|i3]"
 	exit 1
 fi

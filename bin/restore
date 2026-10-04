@@ -1,69 +1,83 @@
 #!/bin/bash
+# Restore a bin/backup archive. Round-trips backup's actual output: a
+# $BACKUP_DIR/<timestamp>.tar.gz containing the item folders listed below.
+#
+# Usage: restore [backup.tar.gz]   (default: newest *.tar.gz in $BACKUP_DIR)
+
 set -euo pipefail
 
-# Check required commands
-for cmd in cp chmod find; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "Error: Required command '$cmd' not found" >&2
-        exit 1
-    fi
-done
+if [ -n "${1:-}" ]; then
+	ARCHIVE="$1"
+else
+	: "${BACKUP_DIR:?Environment variable BACKUP_DIR is not set (or pass an archive path)}"
+	ARCHIVE="$(find "$BACKUP_DIR" -maxdepth 1 -name '*.tar.gz' | sort | tail -1)"
+fi
+[ -f "$ARCHIVE" ] || { echo "restore: no backup archive found" >&2; exit 1; }
 
-BACKUP_DIR="$HOME/sync/backup" 
+echo "Restoring from $ARCHIVE"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+tar -xzf "$ARCHIVE" -C "$WORK"
+# The archive holds a single <timestamp>/ folder
+SRC="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -1)"
+[ -n "$SRC" ] || { echo "restore: archive layout not recognized" >&2; exit 1; }
 
-restore_dir() {
-	local src="$1"
-	local dest="$2"
-	if [ -d "$src" ]; then
-		echo "Restoring $src to $dest"
-		cp -r "$src" "$dest"
-	else
-		echo "Directory $src not found in the backup"
-	fi
+# cp -rT merges CONTENTS into the destination instead of nesting the source
+# folder inside it (the old restore created ~/.ssh/ssh-keys).
+restore_dir() { # <item> <dest> [file_perms] [dir_perms]
+	local item="$SRC/$1" dest="$2" fperm="${3:-}" dperm="${4:-}"
+	[ -d "$item" ] || { echo "skip: $1 not in backup"; return 0; }
+	mkdir -p "$dest"
+	cp -rT "$item" "$dest"
+	[ -n "$dperm" ] && find "$dest" -type d -exec chmod "$dperm" {} +
+	[ -n "$fperm" ] && find "$dest" -type f -exec chmod "$fperm" {} +
+	echo "restored: $1 -> $dest"
 }
 
-restore_file() {
-	local src="$1"
-	local dest="$2"
-	if [ -f "$src" ]; then
-		echo "Restoring $src to $dest"
-		cp "$src" "$dest"
-	else
-		echo "File $src not found in the backup"
-	fi
+restore_file() { # <item> <dest> [perms]
+	local item="$SRC/$1" dest="$2" perm="${3:-}"
+	[ -f "$item" ] || { echo "skip: $1 not in backup"; return 0; }
+	mkdir -p "$(dirname "$dest")"
+	cp "$item" "$dest"
+	[ -n "$perm" ] && chmod "$perm" "$dest"
+	echo "restored: $1 -> $dest"
 }
 
-echo "Starting restoration process..."
+restore_sudo_dir() { # <item> <dest>
+	local item="$SRC/$1" dest="$2"
+	[ -d "$item" ] || { echo "skip: $1 not in backup"; return 0; }
+	sudo mkdir -p "$dest"
+	sudo cp -rT "$item" "$dest"
+	echo "restored: $1 -> $dest (system)"
+}
 
-# Restore system directories (requires sudo)
-if [ -d "$BACKUP_DIR/bluetooth" ]; then
-    echo "Restoring $BACKUP_DIR/bluetooth to /var/lib/bluetooth"
-    sudo cp -r "$BACKUP_DIR/bluetooth" "/var/lib/bluetooth"
-else
-    echo "Directory $BACKUP_DIR/bluetooth not found in the backup"
+# System items (sudo)
+restore_sudo_dir bluetooth /var/lib/bluetooth
+restore_sudo_dir network-connections /etc/NetworkManager/system-connections
+if [ -f "$SRC/fstab" ]; then
+	echo "NOTE: not overwriting /etc/fstab automatically (UUIDs differ per machine)."
+	echo "      Review and merge by hand: $ARCHIVE -> fstab"
 fi
 
-if [ -d "$BACKUP_DIR/network-connections" ]; then
-    echo "Restoring $BACKUP_DIR/network-connections to /etc/NetworkManager/system-connections"
-    sudo cp -r "$BACKUP_DIR/network-connections" "/etc/NetworkManager/system-connections"
-else
-    echo "Directory $BACKUP_DIR/network-connections not found in the backup"
+# User items (names and perms mirror bin/backup)
+restore_dir ssh-keys "$HOME/.ssh" 600 700
+restore_dir gnupg "$HOME/.gnupg" 600 700
+restore_dir firefox-data "$HOME/.mozilla/firefox"
+restore_dir thunderbird-data "$HOME/.thunderbird"
+restore_dir tmuxp-sessions "${XDG_CONFIG_HOME:-$HOME/.config}/tmuxp"
+restore_file zhistory "${ZDOTDIR:-$HOME}/.zhistory" 600
+
+# Encryption keys — unreadable data without these
+restore_dir age-keys "$HOME/.config/age" 600 700
+restore_dir age-keys-alt "$HOME/.age" 600 700
+restore_file atuin-key "$HOME/.local/share/atuin/key" 600
+restore_file syncthing-key "$HOME/.local/state/syncthing/key.pem" 600
+restore_dir pritunl-profiles "$HOME/.config/pritunl/profiles" 600 700
+
+if [ -f "$SRC/crontab" ] && [ -s "$SRC/crontab" ] && ! grep -q "No crontab" "$SRC/crontab"; then
+	crontab "$SRC/crontab" && echo "restored: crontab"
 fi
 
-restore_dir "$BACKUP_DIR/ssh-keys" "$HOME/.ssh"
-
-restore_dir "$BACKUP_DIR/firefox-data" "$HOME/.mozilla/firefox"
-
-restore_dir "$BACKUP_DIR/thunderbird-data" "$HOME/.thunderbird"
-
-restore_file "$BACKUP_DIR/fstab" "/etc/fstab"
-
-restore_dir "$BACKUP_DIR/tmuxp-sessions" "$XDG_CONFIG_HOME/tmuxp"
-
-restore_file "$BACKUP_DIR/zhistory" "$ZDOTDIR/zhistory"
-
-restore_dir "$BACKUP_DIR/gnupg" "$HOME/.gnupg"
-
-echo "Restoration completed."
-
+echo "Restoration completed. Package lists (pkglist.txt/aurlist.txt) and"
+echo "systemd-services are informational; reinstall via pacman by hand."
 echo "Some changes may require a system restart or re-login to take effect."

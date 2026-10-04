@@ -1,0 +1,23 @@
+#!/bin/bash
+# Shared discovery for the PHP Docker wrappers (phpstan, php-cs-fixer, phpunit).
+# Prints two lines: the project root (nearest composer.json) and the running
+# php container ID/name (empty when none). Exits 1 when no project root.
+
+set -euo pipefail
+
+dir="$PWD"
+while [[ "$dir" != "/" ]]; do
+    [[ -f "$dir/composer.json" ]] && break
+    dir="$(dirname "$dir")"
+done
+[[ -f "$dir/composer.json" ]] || exit 1
+
+container=""
+if [[ -f "$dir/docker-compose.yml" ]]; then
+    container="$(docker compose -f "$dir/docker-compose.yml" ps -q php 2>/dev/null | head -1)"
+    if [[ -z "$container" ]]; then
+        container="$(docker ps --filter "name=$(basename "$dir").*php" --format '{{.Names}}' 2>/dev/null | head -1)"
+    fi
+fi
+
+printf '%s\n%s\n' "$dir" "$container"

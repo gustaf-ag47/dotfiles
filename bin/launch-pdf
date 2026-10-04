@@ -3,9 +3,7 @@
 search_dir="$SYNC"
 pdf_viewer="zathura"
 epub_viewer="zathura"
-log_file="$SYNC/pdf_epub_launcher.log"
-
-echo "$XDG_SESSION_TYPE"
+log_file="${XDG_STATE_HOME:-$HOME/.local/state}/pdf_epub_launcher.log"
 if [ "$XDG_SESSION_TYPE" = "wayland" ]; then
 	launcher="wofi -i --show dmenu --prompt='Select PDF/EPUB'"
 else

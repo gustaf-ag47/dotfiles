@@ -4,39 +4,26 @@
 
 set -euo pipefail
 
-# Find the project root (nearest composer.json)
-find_project_root() {
-    local dir="$PWD"
-    while [[ "$dir" != "/" ]]; do
-        [[ -f "$dir/composer.json" ]] && echo "$dir" && return 0
-        dir="$(dirname "$dir")"
+HELPER="$(dirname "$(readlink -f "$0")")/php-container"
+PROJECT_ROOT=""
+CONTAINER=""
+if DISCOVERED="$("$HELPER" 2>/dev/null)"; then
+    PROJECT_ROOT="$(sed -n 1p <<<"$DISCOVERED")"
+    CONTAINER="$(sed -n 2p <<<"$DISCOVERED")"
+fi
+
+if [[ -n "$CONTAINER" ]]; then
+    # Translate file paths from host to container
+    ARGS=()
+    for arg in "$@"; do
+        if [[ "$arg" == "$PROJECT_ROOT"* ]]; then
+            arg="/srv${arg#"$PROJECT_ROOT"}"
+        fi
+        ARGS+=("$arg")
     done
-    return 1
-}
 
-PROJECT_ROOT="$(find_project_root 2>/dev/null || true)"
-
-# Try Docker first: vendor/bin tools target the container's PHP version, not the host's
-if [[ -n "$PROJECT_ROOT" && -f "$PROJECT_ROOT/docker-compose.yml" ]]; then
-    CONTAINER="$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" ps -q php 2>/dev/null | head -1)"
-    if [[ -z "$CONTAINER" ]]; then
-        PROJECT_NAME="$(basename "$PROJECT_ROOT")"
-        CONTAINER="$(docker ps --filter "name=${PROJECT_NAME}.*php" --format '{{.Names}}' 2>/dev/null | head -1)"
-    fi
-
-    if [[ -n "$CONTAINER" ]]; then
-        # Translate file paths from host to container
-        ARGS=()
-        for arg in "$@"; do
-            if [[ "$arg" == "$PROJECT_ROOT"* ]]; then
-                arg="/srv${arg#$PROJECT_ROOT}"
-            fi
-            ARGS+=("$arg")
-        done
-
-        exec docker exec -w /srv "$CONTAINER" \
-            bash -c "XDEBUG_MODE=off php vendor/bin/phpstan ${ARGS[*]}"
-    fi
+    exec docker exec -w /srv "$CONTAINER" \
+        bash -c "XDEBUG_MODE=off php vendor/bin/phpstan $(printf '%q ' "${ARGS[@]}")"
 fi
 
 # Fallback: local vendor/bin

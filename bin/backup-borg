@@ -12,7 +12,9 @@ DATE=$(date +"%Y-%m-%d")
 
 if ! mountpoint -q "$BACKUP_DRIVE"; then
 	echo "External drive is not mounted. Mounting now..."
-	if ! sudo mount "$BACKUP_DEVICE" /mnt/backup; then
+	sudo mkdir -p "$BACKUP_DRIVE"
+	# Mount at $BACKUP_DRIVE itself: the repo path below lives under it.
+	if ! sudo mount "$BACKUP_DEVICE" "$BACKUP_DRIVE"; then
 		echo "Failed to mount the external drive. Exiting."
 		exit 1
 	fi

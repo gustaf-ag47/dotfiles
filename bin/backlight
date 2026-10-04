@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 get_backlight() {
-	LIGHT=$(brightnessctl g)
-	echo "${LIGHT}"
+	# Percentage, not the raw device value: max varies per panel.
+	brightnessctl -m | awk -F, '{print $4}' | tr -d '%'
 }
 
 notify_user() {

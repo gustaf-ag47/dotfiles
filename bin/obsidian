@@ -1,3 +1,7 @@
 #!/bin/bash
 
+if [ -z "${OBSIDIAN_PATH:-}" ]; then
+	echo "obsidian: OBSIDIAN_PATH is empty (no AppImage found; see config/zsh/.zshenv)" >&2
+	exit 1
+fi
 exec "${OBSIDIAN_PATH}"

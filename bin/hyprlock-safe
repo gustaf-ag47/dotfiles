@@ -6,14 +6,16 @@
 # Falls back to systemctl suspend after 5 rapid crashes (<10s between crashes)
 # to avoid a spin loop on a broken GPU state.
 
-set -euo pipefail
+# No `set -e`: a crashing hyprlock must not abort this wrapper — surviving the
+# crash and relocking is its entire purpose.
+set -uo pipefail
 
 CRASH_COUNT=0
 LAST_CRASH=0
 
 while true; do
-    hyprlock
-    EXIT=$?
+    EXIT=0
+    hyprlock || EXIT=$?
     NOW=$(date +%s)
 
     # Clean unlock

@@ -1,7 +1,5 @@
 #!/bin/bash
 
-echo "Bootstrap script"
-
 set -euo pipefail
 
 # Fail loudly and early on missing tools. Without this, a fresh machine gets a
@@ -124,7 +122,8 @@ link_config "$DOTFILES/config/nvim" "$XDG_CONFIG_HOME/nvim"
 link_config "$DOTFILES/config/git" "$XDG_CONFIG_HOME/git"
 link_config "$DOTFILES/config/lf" "$XDG_CONFIG_HOME/lf"
 link_config "$DOTFILES/config/npm" "$XDG_CONFIG_HOME/npm"
-link_config "$DOTFILES/config/mycli/myclirc" "$XDG_CONFIG_HOME/myclirc"
+mkdir -p "$XDG_CONFIG_HOME/mycli"
+link_config "$DOTFILES/config/mycli/myclirc" "$XDG_CONFIG_HOME/mycli/myclirc"
 link_config "$DOTFILES/config/xdg-user-dirs/user-dirs.dirs" "$XDG_CONFIG_HOME/user-dirs.dirs"
 
 # Claude Code auth helper: sourced by .zshenv to select the OAuth token with the
@@ -133,18 +132,19 @@ mkdir -p "$XDG_CONFIG_HOME/claude-code"
 link_config "$DOTFILES/config/claude-code/env.sh" "$XDG_CONFIG_HOME/claude-code/env.sh"
 
 # Hot-swap proxy as a user service so EVERY session can rotate tokens mid-run
-# (env.sh routes through it via ANTHROPIC_BASE_URL when it is active).
-# Symlink the binaries into ~/.local/bin so the unit's %h-relative ExecStart
-# resolves regardless of where $DOTFILES lives or what PATH systemd uses.
-mkdir -p "$HOME/.local/bin"
-link_config "$DOTFILES/bin/claude-token-proxy" "$HOME/.local/bin/claude-token-proxy"
-link_config "$DOTFILES/bin/claude-token-refresh" "$HOME/.local/bin/claude-token-refresh"
+# (env.sh routes through it via ANTHROPIC_BASE_URL when it is active). The
+# units use %h/.local/bin ExecStart paths; the bin/* loop below provides those
+# links before any unit starts.
 mkdir -p "$XDG_CONFIG_HOME/systemd/user" "${XDG_CACHE_HOME:-$HOME/.cache}/cc-proxy"
-link_config "$DOTFILES/config/systemd/user/claude-token-proxy.service" \
-	"$XDG_CONFIG_HOME/systemd/user/claude-token-proxy.service"
+for unit in claude-token-proxy.service llm-alert.service llm-alert.timer \
+	llm-schedule.service llm-schedule.timer; do
+	link_config "$DOTFILES/config/systemd/user/$unit" \
+		"$XDG_CONFIG_HOME/systemd/user/$unit"
+done
 if command -v systemctl >/dev/null 2>&1; then
 	systemctl --user daemon-reload 2>/dev/null || true
 	systemctl --user enable --now claude-token-proxy.service 2>/dev/null || true
+	systemctl --user enable --now llm-alert.timer llm-schedule.timer 2>/dev/null || true
 fi
 
 # mkdir -p, not rm -rf + mkdir: transmission keeps its runtime state (stats,
@@ -161,11 +161,10 @@ if [ -d "$LOCAL_CONFIG/config/tmuxp" ]; then
 fi
 link_config "$DOTFILES/config/tmux" "$XDG_CONFIG_HOME/tmux"
 
-if [ ! -d "$XDG_DATA_HOME/tmux" ]; then
-	mkdir "$XDG_DATA_HOME/tmux"
-fi
-[ ! -d "$XDG_DATA_HOME/tmux/plugins" ] &&
-	git clone https://github.com/tmux-plugins/tpm "$XDG_DATA_HOME/tmux/plugins/tpm"
+# tmux.conf loads plugins from $XDG_CONFIG_HOME/tmux/plugins (the symlinked,
+# gitignored config/tmux/plugins/), so tpm must be cloned there.
+[ ! -d "$XDG_CONFIG_HOME/tmux/plugins/tpm" ] &&
+	git clone https://github.com/tmux-plugins/tpm "$XDG_CONFIG_HOME/tmux/plugins/tpm"
 
 link_config "$DOTFILES/config/gui/dunst" "$XDG_CONFIG_HOME/dunst"
 link_config "$DOTFILES/config/gui/alacritty" "$XDG_CONFIG_HOME/alacritty"
@@ -256,8 +255,10 @@ link_config "$DOTFILES/config/atuin" "$XDG_CONFIG_HOME/atuin"
 # Link yazi configuration (file manager)
 [ -d "$DOTFILES/config/yazi" ] && link_config "$DOTFILES/config/yazi" "$XDG_CONFIG_HOME/yazi"
 
-# Link bin directory (utility scripts)
+# Link bin directory (utility scripts). Prune dangling links first so deleted
+# scripts do not linger on machines that installed them earlier.
 mkdir -p "$HOME/.local/bin"
+find "$HOME/.local/bin" -maxdepth 1 -xtype l -lname "$DOTFILES/bin/*" -delete 2>/dev/null || true
 for script in "$DOTFILES/bin/"*; do
     if [ -f "$script" ]; then
         ln -sf "$script" "$HOME/.local/bin/$(basename "$script")"
@@ -282,6 +283,8 @@ if command -v pi >/dev/null 2>&1; then
     "$DOTFILES/bin/pi-setup" --apply || echo "  warning: pi-setup reported problems" >&2
 fi
 
-# Link Claude Code user configuration
-mkdir -p "$HOME/.claude"
-link_config "$DOTFILES/.claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+# Link Claude Code user configuration (private overlay only; not in this repo)
+if [ -f "$DOTFILES/.claude/CLAUDE.md" ]; then
+    mkdir -p "$HOME/.claude"
+    link_config "$DOTFILES/.claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+fi

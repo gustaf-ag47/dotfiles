@@ -5,13 +5,12 @@
 
 set -e
 
-DOTFILES_HOOKS="$HOME/.config/git/hooks"
-REPO_HOOKS=".git/hooks"
+DOTFILES_HOOKS="${XDG_CONFIG_HOME:-$HOME/.config}/git/hooks"
 
 echo "🔧 Setting up Git hooks..."
 
-# Check if we're in a git repository
-if [ ! -d ".git" ]; then
+# `git rev-parse --git-path` resolves correctly in worktrees too (.git is a file there).
+if ! REPO_HOOKS="$(git rev-parse --git-path hooks 2>/dev/null)"; then
     echo "❌ Not in a Git repository"
     exit 1
 fi
@@ -56,8 +55,3 @@ for hook in "$REPO_HOOKS"/*; do
     fi
 done
 echo ""
-echo "📝 Hooks will now enforce:"
-echo "  - Commit message format validation"
-echo "  - Pre-commit code quality checks"
-echo "  - Syntax validation for scripts"
-echo "  - Secret detection"

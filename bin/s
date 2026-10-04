@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2016  # fzf --preview strings are expanded by fzf, not bash
 # s: Smart tmux session switcher with fzf
 #
 # Features:
@@ -16,26 +17,19 @@ set -euo pipefail
 NOTES_SESSIONS="${NOTES:-$HOME/sync/Vault}/tmux-sessions"
 TMUXP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmuxp"
 
-# Colors for fzf display
-COLOR_RUNNING="\033[32m"  # Green
-COLOR_SAVED="\033[33m"    # Yellow
-COLOR_TMUXP="\033[36m"    # Cyan
-COLOR_NEW="\033[35m"      # Magenta
-COLOR_RESET="\033[0m"
-
 get_running_sessions() {
     tmux list-sessions -F "#S" 2>/dev/null || true
 }
 
 get_saved_sessions() {
     if [ -d "$NOTES_SESSIONS" ]; then
-        find "$NOTES_SESSIONS" -name "*.yaml" -o -name "*.yml" 2>/dev/null | xargs -I{} basename {} .yaml | sed 's/\.yml$//'
+        find "$NOTES_SESSIONS" \( -name "*.yaml" -o -name "*.yml" \) -exec basename {} \; 2>/dev/null | sed 's/\.ya\?ml$//'
     fi
 }
 
 get_tmuxp_configs() {
     if [ -d "$TMUXP_DIR" ]; then
-        find "$TMUXP_DIR" -name "*.yaml" -o -name "*.yml" 2>/dev/null | xargs -I{} basename {} .yaml | sed 's/\.yml$//'
+        find "$TMUXP_DIR" \( -name "*.yaml" -o -name "*.yml" \) -exec basename {} \; 2>/dev/null | sed 's/\.ya\?ml$//'
     fi
 }
 
