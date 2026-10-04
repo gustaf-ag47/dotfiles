@@ -31,11 +31,11 @@ backup
 # List available backups
 ls -lh $SYNC/backup/*.tar.gz
 
-# Extract desired backup
-tar -xzf $SYNC/backup/2024-11-08_09-56-50.tar.gz -C $SYNC/backup/
-
-# Run restore
+# Restore the newest archive in $BACKUP_DIR (extracts internally, no manual tar)
 restore
+
+# Or restore a specific archive
+restore $SYNC/backup/2024-11-08_09-56-50.tar.gz
 ```
 
 ### Borg Backup (External Drive)
@@ -184,14 +184,17 @@ Since backups are stored in `$SYNC/backup/`, they can be synced to cloud storage
 ### Full Restore
 
 ```bash
-# 1. Extract backup
-tar -xzf $SYNC/backup/YYYY-MM-DD_HH-MM-SS.tar.gz -C $SYNC/backup/
+# 1. Run the restore script (newest archive, or pass a path)
+restore [archive.tar.gz]
 
-# 2. Run restore script
-restore
-
-# 3. Reboot or re-login for changes to take effect
+# 2. Reboot or re-login for changes to take effect
 ```
+
+Notes:
+- `/etc/fstab` is deliberately NOT auto-restored (UUIDs differ per machine);
+  the script tells you to merge it by hand.
+- Package lists (`pkglist.txt`/`aurlist.txt`) and `systemd-services` are
+  informational; reinstall via pacman manually.
 
 ### Selective Restore
 

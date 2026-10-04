@@ -2,7 +2,7 @@
 
 Status: implemented, offline-verified only. Branch `feat/jev-ultrafast-skill`, worktree
 `/home/gustaf/.cache/jev-implementation/ultrafast`. Implements
-`docs/handover/implement-jev-ultrafast-skill.md`. No network access was used while building or testing
+`docs/research/jev-ultrafast-implementation.md`. No network access was used while building or testing
 this; no real TypeSafe or text-model call was made; `scripts/setup.sh` was never run against the real
 network (its `git clone`/`uv sync` are untested live).
 

@@ -93,10 +93,6 @@ bin/lint --yamllint
    - Contains all linter tools
    - Built automatically on first use
 
-2. **docker-compose.linters.yml**
-   - Individual services for each linter
-   - Read-only workspace mounts for security
-   - Easy service management
 
 3. **bin/lint**
    - User-friendly CLI interface
@@ -210,10 +206,8 @@ docker run --rm -v "$PWD:/workspace:ro" -w /workspace dotfiles-linters:latest sh
 
 ```bash
 # Run specific linter service
-docker compose -f docker-compose.linters.yml run --rm shellcheck bin/*
 
 # Interactive shell
-docker compose -f docker-compose.linters.yml run --rm linters sh
 ```
 
 ## 🔧 Forcing Local Tools
@@ -315,27 +309,22 @@ chmod +x config/git/hooks/pre-commit
 
 ## 📊 CI/CD Integration
 
-### GitHub Actions Example
+### What CI actually gates (.github/workflows/)
 
-```yaml
-name: Lint
-on: [push, pull_request]
+`dotfiles.yml`:
+- `bash -n` on every shell script in `bin/`, `scripts/`, `tests/`, `config/git/hooks/`
+- `shellcheck -x -S warning` on `scripts/*.sh`, `tests/*.sh` and the shell
+  scripts in `bin/` + the git hooks
+- `make test-unit` (Python) and `make test-node` (Node)
+- the real installer + assertions + idempotency in an Arch container
+- bootstrap-kit round-trip tests
 
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+`nvim.yml`:
+- `luac -p` (Lua 5.1), `luacheck`, **StyLua format check**, headless config load
 
-      - name: Build linter image
-        run: docker build -f Dockerfile.linters -t dotfiles-linters:latest .
-
-      - name: Run shellcheck
-        run: bin/lint --shellcheck
-
-      - name: Run luacheck
-        run: bin/lint --luacheck
-```
+Reproduce locally: `make lint` (shellcheck/luacheck/yamllint, + stylua when
+installed) and the `make test-*` targets. The linter Docker image pins Lua 5.1
+to match CI.
 
 ## 📈 Best Practices
 

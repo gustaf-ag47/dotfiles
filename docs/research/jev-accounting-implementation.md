@@ -2,7 +2,7 @@
 
 Status: implemented on branch `feat/jev-accounting`, shadow-only observation
 milestone. Scope per handover
-(`docs/handover/implement-jev-accounting.md`): own
+(`docs/research/jev-accounting-implementation.md`): own
 `scripts/llm_usage.py` + `tests/unit/test_jev_usage.py` + this doc only. No
 proxy, routing/classes config, or helper changes. No network calls, no
 credential reads, no browser use.

@@ -3,7 +3,7 @@
 Status: implemented, not wired into any extension or caller yet. Branch
 `feat/jev-context-scout`, worktree `/home/gustaf/.cache/jev-context/scout`.
 Implements the scout-library half of
-`docs/handover/implement-jev-context-scout.md`: a bounded, privacy-preserving
+`docs/research/jev-context-scout-implementation.md`: a bounded, privacy-preserving
 file-relevance triage helper that a sibling implementation (opt-in extension
 + freshness-aware read-dedup) will call. **No extension, no scripts, no
 credentials, and no changes to `config/pi/lib/jev.mjs` were made or are

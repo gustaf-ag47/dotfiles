@@ -3,7 +3,7 @@
 Status: implemented, shadow/observe-only, no live network calls made while
 building or testing this. Branch `feat/jev-helper`, worktree
 `/home/gustaf/.cache/jev-implementation/helper`. Implements the first
-milestone of `docs/handover/implement-jev-helper.md`: a shared Jev classifier
+milestone of `docs/research/jev-helper-implementation.md`: a shared Jev classifier
 helper, a CLI the delegate shell wrapper calls, and a Pi `/jev` command —
 **observation only, nothing is ever applied to a launch decision.**
 

@@ -5,9 +5,8 @@ what was subsequently implemented. The original reports are research snapshots,
 not the current installation status.
 
 Sources:
-- [Capabilities and limits](jev-use-cases-capabilities.md)
-- [Concrete Pi workflows](jev-use-cases-workflows.md)
-- [Evaluation and ROI](jev-use-cases-evaluation.md)
+(The detailed capabilities/workflows/evaluation companion notes were pruned
+2026-10; this summary is the surviving record. Full text in git history.)
 - [Reviewed reference implementation](jev-ten-levels-review.md)
 
 ## Decisions and current state

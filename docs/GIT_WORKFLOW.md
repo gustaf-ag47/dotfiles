@@ -61,7 +61,7 @@ git rebase master
 git pushf  # Force push with lease (safe)
 
 # 7. Clean up after merge
-git clean  # Interactive cleanup tool
+git clean-branches  # Interactive cleanup tool (NOT `git clean`, the builtin untracked-file remover)
 ```
 
 ## 📝 Commit Message Standards
@@ -110,20 +110,24 @@ git chore "update dependencies"
 ## 🔧 Automated Enforcement
 
 ### Pre-commit Hooks
-Automatically run on every commit:
-- ✅ Syntax validation (shell scripts, Lua files)
-- ✅ Merge conflict marker detection
+Run on every commit (after `git-setup-hooks` has symlinked them into the repo):
+- ✅ Syntax validation (shell scripts via shellcheck/bash -n, Lua via luac)
+- ✅ Merge conflict markers AND whitespace errors (`git diff --check`)
 - ✅ Large file detection (>1MB warning)
-- ✅ Secret/sensitive data detection
-- ✅ Code quality checks
+- ✅ Secret/sensitive data detection (see docs/SECURITY.md for the full list)
+- ✅ Private key material scan + company/confidential term denylist
 
 ### Commit Message Validation
 Automatically enforces:
 - ✅ Conventional commit format
-- ✅ Subject line length (≤50 characters)
+- ✅ First-line length ≤50 characters (measured on the whole line, type and
+  scope included)
 - ✅ Proper capitalization (lowercase start)
 - ✅ No period at end of subject
 - ✅ Valid commit types
+
+Escape hatch: a message containing `Co-Authored-By: Claude` skips validation
+entirely (agent-generated commits carry longer explanatory bodies).
 
 ### Branch Name Validation
 Automated through `git-new-branch`:
@@ -138,7 +142,7 @@ Automated through `git-new-branch`:
 ```bash
 git sync          # Checkout master + pull origin
 git nb <type> <desc>  # Create new standardized branch
-git clean         # Interactive branch cleanup
+git clean-branches # Interactive branch cleanup
 
 git co <branch>   # Checkout branch
 git br            # List branches with info
@@ -204,7 +208,7 @@ git pushf
 
 # After PR merged
 git sync
-git clean
+git clean-branches
 ```
 
 ## 🔍 Troubleshooting
@@ -231,7 +235,7 @@ git reset HEAD large-file.bin  # Unstage large file
 ### Branch Cleanup
 ```bash
 # Clean up merged and orphaned branches
-git clean
+git clean-branches
 
 # Manual cleanup
 git branch -d merged-branch-name

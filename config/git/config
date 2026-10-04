@@ -3,6 +3,25 @@
 	name =
 [alias]
 	glog = log --all --pretty='format:%d %Cgreen%h%Creset %an - %s' --graph
+	# Workflow aliases documented in docs/GIT_WORKFLOW.md. `clean` cannot be an
+	# alias (git builtins shadow aliases); the branch cleaner is `git clean-branches`.
+	sync = !git checkout master && git pull origin master
+	nb = new-branch
+	co = checkout
+	br = branch
+	st = status
+	cm = commit -m
+	ca = commit --amend
+	pushf = push --force-with-lease
+	rim = rebase -i master
+	ahead = log master..HEAD --oneline
+	feat = "!f() { git commit -m \"feat: $1\"; }; f"
+	fix = "!f() { git commit -m \"fix: $1\"; }; f"
+	docs = "!f() { git commit -m \"docs: $1\"; }; f"
+	style = "!f() { git commit -m \"style: $1\"; }; f"
+	refactor = "!f() { git commit -m \"refactor: $1\"; }; f"
+	test = "!f() { git commit -m \"test: $1\"; }; f"
+	chore = "!f() { git commit -m \"chore: $1\"; }; f"
 [core]
 	pager = delta
 	excludesfile = ~/.config/git/ignore

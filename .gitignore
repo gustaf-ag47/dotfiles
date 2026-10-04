@@ -55,3 +55,8 @@ config/nvim/lua/dbui_private.lua
 # private key material, so ciphertext and public recipients CAN be committed.
 !secrets/
 !secrets/**
+
+# Delegation briefs are ephemeral working artifacts (the delegate skill writes
+# them here and copies them into child worktrees). Keep them out of history;
+# durable outcomes belong in docs/research/ or the code itself.
+docs/handover/

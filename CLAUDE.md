@@ -22,7 +22,7 @@ make install
 # 6. Symlinks both Wayland (Hyprland) and Xorg (i3) configs
 # 7. Copies .desktop files to $XDG_DATA_HOME/applications
 
-# Run E2E tests with Hurl (requires running docker compose)
+# Run the unit test suites (python + node)
 make test
 ```
 
@@ -36,37 +36,40 @@ git sync                    # Sync with master
 git nb feature add-feature  # Create new standardized branch
 git feat "add new feature"  # Quick conventional commit
 git pushf                   # Safe force push
-git clean                   # Interactive branch cleanup
+git clean-branches          # Interactive branch cleanup (clean is the git builtin!)
 
-# Commit validation automatically enforced via hooks
+# Commit validation enforced via hooks once git-setup-hooks has run in the repo
 ```
 
 ### Core Scripts
 - `scripts/install.sh` - Main installation script that symlinks configurations to proper XDG locations
-- `scripts/test.sh` - E2E test runner using Hurl (requires docker compose services running)
-- `bin/` - Custom utility scripts (40+ tools):
+- `bin/` - Custom utility scripts (75+ tools):
   - `git-*` - Git workflow tools (setup-hooks, new-branch, clean-branches, version)
   - `backup`/`restore` - System backup/restore utilities
   - `filemanager`, `browser-launcher` - Application launchers
   - `fzf-docker`, `fzk`, `fzsd` - FZF integration tools
-  - `capture`, `clipboardman` - Screenshot and clipboard management
+  - `screenshot`, `clipboardman` - Screenshot and clipboard management
+  - `capture` - Quick note capture into the inbox
 
 ### Validation & Quality
 ```bash
-# Git hooks automatically enforce:
+# Git hooks (after running git-setup-hooks in the repo) enforce:
 # - Conventional commit format validation (via config/git/hooks/commit-msg)
 # - Merge conflict marker detection
 # - Large file warnings (>1MB)
 # - Shell script syntax validation (bash -n)
 # - **Secret detection** (AWS keys, GitHub tokens, private keys, etc.)
 
-# E2E testing with Hurl (requires docker compose up -d)
-make test                    # Run all .hurl/.http files in tests/e2e/
-hurl --test tests/e2e/*.hurl # Run specific test files
+# Test and lint targets (CI parity; see docs/LINTING.md)
+make test-unit               # Python unit tests (tests/unit/*.py)
+make test-node               # Node unit tests (tests/unit/*.mjs)
+make test-install            # Real installer + assertions in Docker
+make test-bootstrap          # Bootstrap kit round-trip (needs age)
+make lint                    # shellcheck + luacheck + yamllint (+ stylua if installed)
 
 # Manual validation
 bash -n script.sh           # Test shell script syntax
-git-setup-hooks             # Install hooks from config/git/hooks/ to .git/hooks/
+git-setup-hooks             # Symlink hooks from config/git/hooks/ into .git/hooks/
 ```
 
 ### Security (Preventing Secret Leaks)
@@ -97,7 +100,11 @@ rm test.sh
 - @docs/KEYBINDINGS.md - Complete keybinding reference
 - @docs/README.md - Repository overview and setup guide
 - @docs/SECURITY.md - **Security guide for preventing secret leaks**
-- @config/nvim/MODULAR_APPROACH.md - Neovim modularization plan and architecture notes
+- @docs/LINTING.md - Lint gates and how to reproduce CI locally
+- @docs/BACKUP.md - Backup/restore of system state outside the repo
+- @docs/LOCAL_CONFIG.md - Private config overlay ($SYNC/dotfiles-local)
+- @docs/pi-resources.md - Pi agent resources installed from config/pi/
+- @docs/pi-delegate-contract.md - Delegation coordination contract
 
 ### Common Development Tasks
 ```bash
@@ -118,8 +125,7 @@ ftsess             # Interactive session killer with fzf preview
 Super + R  # or run: filemanager
 
 # Calculator tools
-Super + C          # Popup calculator
-Super + Shift + C  # Terminal calculator
+Super + C          # Floating terminal calculator
 
 # System utilities
 backup            # Backup system
@@ -138,11 +144,11 @@ power             # Power management menu
 
 2. **Editor (Neovim)**
    - Location: `config/nvim/`
-   - Lazy.nvim plugin manager with 25+ plugins
+   - Lazy.nvim plugin manager (44 plugin specs, ~100 locked plugins)
    - LSP support, Treesitter, Telescope, DAP debugging
    - Tokyo Night theme, Space as leader key
    - Integration: Obsidian notes, AI assistance (avante), tmux navigation
-   - **Modular architecture** (planned): `lua/lang/` for language configs, `lua/features/` for features, `lua/core/` for base config
+   - **Modular architecture**: `lua/core/` base config, `lua/features/` cross-language features, `lua/lang/` per-language configs
 
 3. **Window Management**
    - **Hyprland** (Primary): `config/gui/Wayland/hypr/`
@@ -175,7 +181,7 @@ config/
 ├── lf/           # File manager
 └── applications/ # Custom .desktop files
 
-bin/              # 40+ utility scripts
+bin/              # 75+ utility scripts
 scripts/          # Installation and testing
 ```
 
@@ -396,12 +402,15 @@ changes; the full rescan is only a daily safety net).
 
 ### FZF Integration (config/zsh/scripts/fzf.sh)
 Key FZF-powered commands available throughout the system:
-- `fkill` - Fuzzy process killer with preview
-- `fdocker` - Docker container interaction (start, stop, logs, exec)
+- `ftmuxp` - Tmux session picker (runs on terminal start)
+- `ftsess` - Interactive tmux session killer with preview
 - `fglog` - Interactive git log browser with diffs
 - `fgco` - Fuzzy git branch checkout
-- `fgbr` - Quick switch to recent git branches
-- `calc "expression"` - Quick calculations with history
+- `fgbd` - Fuzzy git branch delete
+- `fsb` - Fuzzy branch switcher
+
+Related `bin/` tools: `fzk` (fuzzy process killer), `fzf-docker` (Docker
+menu), `fzsd` (fuzzy cd into $SYNC dirs).
 
 ## Scripting Conventions
 
@@ -409,7 +418,7 @@ Key FZF-powered commands available throughout the system:
 - **Shebang**: Always use `#!/bin/bash` (not `/usr/bin/env bash`)
 - **Error handling**: Use `set -euo pipefail` for critical scripts
 - **Validation**: All shell scripts are validated via git hooks using `bash -n`
-- **Testing**: Scripts that interact with services should have corresponding .hurl tests in `tests/e2e/`
+- **Testing**: Load-bearing scripts should have unit tests in `tests/unit/` (Python or Node)
 
 ### Adding New Utilities
 1. Create script in `bin/<script-name>` (no .sh extension)

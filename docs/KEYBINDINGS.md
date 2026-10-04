@@ -10,7 +10,15 @@ This document contains ALL keybindings for your development environment across a
 | `Super + Enter` | Open terminal |
 | `Super + Shift + Q` | Kill active window |
 | `Super + P` | Toggle floating/pseudo |
-| `Super + J` | Toggle split direction |
+| `Super + J` | Focus down (vim-style) |
+| `Super + T` | Toggle split direction |
+| `Super + Shift + A` | Anki note capture |
+| `Super + Shift + B` | Open current book (book-open) |
+| `` Super + ` `` | Terminal scratchpad (pyprland) |
+| `Super + Shift + T` | btop scratchpad (pyprland) |
+| `Super + Shift + G` | lazygit scratchpad (pyprland) |
+| `Super + Shift + Y` | yazi scratchpad (pyprland) |
+| `Super + M` | Keyboard mouse mode (warpd) |
 | `Super + F` | Fullscreen (keep bar) |
 | `Super + Shift + F` | Fullscreen (no bar) |
 
@@ -37,9 +45,8 @@ This document contains ALL keybindings for your development environment across a
 | Keybinding | Action |
 |------------|--------|
 | `Super + V` | Clipboard manager |
-| `Super + Shift + V` | Clipboard history (cliphist) |
-| `Super + C` | **Popup calculator (compact)** |
-| `Super + Shift + C` | **Terminal calculator (full-featured)** |
+| `Super + V` | Clipboard history (clipboardman) |
+| `Super + C` | **Floating terminal calculator** |
 
 ### Focus & Movement
 | Keybinding | Action |
@@ -57,7 +64,6 @@ This document contains ALL keybindings for your development environment across a
 ---
 
 ## 📺 Tmux (Terminal Multiplexer)
-<D-V><D-V>
 **Prefix Key: `Ctrl + Space`**
 
 ### Session Management
@@ -150,10 +156,12 @@ This document contains ALL keybindings for your development environment across a
 | Keybinding | Action |
 |------------|--------|
 | `Space` | Leader key |
-| `Space + e` | File explorer (Neo-tree) |
-| `Space + ff` | Find files (Telescope) |
-| `Space + fg` | Live grep (Telescope) |
-| `Space + fb` | Find buffers (Telescope) |
+| `\` | File explorer (Neo-tree) |
+| `Space + e` | DBUI: execute query |
+| `Space + sf` | Find files (Telescope) |
+| `Space + sg` | Live grep (Telescope) |
+| `Space + sb` | Current buffer fuzzy find (Telescope) |
+| `Space + Space` | Find buffers (Telescope) |
 | `gd` | Go to definition (LSP) |
 | `gr` | Go to references (LSP) |
 | `K` | Hover documentation (LSP) |
@@ -178,17 +186,16 @@ This document contains ALL keybindings for your development environment across a
 | `Ctrl + R` | Reverse history search |
 | `Up/Down` | History navigation |
 | `Tab` | Completion |
-| `Ctrl + Space` | Accept autosuggestion |
 
 ### **NEW** FZF Power Functions
 | Command | Action |
 |---------|--------|
-| `fkill` | Kill processes with fuzzy search |
-| `fdocker` | Docker container interaction |
+| `fzk` | Kill processes with fuzzy search (bin/fzk) |
+| `fzf-docker` | Docker container interaction (bin/fzf-docker) |
 | `fglog` | Interactive git log browser |
 | `fgco` | Fuzzy git branch checkout |
-| `fgbr` | Recent git branch switcher |
-| `calc "expression"` | Quick calculations |
+| `fgbd` | Fuzzy git branch delete |
+| `ftmuxp` / `ftsess` | Tmux session picker / killer |
 
 ---
 
@@ -254,7 +261,7 @@ This document contains ALL keybindings for your development environment across a
 | `r` | Rebase current branch to master |
 | `fglog` | Interactive git log with preview |
 | `fgco` | Fuzzy checkout branch |
-| `fgbr` | Switch to recent branch |
+| `fsb` | Switch branch (fuzzy) |
 
 ### Standard Git (with delta diff)
 | Command | Action |
@@ -270,30 +277,21 @@ This document contains ALL keybindings for your development environment across a
 ### Calculator Options
 | Keybinding | Type | Description |
 |------------|------|-------------|
-| `Super + C` | **Popup Calculator** | Compact wofi interface with history |
-| `Super + Shift + C` | **Terminal Calculator** | Full-featured Python calculator |
+| `Super + C` | **Terminal Calculator** | Floating Python calculator |
 
-### Popup Calculator (Super + C)
-- Compact 400x500px interface
-- Calculation history (last 5 results)
-- Quick example buttons
-- Auto-copy results to clipboard
-- Type expressions directly or click examples
-
-### Terminal Calculator (Super + Shift + C) 
-- Full Python math environment
-- Interactive terminal interface (600x400px)
+### Terminal Calculator (Super + C)
+- Full Python math environment in a floating terminal
 - Command history with arrow keys
 - Advanced functions available
 - Auto-copy results to clipboard
 
-### Supported Functions (Both)
+### Supported Functions
 ```bash
 # Basic arithmetic
 2 + 3 * 4          # → 14
 (10 + 5) * 2       # → 30
 
-# Advanced math (Terminal calculator)
+# Advanced math
 sqrt(16)           # → 4.0
 sin(pi/2)          # → 1.0
 log(e)             # → 1.0
@@ -305,7 +303,6 @@ pi                 # → 3.14159...
 e                  # → 2.71828...
 
 # Commands
-<D-C>
 q or quit()        # Exit calculator
 c or clear()       # Clear screen/history
 ```
@@ -331,8 +328,6 @@ c or clear()       # Clear screen/history
 | `ps` | `procs` | Better process viewer |
 | `du` | `dust` | Better disk usage |
 | `df` | `duf` | Better filesystem info |
-| `ping` | `gping` | Visual ping |
-| `htop` | `bottom` | Better system monitor |
 
 ### Git Enhancements
 | Tool | Description |
@@ -348,9 +343,9 @@ c or clear()       # Clear screen/history
 ```bash
 # Terminal workflow
 Super + Enter           # New terminal
-Ctrl + Space + c        # New tmux window
-Space + ff              # Find files in nvim
-fkill                   # Kill process
+Ctrl + Space + w        # New tmux window
+Space + sf              # Find files in nvim
+fzk                     # Kill process
 Super + C               # Quick calculation
 
 # Window management  

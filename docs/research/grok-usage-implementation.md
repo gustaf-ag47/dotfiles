@@ -2,7 +2,7 @@
 
 Status: implemented 2026-10-02 on branch `feat/grok-usage`, worktree
 `/home/gustaf/.cache/grok-research/worktrees/usage`. Scope per
-`docs/handover/implement-grok-usage.md`: `scripts/llm_usage.py`,
+`docs/research/grok-usage-implementation.md`: `scripts/llm_usage.py`,
 `bin/claude-token-proxy`, new tests. Does **not** touch `routes.json`,
 `classes.json`, the Pi extension, or any shared/existing test file. Grok is not
 added to automatic routing; it is read-only quota observation only.

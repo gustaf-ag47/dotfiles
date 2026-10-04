@@ -1,7 +1,7 @@
 # Evolving `claude-token-proxy` into a general LLM proxy (Anthropic / OpenAI-Codex / DeepSeek)
 
 Status: decided 2026-09-25 — option (c); implementation tracked in
-`docs/handover/llm-proxy-implementation.md`
+a delegation brief (removed 2026-10; in git history)
 
 ## Operator decisions (2026-09-25)
 
@@ -55,7 +55,7 @@ against a fake proxy returning 503 then 200).
 
 Date: 2026-09-25. Research only. `bin/`, `scripts/`, `config/` and `~/.pi/agent/*` were
 not changed, and no services were restarted. Brief:
-`docs/handover/research-generic-llm-proxy.md`. Sibling doc for *what each provider's
+a delegation brief (removed 2026-10; in git history). Sibling doc for *what each provider's
 account/usage endpoints expose*: `docs/research/openai-deepseek-account-introspection.md`.
 This doc covers *routing* only.
 

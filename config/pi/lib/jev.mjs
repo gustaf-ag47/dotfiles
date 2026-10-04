@@ -3,7 +3,7 @@
 // Used by bin/jev-classify (CLI, invoked by the delegate shell wrapper) and
 // config/pi/extensions/jev.ts (Pi extension, /jev command, manual use only).
 // One implementation behind both callers, per the implementation brief
-// (docs/handover/implement-jev-helper.md).
+// (docs/research/jev-helper-implementation.md).
 //
 // Hard constraints enforced here, not just documented:
 //   - Never applies a classification result to anything (`applied` is always

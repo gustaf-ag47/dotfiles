@@ -215,7 +215,7 @@ bundled library).
   headers,device-login}.ts — fetched directly via `raw.githubusercontent.com`,
   2026-10-02 (primary source: actual code, not just the README)
 - Pi docs: `docs/models.md`, `docs/custom-provider.md` (local install, read 2026-10-02)
-- Cross-reference: `docs/handover/research-grok-oauth-pi.md` (this repo's brief) for
+- Cross-reference: a delegation brief (removed 2026-10; in git history) (this repo's brief) for
   the `bin/claude-token-proxy` analogy being evaluated against
 - `@earendil-works/pi-ai` installed package, `dist/auth/oauth/xai.js` and
   `dist/providers/xai.js` — read directly on this host, 2026-10-02

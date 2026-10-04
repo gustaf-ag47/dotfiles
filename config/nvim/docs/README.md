@@ -10,7 +10,6 @@ In-tree docs for the modules, tools, and conventions this config uses.
 | [`commands-and-keymaps.md`](commands-and-keymaps.md) | Quick reference for the user commands and `<leader>` mappings this config registers |
 
 Design notes:
-- [`../MODULAR_APPROACH.md`](../MODULAR_APPROACH.md)
 
 Historical planning/handover docs (the PHP onboarding handover, the implementation
 plan, and the June 2026 refactor session log) now live in the Obsidian vault at

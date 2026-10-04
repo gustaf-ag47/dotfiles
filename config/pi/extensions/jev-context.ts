@@ -2,7 +2,7 @@
  * Jev context-efficiency extension: file scouting + freshness-aware
  * duplicate-read suppression.
  *
- * See docs/handover/implement-jev-context-extension.md for the full brief and
+ * See docs/research/jev-context-extension-implementation.md for the full brief and
  * docs/research/jev-context-extension-implementation.md for the implementation
  * writeup (API verification notes, retention design, known limitations).
  *

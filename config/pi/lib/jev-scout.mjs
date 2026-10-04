@@ -10,7 +10,7 @@
 // client, scoped to file-relevance triage only.
 //
 // Hard constraints enforced here, not just documented (per
-// docs/handover/implement-jev-context-scout.md):
+// docs/research/jev-context-scout-implementation.md):
 //   - `enabled: true` must be passed explicitly before this module touches
 //     any file, credential, or network resource.
 //   - The shared PI_JEV_MODE=off global kill switch (and an invalid/missing

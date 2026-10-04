@@ -4,7 +4,7 @@ Status: implemented and unit-tested in isolation, **not installed/wired into
 any live Pi config** (parent owns installation/docs/live tests per the brief).
 Branch `feat/jev-context-extension`, worktree
 `/home/gustaf/.cache/jev-context/extension`. Implements
-`docs/handover/implement-jev-context-extension.md`: an opt-in Pi extension
+`docs/research/jev-context-extension-implementation.md`: an opt-in Pi extension
 adding `read_context` (freshness-aware duplicate-read suppression) and
 `scout_files` (explicit-consent file-relevance triage via the sibling's
 TypeSafe scouting module), gated by `/jev-context status|local|on|off`.

@@ -30,6 +30,11 @@ Blocks commits containing:
 - `credentials`, `secret`, `password` in filenames
 - Private key files (`id_rsa`, `id_dsa`, etc.)
 
+Known-public artifacts are allowlisted so they CAN be committed: age
+recipients, the kit manifest, YubiKey identity stubs and known-devices lists
+under `secrets/`, `secrets/*.age` ciphertext, and `profiles/*.env` (machine
+facts, not credentials).
+
 #### ✅ Secret Pattern Matching
 Detects common secret formats:
 - **AWS Keys**: `AKIA[0-9A-Z]{16}`
@@ -38,17 +43,33 @@ Detects common secret formats:
 - **Google API Keys**: `AIza[0-9A-Za-z\-_]{35}`
 - **Slack Tokens**: `xox[baprs]-`
 - **Private Keys**: `-----BEGIN ... PRIVATE KEY-----`
+- **Anthropic**: `sk-ant-api…`/`sk-ant-oat…` API keys and Claude Code OAuth tokens
 - **Generic Patterns**: `password=`, `api_key=`, `secret=`, `token=`
 
+Only ADDED lines are scanned, so a commit that merely removes a flagged line
+passes (all-deletion commits are explicitly supported).
+
+#### ✅ Private Key Material Scan
+Independent of filenames, staged content is scanned for age secret keys (the `AGE-SECRET-KEY` prefix)
+and PEM `BEGIN … PRIVATE KEY` headers across every file.
+
+#### ✅ Company/Confidential Term Denylist
+Internal identifiers (org names, SSO tenants, prod profiles) are blocked from
+this public repo; `*.example` templates are exempt.
+
 #### ✅ High-Entropy String Detection
-Warns about suspicious base64-like strings (40+ chars) that might be encoded secrets
+Warns about suspicious base64-like strings (40+ chars) that might be encoded
+secrets. Excluded to keep the signal usable: `lazy-lock.json`, deep paths,
+diff headers, system paths, URLs, `age1…` public recipients and bare 40-hex
+SHAs.
 
 **Setup:**
 ```bash
 # Install hooks for current repo
 git-setup-hooks
 
-# Hooks are automatically copied from config/git/hooks/ to .git/hooks/
+# Hooks are SYMLINKED from ~/.config/git/hooks into .git/hooks, so hook
+# updates in the dotfiles apply to every set-up repo immediately
 ```
 
 ### 3. Repository .gitignore
@@ -234,10 +255,13 @@ bash .git/hooks/pre-commit
 
 ## 🔐 Summary
 
-Your dotfiles provide **three layers of protection**:
+Your dotfiles provide **four layers of protection**:
 
 1. **Prevention**: Global gitignore blocks common secret files
-2. **Detection**: Pre-commit hook scans for secret patterns
-3. **Education**: This guide and example templates
+2. **Filename checks**: Sensitive names blocked, known-public artifacts allowlisted
+3. **Content detection**: Secret patterns, private key material, entropy scan
+4. **Denylist**: Company/confidential terms kept out of this public repo
+
+Plus: this guide and `*.example` templates.
 
 **Remember**: No automated tool is 100% perfect. Always review your commits and never commit sensitive data intentionally!

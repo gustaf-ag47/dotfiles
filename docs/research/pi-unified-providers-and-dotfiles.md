@@ -1,5 +1,9 @@
 # Unified Pi providers and dotfiles adoption
 
+> Historical research note. Artifacts it references (`jev-test.mjs`,
+> `ralph/llm-utilization/`, `bin/waybar-claude-usage`, delegation briefs)
+> were pruned in 2026-10 cleanups; they remain in git history.
+
 ## Verdict
 
 Use **plain `pi` for every provider**, with global, provider-scoped Anthropic integration. Keep the existing Claude proxy specialized; do not turn it into an OpenAI/DeepSeek protocol translator. Add a separate provider-aware usage command.
@@ -234,7 +238,7 @@ Repository primary sources:
 - `config/pi/anthropic-token-proxy.ts`, `config/pi/anthropic-oauth-claude-code-identity.ts`
 - `config/claude-code/env.sh`, `config/zsh/.zshenv`
 - `config/systemd/user/claude-token-proxy.service`, `scripts/install.sh`
-- `docs/LOCAL_CONFIG.md`, `docs/handover/2026-08-30_wire-pi-into-dotfiles-brief.md`
+- `docs/LOCAL_CONFIG.md`, a delegation brief (removed 2026-10; in git history)
 
 Installed Pi primary sources, under `~/.local/share/npm/lib/node_modules/@earendil-works/pi-coding-agent/`:
 

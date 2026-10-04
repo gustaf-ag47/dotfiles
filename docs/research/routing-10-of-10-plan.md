@@ -1,7 +1,7 @@
 # Plan: LLM routing from 8/10 to 10/10
 
 Status: proposed 2026-09-28. Owner: operator. Builds on the A–D routing tasks
-(`docs/handover/routing-{A,B,C,D}-*.md`) and the unified-`pi` change (`13805a5`, `9f67ccb`).
+(a delegation brief (removed 2026-10; in git history)) and the unified-`pi` change (`13805a5`, `9f67ccb`).
 
 ## 0. What "10/10" means — the objective, in numbers
 
@@ -91,7 +91,7 @@ scheduling*, not plumbing.
 - **I1** Remove `claude-token-refresh` probing from shell startup (`config/claude-code/env.sh`) — it spends quota to duplicate the proxy's job.
 - **I2** Alerts: waybar/notify when `first_exhaust < 2h` or `weekly_waste_percent > 30` or `starved_requests > 0`.
 - **I3** Weekly report: `llm-usage --week` prints the four §0 metrics; paste into this doc's log for four weeks.
-- **I4** Academy fleet: retire the vendored wrapper (`docs/handover/2026-09-27-retire-pi-claude-sub.md` in the academy repo) so VMs get the same routing.
+- **I4** Academy fleet: retire the vendored wrapper (a delegation brief (removed 2026-10; in git history) in the academy repo) so VMs get the same routing.
 
 ## 4. Task classes — the policy table (H1, draft)
 
@@ -136,7 +136,7 @@ P4 < 10 %, cache-hit ≥ 80 %, and no unexplained entries in `routing.log`.
 
 ## Log
 
-- 2026-09-28 — `llm-usage --week --json` first live sample: P1 starved requests 49 (visible event rows, including concurrent traffic; not a durable accumulator), P2 current projected waste Anthropic 7d ~64.0%, 7d_oi ~59.0%, Codex primary ~0.0%; P3 avoidable stalls 0 observed (sample-matched approximation), P4 n/a (no non-interactive class events), cache-hit 96.5%. Snapshot is live and can change as the proxy log grows; forecasts are projections, not reconstructed reset-time measurements; see `docs/handover/routing-I-hygiene-report.md`.
+- 2026-09-28 — `llm-usage --week --json` first live sample: P1 starved requests 49 (visible event rows, including concurrent traffic; not a durable accumulator), P2 current projected waste Anthropic 7d ~64.0%, 7d_oi ~59.0%, Codex primary ~0.0%; P3 avoidable stalls 0 observed (sample-matched approximation), P4 n/a (no non-interactive class events), cache-hit 96.5%. Snapshot is live and can change as the proxy log grows; forecasts are projections, not reconstructed reset-time measurements; see a delegation brief (removed 2026-10; in git history).
 - 2026-09-28 — plan written. Baseline (llm-usage): gs@ 7d 7 % / fable 1 % left with 1d 22h
   to reset; gustaf.silver 72/68 %; antropic 64/59 %; Codex 100 % left, 5d to reset (P2
   failure in progress); DeepSeek −0.12 USD (P1 backstop absent).

@@ -1,6 +1,5 @@
 # Neovim memory leak: 13 GB RSS after 9 days (2026-09-26)
 
-Brief: [`docs/handover/nvim-memory-leak.md`](handover/nvim-memory-leak.md).
 Raw captures from the dead process: `~/scratch/nvim-leak/`. Reproduction logs:
 `$(pi-scratch dir nvim-leak)` (`typing.log`, `stall.log`, `idle.log`, `fix*.log`).
 

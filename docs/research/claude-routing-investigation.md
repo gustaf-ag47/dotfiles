@@ -1,5 +1,9 @@
 # Claude subscription routing investigation — 2026-09-10
 
+> Historical research note. Artifacts it references (`jev-test.mjs`,
+> `ralph/llm-utilization/`, `bin/waybar-claude-usage`, delegation briefs)
+> were pruned in 2026-10 cleanups; they remain in git history.
+
 Investigation driven through `tmux send-keys` in window `claude-routing-debug` (pane `%845`). Initial investigation made no service or code changes; the subsequently requested fix is recorded below.
 
 ## Finding

@@ -2,7 +2,7 @@
 
 Status: decided 2026-09-25 — implement §4 as proposed; DeepSeek label order is env
 `DEEPSEEK_ACCOUNT_LABEL` → `auth.json` `label` → last-4 of key. Tracked in
-`docs/handover/llm-proxy-implementation.md`
+a delegation brief (removed 2026-10; in git history)
 
 Probed live 2026-09-25 ~07:50 UTC from this PC with the credentials pi already
 holds in `~/.pi/agent/auth.json`. GET requests only. No token refresh, no login, no

@@ -1,5 +1,9 @@
 # Jev classification for Pi quota routing — research
 
+> Historical research note. Artifacts it references (`jev-test.mjs`,
+> `ralph/llm-utilization/`, `bin/waybar-claude-usage`, delegation briefs)
+> were pruned in 2026-10 cleanups; they remain in git history.
+
 Status: research only, no code changed, no API calls made, no credentials read.
 Repo state at time of writing: installed Pi `0.99.1` (same version for
 `@earendil-works/pi-coding-agent` and its `@earendil-works/pi-ai` dependency),
@@ -566,7 +570,7 @@ sense — that would require many labeled examples and is out of scope here.
   `config/pi/skills/delegate/scripts/delegate.sh`,
   `config/pi/skills/ralph-loop/SKILL.md`, `ralph/llm-utilization/loop.sh`,
   `bin/llm-schedule`, `bin/llm-wait`, `scripts/llm_usage.py`,
-  `docs/handover/routing-H-task-classes*.md`,
+  a delegation brief (removed 2026-10; in git history),
   `docs/research/routing-10-of-10-plan.md` — current routing/data flow and
   task-class mechanism.
 - `https://docs.typesafe.ai/models.md`, `https://docs.typesafe.ai/api.md`,
