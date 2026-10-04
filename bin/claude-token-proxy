@@ -147,6 +147,9 @@ CODEX_TOPUP_URL = "https://chatgpt.com/codex/settings/usage"
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+# Presented for every forwarded request: Anthropic gates models on this version
+# and clients (Hermes pins 2.1.83) advertise stale ones that upstream rejects.
+OAUTH_USER_AGENT = "claude-code/2.1.280"
 FAILOVER_STATUSES = {401, 403, 429, 529}
 # A 429 either means "this bucket is spent" (rotate) or "you are going too fast"
 # (wait). Only the former is worth a failover — see docs/research/
@@ -2106,9 +2109,17 @@ def usage_payload() -> dict:
 
 def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
     conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=timeout)
-    h = dict(headers)
-    h["Authorization"] = f"Bearer {token}"
-    h["Host"] = UPSTREAM_HOST
+    # This upstream always uses subscription OAuth, even when a client (e.g.
+    # Hermes) classifies localhost as an API-key endpoint. Never forward its
+    # x-api-key alongside the pool token or omit the required OAuth beta.
+    h = {k.lower(): v for k, v in headers.items()
+         if k.lower() not in ("authorization", "x-api-key", "host")}
+    betas = [b.strip() for b in h.get("anthropic-beta", "").split(",") if b.strip()]
+    h["anthropic-beta"] = ",".join(dict.fromkeys(betas + ["claude-code-20250219", "oauth-2025-04-20"]))
+    h["user-agent"] = OAUTH_USER_AGENT  # clients advertise stale versions Anthropic rejects
+    h["x-app"] = "cli"
+    h["authorization"] = f"Bearer {token}"
+    h["host"] = UPSTREAM_HOST
     conn.request(method, path, body=body, headers=h)
     return conn, conn.getresponse()
 
