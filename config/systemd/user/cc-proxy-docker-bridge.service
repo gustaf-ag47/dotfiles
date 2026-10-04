@@ -1,0 +1,24 @@
+[Unit]
+Description=Expose claude-token-proxy to the paperless docker network (gateway bind only)
+Documentation=file:///home/gud1/sync/src/paperless/README.md
+# The token proxy deliberately binds 127.0.0.1 only. Containers cannot reach
+# host loopback, so this forwards the paperless_internal bridge gateway
+# (pinned to 192.168.144.1 in that project's compose ipam) to the proxy.
+# Scope note: any local container able to route to this host address can use
+# the proxy, same trust level as any local process on the loopback bind.
+After=claude-token-proxy.service
+Wants=claude-token-proxy.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:8788,bind=192.168.144.1,fork,reuseaddr TCP:127.0.0.1:8788
+# The bind address only exists while the docker bridge is up; keep retrying.
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
