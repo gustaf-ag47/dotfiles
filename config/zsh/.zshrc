@@ -7,7 +7,6 @@ autoload -Uz surround
 
 # external
 autoload -Uz cursor_mode && cursor_mode
-autoload -Uz custom_prompt && custom_prompt
 
 setopt AUTO_PUSHD
 setopt PUSHD_IGNORE_DUPS
@@ -43,14 +42,6 @@ fi
 if command -v starship > /dev/null; then
   eval "$(starship init zsh)"
 fi
-
-# Initialize Atuin (shell history sync)
-# DISABLED: Causing "Address already in use" error on login
-# if command -v atuin > /dev/null; then
-#   eval "$(atuin init zsh --disable-up-arrow)"
-#   # Use Ctrl+R for Atuin search (replaces fzf history)
-#   # Up arrow remains for standard history navigation
-# fi
 
 # Fix WAYLAND_DISPLAY for clipboard in tmux/neovim
 # Detect Wayland session and set display if not already set
@@ -159,7 +150,7 @@ if [ "$(tty)" != "/dev/tty1" ] && [ -z "$TMUX" ]; then
   ftmuxp
 fi
 
-#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+# SDKMAN
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 

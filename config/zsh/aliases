@@ -27,16 +27,15 @@ alias d='dirs -v'
 for index ({1..9}) alias "$index"="cd +${index} > /dev/null"; unset index 
 
 alias l='ls -l'
-alias ll='ls -lahF'
-alias lls='ls -lahFtr'
-alias la='ls -A'
 alias lc='ls -CF'
+# ll/la/lls are defined by the eza block below when eza is present
+command -v eza >/dev/null 2>&1 || { alias ll='ls -lahF'; alias la='ls -A'; alias lls='ls -lahFtr'; }
 
 alias cp='cp -iv'
 alias mv='mv -iv'
 alias rm='rm -iv'
 
-alias grep="grep -P -i --color=auto"
+command -v rg >/dev/null 2>&1 || alias grep="grep -P -i --color=auto"
 
 # Modern CLI tool aliases
 if command -v bat &> /dev/null; then
@@ -84,4 +83,5 @@ alias ta='tmux attach-session'
 alias tn='ftmuxp'
 alias ts='tmux-safe-save'
 alias trs="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tmux-resurrect/scripts/restore.sh"
-alias tc='find "${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect" -name "*.txt" -mtime +7 -delete && echo "Cleaned old resurrect files"'
+# Must match @resurrect-dir in tmux.conf
+alias tc='find "$HOME/sync/Vault/tmux-resurrect" -name "*.txt" -mtime +7 -delete && echo "Cleaned old resurrect files"'

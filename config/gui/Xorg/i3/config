@@ -3,6 +3,9 @@ set $mod Mod4
 font pango:Inconsolata NF 20
 
 exec --no-startup-id dunst
+# Status bar + X resources (this X11 session has no bar without polybar)
+exec --no-startup-id ~/.config/polybar/launch.sh
+exec --no-startup-id xrdb -merge ~/.config/X11/.Xresources
 
 floating_modifier $mod
 

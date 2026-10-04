@@ -1,7 +1,8 @@
 {
   // Machine-specific overlay, symlinked by scripts/install.sh from
-  // profiles/<class>.jsonc. Later values win, so this replaces modules-right
-  // (e.g. dropping the battery module on a desktop).
+  // profiles/<class>.jsonc. Waybar's include merge keeps values already set in
+  // THIS file (included values are ignored on conflict), so modules-right must
+  // live only in the profile; defining it here would override every host.
   "include": ["~/.config/waybar/profile.jsonc"],
   "layer": "top",
   "position": "top", 
@@ -9,8 +10,6 @@
   "spacing": 8,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "custom/llm-usage", "custom/power"],
-  
   "hyprland/workspaces": {
     "disable-scroll": true,
     "all-outputs": true,
@@ -55,14 +54,14 @@
     "format": " {usage}%",
     "tooltip": true,
     "interval": 5,
-    "on-click": "kitty -e btop"
+    "on-click": "terminal -e btop"
   },
 
   "memory": {
     "format": " {}%",
     "tooltip-format": "{used:0.1f}GiB / {total:0.1f}GiB",
     "interval": 5,
-    "on-click": "kitty -e btop"
+    "on-click": "terminal -e btop"
   },
 
   "disk": {
@@ -100,7 +99,7 @@
     "format-plugged": "󰚥 {capacity}%",
     "format-alt": "{icon} {time}",
     "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
-    "on-click": "gnome-power-statistics"
+    "on-click": "power"
   },
   
   "bluetooth": {
@@ -111,7 +110,7 @@
     "format-connected": "󰂱 {num_connections}",
     "format-connected-battery": "󰂱 {device_battery_percentage}%",
     "interval": 10,
-    "on-click": "bluetooth-waybar",
+    "on-click": "terminal -e bluetooth",
     "tooltip-format": "{controller_alias}\t{controller_address}\n\n{num_connections} connected",
     "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{num_connections} connected\n\n{device_enumerate}",
     "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
@@ -128,7 +127,7 @@
     "tooltip-format-wifi": "󰤨 {essid} ({signalStrength}%)\n󰩟 {frequency}MHz\n󰩠 {ipaddr}",
     "tooltip-format-ethernet": "󰈀 {ifname}\n󰩠 {ipaddr}",
     "tooltip-format-disconnected": "󰤭 Disconnected",
-    "on-click": "nm-connection-editor"
+    "on-click": "terminal -e nmtui"
   },
   
   "pulseaudio": {
@@ -165,13 +164,13 @@
     "return-type": "json",
     "interval": 300,
     "tooltip": true,
-    "on-click": "kitty -e llm-usage"
+    "on-click": "terminal -e llm-usage"
   },
 
   "custom/power": {
     "format": "⏻",
     "tooltip": "Power Menu",
-    "on-click": "wlogout",
+    "on-click": "power",
     "on-click-right": "systemctl poweroff"
   }
 }

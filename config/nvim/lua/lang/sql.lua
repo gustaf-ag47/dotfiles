@@ -73,21 +73,12 @@ M.lsp_config = {
     settings = {
       sqls = {
         connections = {
-          -- Database connections should be configured in one of:
-          -- 1. Project-specific: .sqls.yml in project root (recommended, auto-detected)
-          -- 2. Global config: ~/.config/sqls/config.yml
-          -- 3. Local override: $SYNC/dotfiles-local/config/nvim/sqls-connections.lua
-          --
-          -- Example .sqls.yml format:
-          -- ```yaml
-          -- connections:
-          --   - alias: mydb
-          --     driver: mysql
-          --     dataSourceName: user:pass@tcp(host:3306)/dbname
-          -- ```
-          --
-          -- For local override, create: $SYNC/dotfiles-local/config/nvim/sqls-connections.lua
-          -- returning a table of connections (see vim-dadbod documentation)
+          -- Configure connections in .sqls.yml in the project root (auto-detected
+          -- via root_dir above) or globally in ~/.config/sqls/config.yml:
+          --   connections:
+          --     - alias: mydb
+          --       driver: mysql
+          --       dataSourceName: user:pass@tcp(host:3306)/dbname
         },
       },
     },

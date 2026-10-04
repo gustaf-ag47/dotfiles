@@ -4,8 +4,6 @@ return {
   version = false, -- set this if you want to always pull the latest change
   opts = {
     provider = 'claude',
-    -- Disable auto_suggestions to avoid copilot requirement
-    -- auto_suggestions_provider = 'copilot',
     providers = {
       claude = {
         endpoint = 'https://api.anthropic.com',

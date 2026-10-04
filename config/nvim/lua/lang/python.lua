@@ -428,15 +428,6 @@ M.setup_autocmds = function()
 
       -- Setup Python-specific keymaps for this buffer
       M.setup_keymaps(event.buf)
-
-      -- Auto-format on save (optional)
-      -- vim.api.nvim_create_autocmd('BufWritePre', {
-      --   group = augroup,
-      --   buffer = event.buf,
-      --   callback = function()
-      --     vim.lsp.buf.format()
-      --   end,
-      -- })
     end,
   })
 

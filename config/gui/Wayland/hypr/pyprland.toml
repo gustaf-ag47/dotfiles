@@ -5,28 +5,28 @@
 plugins = ["scratchpads"]
 
 [scratchpads.term]
-command = "kitty --class=scratchpad"
+command = "alacritty --class=scratchpad"
 class = "scratchpad"
 size = "75% 60%"
 position = "center"
 animation = "fromTop"
 
 [scratchpads.btop]
-command = "kitty --class=btop-scratch btop"
+command = "alacritty --class=btop-scratch -e btop"
 class = "btop-scratch"
 size = "80% 80%"
 position = "center"
 animation = "fromTop"
 
 [scratchpads.lazygit]
-command = "kitty --class=lazygit-scratch lazygit"
+command = "alacritty --class=lazygit-scratch -e lazygit"
 class = "lazygit-scratch"
 size = "90% 85%"
 position = "center"
 animation = "fromTop"
 
 [scratchpads.yazi]
-command = "kitty --class=yazi-scratch yazi"
+command = "alacritty --class=yazi-scratch -e yazi"
 class = "yazi-scratch"
 size = "80% 80%"
 position = "center"

@@ -1,11 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { PROXY_CREDENTIAL, proxyOptions, proxyUrl } from "../lib/anthropic-route.mjs";
+import { PROXY_CREDENTIAL, proxyOptions, proxyUrl } from "./anthropic-route.mjs";
 
+// Provider FACTORY for SDK embedders (jev-ultrafast's _pi_text_worker), not a
+// live pi extension: anthropic-pool.ts owns the anthropic provider in real pi
+// sessions. Living in lib/ keeps pi-setup from linking it into extensions/,
+// which double-registered the provider with load-order-dependent results.
 export default function (pi: ExtensionAPI) {
-  // The compatibility launcher owns its explicit auto/force/direct route.
-  if (process.env.PI_DOTFILES_LEGACY_CLAUDE_PID === String(process.pid)) return;
   const native = anthropicProvider();
   // Invalid config must fail on a request, not unload this extension and expose
   // the native direct route. Offline listing and unrelated providers still work.

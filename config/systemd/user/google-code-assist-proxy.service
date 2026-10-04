@@ -4,7 +4,7 @@ Documentation=file://%h/sync/src/dotfiles/docs/google-code-assist-proxy.md
 After=network-online.target
 
 [Service]
-ExecStart=%h/sync/src/dotfiles/bin/google-code-assist-proxy
+ExecStart=%h/.local/bin/google-code-assist-proxy
 Restart=on-failure
 RestartSec=5
 # Loopback only; the script also refuses any other bind address.

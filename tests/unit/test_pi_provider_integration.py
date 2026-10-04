@@ -13,11 +13,11 @@ ROOT = Path(__file__).resolve().parents[2]
 PI = shutil.which('pi')
 
 
-# Exercises the unlanded anthropic-subscription.ts provider override; with current
-# pi it fails model resolution ("No API key found for openrouter"). Opt in explicitly.
+# Exercises the anthropic-subscription.ts provider factory (config/pi/lib/, used by
+# the jev-ultrafast SDK worker). Spawns a real pi: opt in explicitly.
 @unittest.skipUnless(PI, 'Pi installation required')
 @unittest.skipUnless(os.environ.get('PI_PROVIDER_INTEGRATION') == '1',
-                     'anthropic-subscription.ts not landed; set PI_PROVIDER_INTEGRATION=1 to run')
+                     'spawns a real pi; set PI_PROVIDER_INTEGRATION=1 to run')
 class ProviderIntegration(unittest.TestCase):
     def test_anthropic_route_and_deepseek_isolation(self):
         received = []
@@ -59,7 +59,7 @@ class ProviderIntegration(unittest.TestCase):
                 (agent / 'models.json').write_text(json.dumps({'providers': {'deepseek': {'baseUrl': endpoint}}}))
                 env = {k: v for k, v in os.environ.items() if not k.startswith(('ANTHROPIC_', 'CLAUDE_CODE_', 'DEEPSEEK_', 'PI_DOTFILES_'))}
                 env.update(PI_CODING_AGENT_DIR=directory, PI_OFFLINE='1', PI_ANTHROPIC_PROXY_URL=endpoint)
-                args = [PI, '--no-extensions', '-e', str(ROOT / 'config/pi/extensions/anthropic-subscription.ts'),
+                args = [PI, '--no-extensions', '-e', str(ROOT / 'config/pi/lib/anthropic-subscription.ts'),
                         '--no-session', '--no-context-files', '--no-skills', '--no-tools', '--thinking', 'off', '-p']
                 for model in ('anthropic/claude-haiku-4-5', 'deepseek/deepseek-v4-flash'):
                     result = subprocess.run(args + ['--model', model, 'Reply MOCK_OK'], env=env, capture_output=True, text=True, timeout=30)

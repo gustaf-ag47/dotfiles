@@ -96,13 +96,13 @@ export async function createRuntime(packet, signal) {
     allowModelNetwork: false, refreshOnCreate: false, signal,
   });
   const { provider } = parseModel(packet.model);
-  const adapters = { anthropic: 'anthropic-subscription.ts', 'grok-build': 'grok-build.ts' };
+  const adapters = { anthropic: ['lib', 'anthropic-subscription.ts'], 'grok-build': ['extensions', 'grok-build.ts'] };
   if (adapters[provider]) {
     // Reuse only the selected, trusted dotfiles PROVIDER factory. No runtime hooks,
     // skills, tool registration, file access tools, or user-installed extensions.
     const { createJiti } = require('jiti');
     const jiti = createJiti(import.meta.url);
-    const adapter = await jiti.import(path.join(packet.piDir, 'extensions', adapters[provider]), { default: true });
+    const adapter = await jiti.import(path.join(packet.piDir, ...adapters[provider]), { default: true });
     await adapter({ registerProvider: p => {
       if (p?.id !== provider) throw new Error('sdk_unavailable');
       runtime.registerNativeProvider(p);

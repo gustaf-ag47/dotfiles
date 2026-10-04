@@ -30,8 +30,6 @@ export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 # ZSH configuration
 export ZDOTDIR="$XDG_CONFIG_HOME/zsh"
 export HISTFILE="$ZDOTDIR/.zhistory"
-# X11
-export XINITRC="$XDG_CONFIG_HOME/X11/.xinitrc"
 
 # History configuration
 export HISTSIZE=10000
@@ -59,10 +57,6 @@ fi
 # Path settings
 export PYENV_ROOT="$XDG_DATA_HOME/pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
-
-if [ -d "$XDG_CONFIG_HOME/bin" ]; then
-    export PATH="$XDG_CONFIG_HOME/bin:$PATH"
-fi
 
 if [ -d "$HOME/.local/bin" ]; then
     export PATH="$HOME/.local/bin:$PATH"
