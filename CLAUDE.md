@@ -322,6 +322,36 @@ sudo dkms install hid-annepro2/1.0
 ```
 `AUTOINSTALL=yes` in `dkms.conf` rebuilds automatically on kernel updates.
 
+#### `/etc/systemd/system/zram-swap.service` — zram swap (24G, lz4)
+The box runs heavy agent workloads; an 8G zram swap pinned at 100% full caused
+system-wide reclaim stalls (PSI memory `full` ~5%). 24G disksize costs RAM only
+for what is actually swapped (lz4 compresses ~2.5:1).
+
+```ini
+[Unit]
+Description=zram swap (24G, lz4)
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=swap.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/sh -c 'modprobe zram; echo lz4 > /sys/block/zram0/comp_algorithm; echo 24G > /sys/block/zram0/disksize; mkswap -q /dev/zram0; swapon -p 100 /dev/zram0'
+ExecStop=/usr/bin/sh -c 'swapoff /dev/zram0; echo 1 > /sys/block/zram0/reset'
+
+[Install]
+WantedBy=swap.target
+```
+`sudo systemctl enable zram-swap.service`
+
+#### Syncthing tuning (the `sync` folder is 400GB / 1.2M files on LUKS)
+Unlimited hashers + hourly rescans + 10s watcher delay kept syncthing at a
+sustained ~70% CPU (plus kcryptd kernel load) because agents churn files
+constantly. Set via REST or GUI on the `sync` folder: `hashers=2`,
+`fsWatcherDelayS=60`, `rescanIntervalS=86400` (the fs watcher still picks up
+changes; the full rescan is only a daily safety net).
+
 #### Lock manager notes
 - Idle daemon: `hypridle` — started via `exec-once` in hyprland.conf
 - Screen locker: `hyprlock` with `hyprlock-safe` wrapper (restarts on crash)
