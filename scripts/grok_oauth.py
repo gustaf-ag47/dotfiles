@@ -3,10 +3,12 @@
 
 Reads `$GROK_HOME/auth.json` (default `~/.grok/auth.json`), the file the
 official Grok CLI (`grok login --device-auth`) manages. This script never
-writes to that file and never refreshes the token -- the Grok CLI remains the
-sole owner of that file's refresh/rotation. Pi's grok-build provider shells
-out to this script fresh on every request instead of caching a copy, so a
-given refresh token is still only ever rotated in one place.
+writes to that file -- the Grok CLI remains the sole owner of that file's
+refresh/rotation. When the stored access token has expired, the script pokes
+the Grok CLI itself (a cheap, non-interactive `grok models` invocation) so
+the CLI performs its own refresh, then re-reads the file; the refresh token
+is still only ever rotated in one place. Pi's grok-build provider shells out
+to this script fresh on every request instead of caching a copy.
 
 Guards against anything other than the Grok CLI's own fixed OAuth issuer and
 client id, so a tampered or unrelated auth.json entry cannot be used as a
@@ -22,6 +24,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -79,28 +83,61 @@ def _expired(entry: dict) -> bool:
     return (expires_at - EXPIRY_SKEW_SECONDS) < time.time()
 
 
-def main() -> int:
-    path = grok_home() / "auth.json"
-    data = load_auth_file(path)
+# How long to wait for the Grok CLI to refresh its own session when we poke
+# it. `grok models` is a cheap metadata call, but it does hit the network.
+CLI_REFRESH_TIMEOUT_SECONDS = 60
 
+
+def _poke_grok_cli_refresh() -> bool:
+    """Ask the Grok CLI to refresh its own session by running a cheap,
+    non-interactive command (`grok models`). The CLI -- not this script --
+    rotates the token in auth.json as a side effect. Returns True if the CLI
+    ran and exited 0; never raises, never prints CLI output (which could
+    contain account details) to our stdout, which must stay token-only."""
+    grok = shutil.which("grok")
+    if not grok:
+        return False
+    try:
+        result = subprocess.run(
+            [grok, "models"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=CLI_REFRESH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _load_entry(path: Path) -> dict:
+    data = load_auth_file(path)
     entry = data.get(ENTRY_KEY)
     if not isinstance(entry, dict):
         sys.exit(
             "No Grok CLI OAuth session for the expected issuer/client; "
             "run `grok login --device-auth`."
         )
-
     if entry.get("auth_mode") != "oidc":
         sys.exit("Grok CLI auth entry is not an OIDC session; run `grok login --device-auth`.")
-
-    token = entry.get("key")
-    if not isinstance(token, str) or not token:
+    if not isinstance(entry.get("key"), str) or not entry["key"]:
         sys.exit("Grok CLI auth entry has no access token; run `grok login --device-auth`.")
+    return entry
+
+
+def main() -> int:
+    path = grok_home() / "auth.json"
+    entry = _load_entry(path)
 
     if _expired(entry):
-        sys.exit("Grok CLI OAuth session has expired; run `grok models` to refresh it, or `grok login --device-auth` if refresh fails.")
+        # Let the Grok CLI refresh its own session, then re-read the file it
+        # owns. We never write auth.json ourselves.
+        if _poke_grok_cli_refresh():
+            entry = _load_entry(path)
+        if _expired(entry):
+            sys.exit("Grok CLI OAuth session has expired and auto-refresh via `grok models` failed; run `grok login --device-auth`.")
 
-    print(token)
+    print(entry["key"])
     return 0
 
 

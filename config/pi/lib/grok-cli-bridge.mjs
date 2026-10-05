@@ -10,7 +10,9 @@
 // AuthStorage.read() explicitly leaves command-type stored keys unresolved
 // for the caller to handle (core/auth-storage.ts). So grok-build executes
 // the bridge script itself, directly, with no shell involved (execFileSync
-// with an argv array, not a shell string) and a bounded timeout. This also
+// with an argv array, not a shell string) and a bounded timeout generous
+// enough to outlast the bridge's own 60s `grok models` auto-refresh poke
+// (scripts/grok_oauth.py) when the stored session has expired. This also
 // means no token is ever stored or cached here: every call re-runs the
 // read-only script against the Grok CLI's live session.
 import { execFileSync } from "node:child_process";
@@ -20,7 +22,7 @@ export function resolveGrokCliBridgeToken(bridgeScript) {
   try {
     stdout = execFileSync(bridgeScript, [], {
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: 75_000,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {

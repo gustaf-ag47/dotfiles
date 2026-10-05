@@ -250,8 +250,9 @@ def deepseek(auth):
 # (1) Pi's own grok-build OAuth credential in auth.json (sibling work); (2) if
 # absent, the sibling-owned read-only CLI bridge (bin/grok-oauth-token /
 # scripts/grok_oauth.py) that reads an existing `grok login --device-auth`
-# session from $GROK_HOME/auth.json. Neither path writes or refreshes anything
-# -- this file never touches ~/.grok/auth.json directly itself.
+# session from $GROK_HOME/auth.json (and, when that session has expired, pokes
+# the Grok CLI itself to perform its own refresh). Neither path writes
+# ~/.grok/auth.json -- this file never touches it directly itself.
 GROK_BASE_URL = 'https://cli-chat-proxy.grok.com/v1'
 GROK_DEFAULT_CLIENT_VERSION = '1.0.46'
 GROK_CLI_BRIDGE_ENV = 'GROK_OAUTH_BRIDGE'  # override the bridge script path (mainly for tests/alt installs)
@@ -267,8 +268,10 @@ def grok_cli_bridge_path():
 def grok_cli_fallback_token():
     """Explicit, mockable seam: the current Grok CLI session's access token, or
     (None, reason). Shells out to the sibling-owned read-only bridge script,
-    which itself never writes to or refreshes $GROK_HOME/auth.json -- the Grok
-    CLI remains its sole owner. No output besides the bare token is ever kept;
+    which itself never writes to $GROK_HOME/auth.json -- the Grok CLI remains
+    its sole owner (on expiry the bridge asks the CLI to refresh its own
+    session, which is why the timeout below must outlast the bridge's 60s CLI
+    refresh budget). No output besides the bare token is ever kept;
     stderr is a short, non-secret message by that script's own contract, but is
     still length-capped here before use.
     """
@@ -276,7 +279,7 @@ def grok_cli_fallback_token():
     if not script.exists():
         return None, 'No Pi grok-build credential, and the Grok CLI OAuth bridge is not installed.'
     try:
-        result = subprocess.run([str(script)], capture_output=True, text=True, timeout=5)
+        result = subprocess.run([str(script)], capture_output=True, text=True, timeout=75)
     except (OSError, ValueError, subprocess.SubprocessError):
         return None, 'Grok CLI OAuth bridge failed to run.'
     if result.returncode != 0:
@@ -311,8 +314,9 @@ def grok_build_token(auth):
     """Resolve a read-only Grok access token: Pi's own grok-build OAuth
     credential in auth.json first; if absent, fall back to the Grok CLI's own
     session via the read-only bridge script. Returns (access, email_hint,
-    source, error) where exactly one of (access, error) is set. Never
-    refreshes anything in either path.
+    source, error) where exactly one of (access, error) is set. This reader
+    never refreshes Pi's credential; the CLI bridge may ask the Grok CLI to
+    refresh its own session on expiry.
     """
     credential = auth.get('grok-build')
     if isinstance(credential, dict) and credential.get('type') == 'oauth' and credential.get('access'):
@@ -333,9 +337,9 @@ def grok_build_token(auth):
 
 def grok_build(auth):
     """Grok quota, read-only. Token source is Pi's grok-build OAuth credential
-    in auth.json when present, else the Grok CLI's own session (read-only
-    bridge, never refreshed) -- see `grok_build_token`. Neither path refreshes
-    or writes any credential; this function only ever performs GET requests.
+    in auth.json when present, else the Grok CLI's own session via the
+    read-only bridge -- see `grok_build_token`. Neither path writes any
+    credential here; this function only ever performs GET requests.
     """
     access, email, source, token_error = grok_build_token(auth)
     if not access:
@@ -373,7 +377,7 @@ def grok_build(auth):
     return {'status': 'ok', 'kind': 'subscription quota', 'account': account, 'windows': windows,
             'credential_source': source,
             'note': 'Grok Build CLI OAuth session via the unofficial cli-chat-proxy.grok.com backend '
-                    '(reverse-engineered, not an xAI-documented API); read-only, never refreshes.'}
+                    '(reverse-engineered, not an xAI-documented API); read-only.'}
 
 
 GOOGLE_PROXY_PORT_ENV = 'GOOGLE_CODE_ASSIST_PORT'

@@ -6,9 +6,11 @@ and must fail with short, non-secret messages on missing/malformed/wrong
 issuer/expired state.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -123,6 +125,53 @@ class GrokOAuthBridgeTests(unittest.TestCase):
             for tz in ("UTC", "Europe/Stockholm", "America/Los_Angeles"):
                 result = run(self.grok_home, {"TZ": tz})
                 self.assertEqual(result.returncode, 0, (tz, result.stderr))
+
+    # --- expiry auto-refresh via the Grok CLI ---------------------------------
+
+    def _fake_grok(self, script_body: str) -> Path:
+        """Install a fake `grok` binary in a temp dir and return that dir,
+        for prepending to PATH. The fake CLI is the only thing allowed to
+        rewrite the temp auth.json, mirroring the real ownership rule."""
+        bin_dir = self.grok_home / "fakebin"
+        bin_dir.mkdir(exist_ok=True)
+        grok = bin_dir / "grok"
+        grok.write_text("#!/bin/bash\n" + textwrap.dedent(script_body))
+        grok.chmod(0o755)
+        return bin_dir
+
+    def test_expired_token_pokes_grok_cli_and_uses_the_refreshed_token(self):
+        self.write_auth({ENTRY_KEY: {"auth_mode": "oidc", "key": "STALE", "expires_at": "2000-01-01T00:00:00Z"}})
+        auth_path = json.dumps(str(self.grok_home / "auth.json"))
+        bin_dir = self._fake_grok(f"""
+            [[ "$1" == models ]] || exit 1
+            {sys.executable} - <<'PYEOF'
+import json
+path = {auth_path}
+data = json.load(open(path))
+entry = data["{ENTRY_KEY}"]
+entry["key"] = "REFRESHED"
+entry["expires_at"] = "2999-01-01T00:00:00Z"
+json.dump(data, open(path, "w"))
+PYEOF
+        """)
+        result = run(self.grok_home, {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "REFRESHED")
+
+    def test_expired_token_with_failing_grok_cli_errors_without_stale_token(self):
+        self.write_auth({ENTRY_KEY: {"auth_mode": "oidc", "key": "STALE", "expires_at": "2000-01-01T00:00:00Z"}})
+        bin_dir = self._fake_grok("exit 1\n")
+        result = run(self.grok_home, {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("expired", result.stderr)
+        self.assertNotIn("STALE", result.stdout)
+
+    def test_expired_token_with_no_grok_on_path_errors_cleanly(self):
+        self.write_auth({ENTRY_KEY: {"auth_mode": "oidc", "key": "STALE", "expires_at": "2000-01-01T00:00:00Z"}})
+        result = run(self.grok_home)  # default PATH has no grok
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("expired", result.stderr)
+        self.assertIn("grok login", result.stderr)
 
     def test_absent_expires_at_does_not_block_token_use(self):
         # The field is community-observed, not guaranteed; the CLI itself owns
