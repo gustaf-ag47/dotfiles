@@ -56,7 +56,7 @@ Each layer directory may contain:
 |---|---|
 | `etc/systemd/**` | `systemctl daemon-reload` |
 | `etc/udev/rules.d/**` | `udevadm control --reload` |
-| `usr/src/<name>-<ver>/dkms.conf` | `dkms install <name>/<ver>` |
+| `usr/src/<name>-<ver>/dkms.conf` | `dkms add` + `dkms install` (install only when headers for the running kernel exist; otherwise dkms builds it when they arrive) |
 | `etc/modprobe.d/**`, `etc/mkinitcpio.conf.d/**` | `mkinitcpio -P` |
 | `etc/default/grub.d/**` | `grub-mkconfig -o /boot/grub/grub.cfg` |
 
@@ -130,3 +130,7 @@ real machine and drop what turns out to be unnecessary.
 2. `system/hosts/<name>/` with only what is unique to it. Prefer moving a
    setting to a `gpu/` layer or `common/` the second time it is needed.
 3. `make test-system`.
+
+A failing command (for example a DKMS build) is reported and counted rather
+than aborting the run, so the rest of the layer is still applied. The script
+exits 1 at the end if anything failed.

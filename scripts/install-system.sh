@@ -100,11 +100,17 @@ echo "System layer: profile=$PROFILE gpu=${PROFILE_GPU:-none} root=${ROOT:-/} ($
 for l in "${layers[@]}"; do echo "  layer: ${l#"$DOTFILES/"}"; done
 
 drift=0
+failures=0
 run() {
-	# Print a command; execute it only when applying to the live system.
+	# Print a command; execute it only when applying to the live system. A
+	# failure is reported and counted, not fatal: one bad hook (say, a DKMS
+	# build) must not leave the rest of the layer unapplied.
 	echo "    + $*"
 	if [ "$APPLY" -eq 1 ] && [ "$LIVE" -eq 1 ]; then
-		"$@"
+		if ! "$@"; then
+			echo "    ! failed: $*" >&2
+			failures=$((failures + 1))
+		fi
 	fi
 }
 
@@ -245,7 +251,16 @@ for rel in "${changed[@]+"${changed[@]}"}"; do
 	case "$rel" in usr/src/*/dkms.conf) ;; *) continue ;; esac
 	dir="${rel#usr/src/}"
 	dir="${dir%/dkms.conf}"
-	run dkms install "${dir%-*}/${dir##*-}"
+	# `add` registers the source (no headers needed) so dkms's pacman hook
+	# builds it whenever headers arrive; `install` only if they are here now.
+	if [ "$LIVE" -eq 0 ] || ! dkms status -m "${dir%-*}" -v "${dir##*-}" 2>/dev/null | grep -q .; then
+		run dkms add -m "${dir%-*}" -v "${dir##*-}"
+	fi
+	if [ "$LIVE" -eq 0 ] || [ -d "/usr/lib/modules/$(uname -r)/build" ]; then
+		run dkms install -m "${dir%-*}" -v "${dir##*-}"
+	else
+		echo "   no headers for $(uname -r): ${dir%-*} will build when they are installed"
+	fi
 	hooks=1
 done
 if changed_under etc/modprobe.d/ || changed_under etc/mkinitcpio.conf.d/; then
@@ -263,7 +278,10 @@ fi
 [ "$hooks" -eq 0 ] && echo "   none needed"
 
 echo
-if [ "$drift" -eq 0 ]; then
+if [ "$failures" -gt 0 ]; then
+	echo "$failures command(s) FAILED (see above). Fix and re-run with --apply."
+	exit 1
+elif [ "$drift" -eq 0 ]; then
 	echo "In sync."
 elif [ "$APPLY" -eq 1 ]; then
 	echo "Applied $drift change(s). Reboot if kernel parameters or modules changed."
