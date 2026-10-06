@@ -4,8 +4,21 @@
 MODE_FILE="$HOME/.config/power_mode.conf"
 LOG_FILE="$HOME/.local/share/power_mode.log"
 WIFI_INTERFACE=$(iw dev | awk '$1=="Interface"{print $2}')
-BATTERY_PATH="/sys/class/power_supply/BAT0"
-AC_PATH="/sys/class/power_supply/AC"
+# First system battery / mains adapter by type, not by name: BAT0/AC on the
+# XPS 15, but names vary by vendor (BAT1, ADP1, ACAD). scope=Device excludes
+# peripherals such as a wireless mouse battery.
+find_supply() {
+  local want="$1" d
+  for d in /sys/class/power_supply/*; do
+    [[ "$(cat "$d/type" 2>/dev/null)" == "$want" ]] || continue
+    [[ "$(cat "$d/scope" 2>/dev/null)" == "Device" ]] && continue
+    echo "$d"
+    return 0
+  done
+  return 1
+}
+BATTERY_PATH="$(find_supply Battery || echo /sys/class/power_supply/BAT0)"
+AC_PATH="$(find_supply Mains || echo /sys/class/power_supply/AC)"
 
 # WiFi chipsets whose firmware crashes (Microcode SW error / NMI_INTERRUPT_HOST)
 # when power_save is enabled. On these, we never toggle `iw set power_save on`.

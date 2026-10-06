@@ -16,7 +16,15 @@ mkdir -p "$STATE_DIR"
 
 # Get battery information
 get_battery_info() {
-    local battery_path="/sys/class/power_supply/BAT0"
+    # First system battery by type (BAT0 on the XPS 15, but names vary);
+    # scope=Device excludes peripherals such as a wireless mouse.
+    local battery_path="" d
+    for d in /sys/class/power_supply/*; do
+        [[ "$(cat "$d/type" 2>/dev/null)" == "Battery" ]] || continue
+        [[ "$(cat "$d/scope" 2>/dev/null)" == "Device" ]] && continue
+        battery_path="$d"
+        break
+    done
     
     if [[ ! -d "$battery_path" ]]; then
         echo "Battery not found" >&2

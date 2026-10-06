@@ -1,4 +1,4 @@
-.PHONY: help install test test-unit test-node test-bootstrap test-install lint lint-shell lint-lua lint-yaml lint-stylua lint-build
+.PHONY: help install install-system test test-unit test-node test-bootstrap test-install test-system lint lint-shell lint-lua lint-yaml lint-stylua lint-build
 
 # Default target - show help
 help:
@@ -6,11 +6,13 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make install       - Install dotfiles and create symlinks"
+	@echo "  make install-system- Show root-side drift (system/); apply: sudo scripts/install-system.sh --apply"
 	@echo "  make test          - Run all unit tests (python + node)"
 	@echo "  make test-unit     - Run Python unit tests (tests/unit/)"
 	@echo "  make test-node     - Run Node unit tests (tests/unit/*.mjs, node >= 22.6)"
 	@echo "  make test-bootstrap- Run bootstrap-kit round-trip tests (needs age)"
 	@echo "  make test-install  - Run the real installer + assertions in Docker (CI parity)"
+	@echo "  make test-system   - Test the system layer (system/) in a fake root"
 	@echo "  make lint          - Run all linters (Docker-based)"
 	@echo "  make lint-shell    - Run shellcheck on shell scripts"
 	@echo "  make lint-lua      - Run luacheck on Lua files"
@@ -23,6 +25,10 @@ help:
 
 install:
 	@bash ./scripts/install.sh
+
+# Dry run on purpose: root-side changes are applied explicitly with sudo.
+install-system:
+	@bash ./scripts/install-system.sh
 
 test: test-unit test-node
 
@@ -51,6 +57,9 @@ test-install:
 		su - tester -c "cd ~/sync/src/dotfiles && make install" >/dev/null; \
 		su - tester -c "cd ~/sync/src/dotfiles && bash tests/install-assertions.sh"; \
 		su - tester -c "cd ~/sync/src/dotfiles && bash tests/idempotency.sh"'
+
+test-system:
+	@bash tests/system-layer.sh
 
 lint:
 	@bin/lint --all

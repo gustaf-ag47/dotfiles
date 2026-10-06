@@ -1,0 +1,8 @@
+# Keep USB autosuspend off for the ASUS USB-BT500 (RTL8761B).
+# Belt-and-braces alongside /etc/modprobe.d/btusb.conf.
+#
+# The "add" event fires BEFORE btusb probes, and the driver resets
+# power/control to "auto" afterwards - so we also match the interface "bind"
+# event, which lands after probe, and write through to the parent USB device.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="0b05", ATTR{idProduct}=="17cb", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="btusb", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="17cb", RUN+="/bin/sh -c 'echo on > /sys%p/../power/control'"

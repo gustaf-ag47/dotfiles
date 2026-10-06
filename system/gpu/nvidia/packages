@@ -1,0 +1,3 @@
+# NVIDIA dGPU drives every display (no usable iGPU).
+nvidia-open-dkms
+nvidia-utils

@@ -1,0 +1,13 @@
+[Unit]
+Description=Disable WiFi power save
+After=multi-user.target
+
+[Service]
+# Was "type=oneshot" (lowercase): systemd ignores unknown keys, so this ran as
+# Type=simple. Harmless for a one-shot iw call, but now says what it means.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/iw dev wlan0 set power_save off
+
+[Install]
+WantedBy=multi-user.target

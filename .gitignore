@@ -11,7 +11,7 @@ config/tmux/plugins/
 # Local/private configurations (personal, company-specific, etc.)
 # Now stored in $SYNC/dotfiles-local and symlinked
 # See $SYNC/dotfiles-local/README.md for usage
-local
+/local
 
 # Neovim minimal.lua repro environment (plugin installs for isolated testing)
 config/nvim/.repro/
@@ -60,3 +60,7 @@ config/nvim/lua/dbui_private.lua
 # them here and copies them into child worktrees). Keep them out of history;
 # durable outcomes belong in docs/research/ or the code itself.
 docs/handover/
+
+# Machine overlay links are created OUTSIDE the repo by scripts/install.sh; the
+# old waybar target landed inside it. Never track it again.
+config/gui/Wayland/waybar/profile.jsonc

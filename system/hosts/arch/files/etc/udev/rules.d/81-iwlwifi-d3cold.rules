@@ -1,0 +1,6 @@
+# Keep the Intel AX211 CNVi WiFi (8086:51f0) out of PCI D3cold.
+# The iwlwifi driver mishandles the D3cold->D0 transition on resume, which
+# triggers a firmware crash/SW-reset loop. Pinning the device to D0 prevents
+# the bad transition; power cost is negligible. Complements the
+# system-sleep iwlwifi-reload hook.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x51f0", ATTR{d3cold_allowed}="0"

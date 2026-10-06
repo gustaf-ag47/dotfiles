@@ -1,0 +1,20 @@
+#!/bin/bash
+# Work around AX211 (iwlwifi, so-a0-gf-a0 fw v89) crash loop on resume.
+#
+# On resume from s2idle the card cannot be brought back from D3cold cleanly;
+# the firmware faults (NMI_INTERRUPT_UNKNOWN / "Queue stuck" / IML-ROM error)
+# and the driver enters a continuous SW-reset loop, making the network
+# unusable (multi-second to >1 min ping latencies) until reboot/reload.
+#
+# Unloading iwlmvm/iwlwifi before suspend and reloading after resume avoids
+# the broken D3cold->D0 re-init path entirely. Verified: a clean reload
+# brings the card back in ~6s with zero firmware faults.
+
+case "$1" in
+    pre)
+        modprobe -r iwlmvm iwlwifi
+        ;;
+    post)
+        modprobe iwlwifi
+        ;;
+esac

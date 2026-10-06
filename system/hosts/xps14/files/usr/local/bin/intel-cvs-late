@@ -1,0 +1,33 @@
+#!/bin/bash
+# Wait for every Cirrus Logic SoundWire device (manufacturer 0x01FA: the
+# CS35L57 speaker amps and the jack codec) to have a driver bound, then load
+# intel_cvs. Loading it earlier lets it grab the amps' shared spk-id GPIO.
+# See /etc/modprobe.d/intel-cvs-late.conf.
+#
+# Times out after $1 seconds (default 20) and loads intel_cvs anyway: by then
+# the amps have either bound or failed, and the camera should still work.
+set -u
+
+timeout="${1:-20}"
+
+cirrus_amps_bound() {
+	local dev found=0
+	for dev in /sys/bus/soundwire/devices/sdw:*; do
+		[ -e "$dev/modalias" ] || continue
+		grep -qi '^sdw:m01fa' "$dev/modalias" || continue
+		found=1
+		[ -e "$dev/driver" ] || return 1
+	done
+	[ "$found" -eq 1 ]
+}
+
+deadline=$((SECONDS + timeout))
+until cirrus_amps_bound; do
+	if [ "$SECONDS" -ge "$deadline" ]; then
+		echo "intel-cvs-late: amps not bound after ${timeout}s, loading intel_cvs anyway" >&2
+		break
+	fi
+	sleep 0.5
+done
+
+exec modprobe intel_cvs

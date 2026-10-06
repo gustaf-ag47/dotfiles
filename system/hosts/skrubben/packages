@@ -1,0 +1,3 @@
+# skrubben runs the LTS kernel (ZFS dkms tracks it).
+linux-lts
+linux-lts-headers

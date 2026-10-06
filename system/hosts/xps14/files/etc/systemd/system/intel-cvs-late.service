@@ -1,0 +1,15 @@
+[Unit]
+Description=Load intel_cvs after the speaker amps have bound (shared GPIO race)
+Documentation=file://@DOTFILES@/system/README.md
+ConditionPathExists=/etc/modprobe.d/intel-cvs-late.conf
+After=systemd-modules-load.service systemd-udevd.service
+# Before login, so the user's PipeWire/WirePlumber sees the camera at start.
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/intel-cvs-late
+
+[Install]
+WantedBy=multi-user.target

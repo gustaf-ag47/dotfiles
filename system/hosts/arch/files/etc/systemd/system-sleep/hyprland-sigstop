@@ -1,0 +1,23 @@
+#!/bin/bash
+# Prevent Hyprland from issuing DRM/NVIDIA ioctls during GPU suspend/resume.
+#
+# On s2idle, the NVIDIA kernel notifiers handle GPU state. If Hyprland has an
+# outstanding DRM call when the GPU suspends, it blocks until a driver timeout
+# (~20s) and then exits. SIGSTOP freezes Hyprland before any GPU transition;
+# SIGCONT releases it once the GPU is back and ready.
+#
+# Intentionally does NOT use nvidia-suspend/resume.service — those must stay
+# disabled on this system (S0ix uses kernel notifiers; enabling services
+# alongside notifiers double-handles GPU state and corrupts the driver).
+
+HYPRLAND_PID=$(pgrep -x Hyprland 2>/dev/null)
+[[ -z "$HYPRLAND_PID" ]] && exit 0
+
+case "$1" in
+    pre)
+        kill -STOP "$HYPRLAND_PID"
+        ;;
+    post)
+        kill -CONT "$HYPRLAND_PID"
+        ;;
+esac

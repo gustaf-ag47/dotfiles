@@ -1,0 +1,4 @@
+# Intel-only graphics (iGPU drives every display).
+mesa
+vulkan-intel
+intel-media-driver

@@ -94,6 +94,26 @@ jobs:
             su - tester -c "cd ~/sync/src/dotfiles && bash tests/idempotency.sh"
           '
 
+  system-layer:
+    name: system layer (fake root + package canary)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: apply every profile into a fake root, resolve every package
+        run: |
+          # Inside archlinux:latest so the package check sees today's repos:
+          # a renamed/dropped package in system/*/packages fails here, not on
+          # a fresh machine mid-install.
+          docker run --rm --pull=always -v "$PWD:/src:ro" \
+            archlinux:latest bash -c '
+            set -e
+            pacman -Sy --noconfirm --needed diffutils >/dev/null
+            cp -a /src /tmp/dotfiles
+            cd /tmp/dotfiles
+            SYSTEM_LAYER_RESOLVE=1 bash tests/system-layer.sh
+          '
+
   bootstrap-kit:
     name: bootstrap kit round trip
     runs-on: ubuntu-latest
@@ -112,7 +132,7 @@ jobs:
   notify:
     name: report weekly failure
     if: failure() && github.event_name == 'schedule'
-    needs: [lint, unit, install, bootstrap-kit]
+    needs: [lint, unit, install, system-layer, bootstrap-kit]
     runs-on: ubuntu-latest
     permissions:
       issues: write

@@ -1,0 +1,10 @@
+# <action> <unit>   action: enable | disable | mask
+enable tlp.service
+enable iwlwifi-watchdog.service
+enable wifi-powersave-off.service
+# MUST stay disabled: EnableS0ixPowerManagement (modprobe.d/nvidia-suspend.conf)
+# makes the kernel save/restore GPU state; these services would do it twice and
+# corrupt the driver on resume.
+disable nvidia-suspend.service
+disable nvidia-resume.service
+disable nvidia-hibernate.service

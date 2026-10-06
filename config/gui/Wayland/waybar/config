@@ -3,7 +3,7 @@
   // else class/<class>.jsonc). Waybar's include merge keeps values already set
   // in THIS file (included values are ignored on conflict), so modules-right
   // must live only in the overlay; defining it here would override every host.
-  "include": ["~/.config/waybar/profile.jsonc"],
+  "include": ["~/.config/waybar-host.jsonc"],
   "layer": "top",
   "position": "top", 
   "height": 50,
