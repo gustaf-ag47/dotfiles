@@ -1,0 +1,141 @@
+#!/bin/bash
+# git-bundle-backup -- carry git history that exists only on this machine.
+#
+# Syncthing excludes **/.git (each machine owns its git state), so a new
+# machine receives every working tree WITHOUT its history. Anything not on a
+# remote -- local branches, stashes, repos with no remote at all -- lives only
+# in this machine's .git. This writes it into the Syncthing folder as git
+# bundles, plus a manifest that git-rehydrate uses to rebuild .git elsewhere.
+#
+# Output: $GIT_BUNDLE_DIR/<hostname>/  (default $SYNC/archive/git-bundles)
+#   repos.tsv              path, remote URL, branch, HEAD for EVERY repo
+#   <path>.full.bundle     repos with no remote: all refs + stashes
+#   <path>.local.bundle    repos with a remote: only commits/stashes the
+#                          remote does not have (needs the remote to restore)
+#
+# Repos are found under $SYNC (maxdepth 5). Worktrees (.git is a file) are
+# skipped -- their refs live in the main repository. A bundle is rewritten
+# only when the repo's refs or stashes changed. Full bundles above
+# GIT_BUNDLE_MAX_MB (default 200) are skipped with a warning: such a repo
+# should get a private remote instead of being re-synced on every change.
+#
+# Excluded paths (space-separated globs: GIT_BUNDLE_EXCLUDE, else the words in
+# $SYNC/dotfiles-local/git-bundle-exclude, plus always tmp/*) keep a
+# repo in the manifest -- so git-rehydrate can still clone it from its remote
+# -- but never bundles its contents into the personal Syncthing mesh. Company
+# code stays on company remotes; push those branches instead.
+#
+# Usage: git-bundle-backup [--dry-run]
+set -uo pipefail
+
+SYNC="${SYNC:-$HOME/sync}"
+OUT="${GIT_BUNDLE_DIR:-$SYNC/archive/git-bundles}/$(cat /etc/hostname 2>/dev/null || hostname)"
+MAX_MB="${GIT_BUNDLE_MAX_MB:-200}"
+# The company workspace path is private, so the default list lives in the
+# private overlay rather than this public repo.
+EXCLUDE_FILE="${GIT_BUNDLE_EXCLUDE_FILE:-$SYNC/dotfiles-local/git-bundle-exclude}"
+EXCLUDE="${GIT_BUNDLE_EXCLUDE-$(sed 's/#.*//' "$EXCLUDE_FILE" 2>/dev/null | tr '\n' ' ')} tmp/*"
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+mkdir -p "$OUT"
+manifest="$OUT/repos.tsv.partial"
+printf '# path\tremote\tbranch\thead\n' >"$manifest"
+
+n_repos=0 n_written=0 n_skipped=0 n_warn=0
+while IFS= read -r gitdir; do
+	repo="${gitdir%/.git}"
+	rel="${repo#"$SYNC"/}"
+	[ -d "$gitdir" ] || continue # worktree: .git is a file
+	if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+		echo "WARN  $rel: .git is not a valid repository (missing HEAD?), skipped" >&2
+		n_warn=$((n_warn + 1))
+		continue
+	fi
+	n_repos=$((n_repos + 1))
+
+	remote="$(git -C "$repo" remote | head -1)"
+	url=""
+	[ -n "$remote" ] && url="$(git -C "$repo" remote get-url "$remote" 2>/dev/null)"
+	branch="$(git -C "$repo" symbolic-ref --short -q HEAD || echo -)"
+	head="$(git -C "$repo" rev-parse -q --verify HEAD || echo -)"
+	printf '%s\t%s\t%s\t%s\n' "$rel" "${url:--}" "$branch" "$head" >>"$manifest"
+
+	excluded=0
+	for pat in $EXCLUDE; do
+		# shellcheck disable=SC2254  # pattern match is the point
+		case "$rel" in $pat) excluded=1 ;; esac
+	done
+	if [ "$excluded" -eq 1 ]; then
+		n_local="$(git -C "$repo" rev-list --count --branches --not --remotes 2>/dev/null || echo 0)"
+		n_st="$(git -C "$repo" stash list 2>/dev/null | wc -l)"
+		[ "$n_local" -gt 0 ] || [ "$n_st" -gt 0 ] &&
+			echo "NOTE  $rel: excluded from bundles; $n_local local-only commit(s), $n_st stash(es) live only here" >&2
+		continue
+	fi
+
+	# Stash entries are reflog entries, not refs; pin each to a temporary ref so
+	# the bundle carries all of them, not just the newest.
+	mapfile -t stashes < <(git -C "$repo" stash list --format=%H 2>/dev/null)
+	if [ -n "$remote" ]; then
+		local_only="$(git -C "$repo" rev-list --count --branches --not --remotes 2>/dev/null || echo 0)"
+		[ "$local_only" -gt 0 ] || [ ${#stashes[@]} -gt 0 ] || continue
+		kind=local
+	else
+		if [ -z "$head" ] || [ "$head" = - ]; then continue; fi # empty repo
+		kind=full
+	fi
+
+	bundle="$OUT/$rel.$kind.bundle"
+	state="$( {
+		git -C "$repo" for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags
+		printf '%s\n' "${stashes[@]}"
+	} | sha1sum | cut -c1-40)"
+	if [ -f "$bundle" ] && [ "$(cat "$bundle.state" 2>/dev/null)" = "$state" ]; then
+		n_skipped=$((n_skipped + 1))
+		continue
+	fi
+	if [ "$kind" = full ]; then
+		mb=$(($(du -sk "$gitdir" | cut -f1) / 1024))
+		if [ "$mb" -gt "$MAX_MB" ]; then
+			echo "WARN  $rel: no remote and .git is ${mb} MB (> $MAX_MB): give it a private remote" >&2
+			n_warn=$((n_warn + 1))
+			continue
+		fi
+	fi
+	echo "bundle $kind  $rel (${#stashes[@]} stashes)"
+	[ "$DRY" -eq 1 ] && continue
+
+	i=0
+	for s in "${stashes[@]}"; do
+		git -C "$repo" update-ref "refs/bundle-stash/$i" "$s"
+		i=$((i + 1))
+	done
+	mkdir -p "$(dirname "$bundle")"
+	if [ "$kind" = full ]; then
+		args=(--all)
+	else
+		args=(--branches)
+		[ ${#stashes[@]} -gt 0 ] && args+=(--glob=refs/bundle-stash/*)
+		args+=(--not --remotes)
+	fi
+	if git -C "$repo" bundle create "$bundle.partial" "${args[@]}" 2>/dev/null; then
+		mv "$bundle.partial" "$bundle"
+		echo "$state" >"$bundle.state"
+		n_written=$((n_written + 1))
+	else
+		rm -f "$bundle.partial"
+		echo "WARN  $rel: git bundle failed" >&2
+		n_warn=$((n_warn + 1))
+	fi
+	for ((j = 0; j < i; j++)); do git -C "$repo" update-ref -d "refs/bundle-stash/$j"; done
+done < <(find -H "$SYNC" -maxdepth 5 -name .git \
+	-not -path "$SYNC/archive/*" -not -path '*/.stversions/*' -not -path '*/node_modules/*' 2>/dev/null | sort)
+
+if [ "$DRY" -eq 0 ]; then
+	mv "$manifest" "$OUT/repos.tsv"
+else
+	rm -f "$manifest"
+fi
+echo "$n_repos repos: $n_written bundle(s) written, $n_skipped unchanged, $n_warn warning(s) -> $OUT"
+[ "$n_warn" -eq 0 ]

@@ -7,10 +7,12 @@
 #
 # Layers, applied in order (a later layer wins for the same destination path):
 #   system/common/            every machine
+#   system/roles/<role>/      each role in PROFILE_ROLES, in order
 #   system/gpu/<PROFILE_GPU>/ intel | hybrid | nvidia
 #   system/hosts/<profile>/   this machine only
 # Each layer may hold:
-#   packages   one pacman package per line ('#' comments)
+#   packages      one pacman package per line ('#' comments)
+#   packages.aur  AUR packages, built with paru as the invoking (sudo) user
 #   services   "<enable|disable|mask> <unit>" per line
 #   files/     a tree mirrored onto /. Mode comes from the repo (+x -> 0755,
 #              else 0644). The token @DOTFILES@ is replaced with the repo path.
@@ -23,6 +25,8 @@
 #   sudo scripts/install-system.sh --apply    # make it so
 #   scripts/install-system.sh --apply --root /tmp/r   # files only, into a fake root
 #   PROFILE=xps14 scripts/install-system.sh   # another machine's plan
+#   scripts/install-system.sh --profile xps14 --list   # review its packages
+#   scripts/install-system.sh --undeclared    # installed here, declared nowhere
 #
 # See system/README.md.
 set -euo pipefail
@@ -37,6 +41,7 @@ cd / || exit 1
 
 APPLY=0
 CHECK=0
+MODE=plan # plan | list | undeclared
 ROOT=/
 PROFILE="${PROFILE:-}"
 
@@ -46,6 +51,8 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	--apply) APPLY=1 ;;
 	--check) CHECK=1 ;;
+	--list) MODE=list ;;
+	--undeclared) MODE=undeclared ;;
 	--root)
 		ROOT="${2:?--root needs a directory}"
 		shift
@@ -88,8 +95,17 @@ fi
 # shellcheck disable=SC1090  # path is computed at runtime
 . "$PROFILE_FILE"
 PROFILE_GPU="${PROFILE_GPU:-}"
+PROFILE_ROLES="${PROFILE_ROLES:-}"
 
 layers=("$SYSTEM_DIR/common")
+for r in $PROFILE_ROLES; do
+	if [ -d "$SYSTEM_DIR/roles/$r" ]; then
+		layers+=("$SYSTEM_DIR/roles/$r")
+	else
+		echo "error: profile $PROFILE names role '$r' but system/roles/$r does not exist" >&2
+		exit 1
+	fi
+done
 if [ -n "$PROFILE_GPU" ]; then
 	if [ -d "$SYSTEM_DIR/gpu/$PROFILE_GPU" ]; then
 		layers+=("$SYSTEM_DIR/gpu/$PROFILE_GPU")
@@ -99,9 +115,56 @@ if [ -n "$PROFILE_GPU" ]; then
 fi
 [ -d "$SYSTEM_DIR/hosts/$PROFILE" ] && layers+=("$SYSTEM_DIR/hosts/$PROFILE")
 
+list_entries() { # strip comments and blank lines
+	[ -f "$1" ] || return 0
+	sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' "$1"
+}
+
+is_installed() { command -v pacman >/dev/null 2>&1 && pacman -Q "$1" >/dev/null 2>&1; }
+
+# --- review modes (read-only, no root) ----------------------------------------
+if [ "$MODE" = list ]; then
+	echo "Packages for profile $PROFILE (roles: ${PROFILE_ROLES:-none}, gpu: ${PROFILE_GPU:-none})"
+	echo "  [x] installed on THIS machine   [ ] not installed here"
+	total=0
+	for l in "${layers[@]}"; do
+		for kind in packages packages.aur; do
+			mapfile -t pk < <(list_entries "$l/$kind")
+			[ ${#pk[@]} -gt 0 ] || continue
+			total=$((total + ${#pk[@]}))
+			echo
+			printf '%s/%s (%d)\n' "${l#"$SYSTEM_DIR/"}" "$kind" "${#pk[@]}"
+			head -1 "$l/$kind" | grep '^#' | sed 's/^/  /' || true
+			for p in "${pk[@]}"; do
+				if is_installed "$p"; then printf '  [x] %s\n' "$p"; else printf '  [ ] %s\n' "$p"; fi
+			done
+		done
+	done
+	echo
+	echo "$total packages. Edit system/roles/<role>/packages*, or PROFILE_ROLES in profiles/$PROFILE.env."
+	exit 0
+fi
+
+if [ "$MODE" = undeclared ]; then
+	command -v pacman >/dev/null 2>&1 || { echo "needs pacman" >&2; exit 1; }
+	declared="$(for l in "${layers[@]}"; do list_entries "$l/packages"; list_entries "$l/packages.aur"; done | sort -u)"
+	mapfile -t extra < <(comm -23 <(pacman -Qeq | sort) <(printf '%s\n' "$declared"))
+	echo "Explicitly installed on this machine but declared by no layer of profile $PROFILE:"
+	if [ ${#extra[@]} -eq 0 ]; then
+		echo "  (none)"
+	else
+		for p in "${extra[@]}"; do
+			if pacman -Qmq "$p" >/dev/null 2>&1; then echo "  $p (AUR/foreign)"; else echo "  $p"; fi
+		done
+		echo
+		echo "${#extra[@]} package(s). Add each to a role or host, or remove it (pacman -Rns)."
+	fi
+	exit 0
+fi
+
 mode_word="dry run"
 [ "$APPLY" -eq 1 ] && mode_word="apply"
-echo "System layer: profile=$PROFILE gpu=${PROFILE_GPU:-none} root=${ROOT:-/} ($mode_word)"
+echo "System layer: profile=$PROFILE roles=${PROFILE_ROLES:-none} gpu=${PROFILE_GPU:-none} root=${ROOT:-/} ($mode_word)"
 for l in "${layers[@]}"; do echo "  layer: ${l#"$DOTFILES/"}"; done
 
 drift=0
@@ -117,11 +180,6 @@ run() {
 			failures=$((failures + 1))
 		fi
 	fi
-}
-
-list_entries() { # strip comments and blank lines
-	[ -f "$1" ] || return 0
-	sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' "$1"
 }
 
 # --- packages ----------------------------------------------------------------
@@ -144,9 +202,52 @@ if [ ${#packages[@]} -gt 0 ]; then
 		echo "   all installed"
 	elif [ "$LIVE" -eq 1 ]; then
 		drift=$((drift + 1))
-		run pacman -S --needed --noconfirm "${missing[@]}"
+		echo "   missing: ${missing[*]}"
+		if [ "$APPLY" -eq 1 ]; then
+			# One transaction is fast; if it fails (one renamed package aborts
+			# the whole thing), fall back to one at a time so the rest land.
+			if ! pacman -S --needed --noconfirm "${missing[@]}"; then
+				echo "    ! batch install failed, retrying one by one" >&2
+				for p in "${missing[@]}"; do run pacman -S --needed --noconfirm "$p"; done
+			fi
+		else
+			echo "    + pacman -S --needed --noconfirm <${#missing[@]} packages>"
+		fi
 	else
 		echo "   (fake root, not installed): ${missing[*]}"
+	fi
+fi
+
+# --- AUR packages ------------------------------------------------------------
+aur=()
+for l in "${layers[@]}"; do
+	while IFS= read -r p; do aur+=("$p"); done < <(list_entries "$l/packages.aur")
+done
+echo "-- AUR packages (${#aur[@]} declared)"
+if [ ${#aur[@]} -gt 0 ]; then
+	aur_missing=()
+	if [ "$LIVE" -eq 1 ] && command -v pacman >/dev/null 2>&1; then
+		for p in "${aur[@]}"; do is_installed "$p" || aur_missing+=("$p"); done
+	else
+		aur_missing=("${aur[@]}")
+	fi
+	if [ ${#aur_missing[@]} -eq 0 ]; then
+		echo "   all installed"
+	elif [ "$LIVE" -eq 0 ]; then
+		echo "   (fake root, not installed): ${aur_missing[*]}"
+	else
+		drift=$((drift + 1))
+		echo "   missing: ${aur_missing[*]}"
+		# makepkg refuses to run as root: build as the user who invoked sudo.
+		aur_user="${SUDO_USER:-}"
+		if [ -z "$aur_user" ] || [ "$aur_user" = root ] || ! command -v paru >/dev/null 2>&1; then
+			echo "   cannot build AUR packages here (need paru and sudo from a normal user);"
+			echo "   run as that user: paru -S --needed ${aur_missing[*]}"
+		else
+			for p in "${aur_missing[@]}"; do
+				run sudo -u "$aur_user" paru -S --needed --noconfirm --skipreview "$p"
+			done
+		fi
 	fi
 fi
 

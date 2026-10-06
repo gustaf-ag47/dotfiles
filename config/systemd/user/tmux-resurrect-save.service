@@ -1,0 +1,6 @@
+[Unit]
+Description=Save tmux sessions via tmux-safe-save
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/tmux-safe-save

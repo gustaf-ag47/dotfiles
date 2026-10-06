@@ -60,6 +60,7 @@ test-install:
 
 test-system:
 	@bash tests/system-layer.sh
+	@bash tests/git-bundles.sh
 
 lint:
 	@bin/lint --all

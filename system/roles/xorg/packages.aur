@@ -1,0 +1,2 @@
+# role: xorg -- AUR packages, built with paru as the invoking user.
+xautolock

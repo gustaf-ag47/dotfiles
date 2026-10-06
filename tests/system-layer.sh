@@ -78,7 +78,7 @@ check "--check exits 1 on drift" \
 	bash -c "! bash scripts/install-system.sh --profile arch --root '$tmp/dry' --check >/dev/null"
 
 echo "-- declarations are well formed"
-for f in system/*/packages system/*/*/packages; do
+for f in system/*/packages system/*/*/packages system/*/packages.aur system/*/*/packages.aur; do
 	[ -f "$f" ] || continue
 	bad="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$f" | grep -vE '^[a-z0-9@._+-]+$' || true)"
 	if [ -z "$bad" ]; then ok "$f"; else no "$f: bad package line(s): $bad"; fi
@@ -89,6 +89,46 @@ for f in system/*/services system/*/*/services; do
 		grep -vE '^(enable|disable|mask) [A-Za-z0-9@._-]+\.(service|timer|socket|path|target)$' || true)"
 	if [ -z "$bad" ]; then ok "$f"; else no "$f: bad service line(s): $bad"; fi
 done
+for f in system/*/*/user-services; do
+	[ -f "$f" ] || continue
+	while read -r action unit; do
+		case "$action" in enable | disable) ;; *) no "$f: bad line '$action $unit'"; continue ;; esac
+		if [ -f "config/systemd/user/$unit" ]; then
+			ok "$f: $unit (public)"
+		elif [ -f "local/config/systemd/user/$unit" ]; then
+			ok "$f: $unit (private overlay)"
+		elif [ ! -d local/config ]; then
+			ok "$f: $unit (private overlay not present here; not checked)"
+		else
+			no "$f: no unit file for $unit in config/ or local/config/systemd/user"
+		fi
+	done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$f")
+done
+
+# Within one profile, each package should come from exactly one layer (gpu/
+# and hosts/ hold alternatives, so duplicates ACROSS profiles are fine).
+for env in profiles/*.env; do
+	p="$(basename "$env" .env)"
+	dups="$(bash scripts/install-system.sh --profile "$p" --list 2>/dev/null |
+		sed -n 's/^  \[.\] //p' | sort | uniq -d | tr '\n' ' ')"
+	if [ -z "$dups" ]; then ok "$p: no package declared twice"; else no "$p: declared twice: $dups"; fi
+done
+for env in profiles/*.env; do
+	roles="$(bash -c ". '$env'; echo \"\${PROFILE_ROLES:-}\"")"
+	for r in $roles; do
+		check "$(basename "$env" .env): role '$r' exists" test -d "system/roles/$r"
+	done
+done
+
+echo "-- review modes"
+check "--list prints every layer of xps14" \
+	bash -c "bash scripts/install-system.sh --profile xps14 --list | grep -q '^roles/personal/packages.aur'"
+check "--list counts packages" \
+	bash -c "bash scripts/install-system.sh --profile xps14 --list | grep -qE '^[0-9]+ packages\\.'"
+if command -v pacman >/dev/null 2>&1; then
+	check "--undeclared runs" bash scripts/install-system.sh --profile arch --undeclared
+fi
+
 for d in system/hosts/*/; do
 	h="$(basename "$d")"
 	check "system/hosts/$h has a matching profiles/$h.env" test -f "profiles/$h.env"
@@ -100,6 +140,24 @@ if [ "${SYSTEM_LAYER_RESOLVE:-0}" = 1 ]; then
 		if pacman -Si "$pkg" >/dev/null 2>&1; then ok "$pkg"; else no "$pkg not in the repos"; fi
 	done < <(cat system/*/packages system/*/*/packages 2>/dev/null |
 		sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' | sort -u)
+
+	echo "-- every AUR package exists in the AUR (and is NOT in the official repos)"
+	mapfile -t aurpk < <(cat system/*/packages.aur system/*/*/packages.aur 2>/dev/null |
+		sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' | sort -u)
+	if [ ${#aurpk[@]} -gt 0 ]; then
+		q="$(printf 'arg[]=%s&' "${aurpk[@]}")"
+		found="$(curl -fsS "https://aur.archlinux.org/rpc/v5/info?${q%&}" |
+			python3 -c 'import sys,json;print("\n".join(r["Name"] for r in json.load(sys.stdin)["results"]))')"
+		for pkg in "${aurpk[@]}"; do
+			if pacman -Si "$pkg" >/dev/null 2>&1; then
+				no "$pkg is in the official repos: move it to packages"
+			elif printf '%s\n' "$found" | grep -qx "$pkg"; then
+				ok "aur: $pkg"
+			else
+				no "aur: $pkg not found in the AUR"
+			fi
+		done
+	fi
 fi
 
 echo

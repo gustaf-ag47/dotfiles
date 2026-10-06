@@ -1,3 +1,9 @@
 linux-headers
 tlp
 tlp-rdw
+linux
+linux-firmware
+# XPS 15 power tooling
+cpupower
+powertop
+acpi

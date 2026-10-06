@@ -63,6 +63,8 @@ jobs:
           node-version: "22"
       - run: make test-unit
       - run: make test-node
+      - name: git bundle round trip (git-bundle-backup + git-rehydrate)
+        run: bash tests/git-bundles.sh
 
   install:
     name: make install on archlinux (${{ matrix.image }})

@@ -1,17 +1,17 @@
 # xps14 -- Dell XPS 14 (2026, DA14260), Panther Lake, Intel-only graphics.
+linux
+linux-firmware
 linux-headers
 # Audio: SOF + SoundWire (4x Cirrus CS35L57 amps, SDCA jack codec).
 sof-firmware
 alsa-ucm-conf
 # Wi-Fi 7 (Intel BE211): regulatory database, otherwise the global domain
 # stays "00" and non-LAR radios lose 5/6 GHz.
-wireless-regdb
 iw
 # Webcam: IPU7 + OV08X40 has a kernel driver (>= 7.2) but needs libcamera's
 # software ISP in userspace; apps reach it through the PipeWire camera portal.
 libcamera
 pipewire-libcamera
 # Dell ships BIOS/firmware through LVFS.
-fwupd
 tlp
 tlp-rdw

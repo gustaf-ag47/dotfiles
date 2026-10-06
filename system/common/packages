@@ -2,3 +2,14 @@
 # dkms builds the hid-annepro2 module (files/usr/src); each host lists the
 # headers for the kernel it runs.
 dkms
+
+# Installed by install-arch (pacstrap + its bootstrap apps.csv) before this
+# layer runs. Declared here too so `install-system.sh --undeclared` only
+# reports packages nobody has decided about.
+base
+base-devel
+networkmanager
+iwd
+grub
+efibootmgr
+python

@@ -1,0 +1,9 @@
+# role: base -- systemd --user units enabled on every machine with this role.
+# Unit files come from config/systemd/user/ (or $DOTFILES/local/config/systemd/user/
+# for private ones). Format: <enable|disable> <unit>
+enable claude-token-proxy.service
+enable google-code-assist-proxy.service
+enable llm-alert.timer
+enable llm-schedule.timer
+enable tmux-resurrect-save.timer
+enable git-bundle-backup.timer

@@ -1,0 +1,33 @@
+# role: personal -- Private: finance, media, reading, chat, homelab, personal backups.
+# Official repos, one per line. AUR packages go in packages.aur.
+anki
+beets
+calibre
+monero
+monero-gui
+ledger
+hledger
+borg
+restic
+rclone
+transmission-cli
+transmission-gtk
+discord
+gimp
+inkscape
+obs-studio
+calcurse
+neomutt
+newsboat
+mpd
+ncmpcpp
+rpi-imager
+fdupes
+tesseract-data-eng
+tesseract-data-swe
+zbar
+qrencode
+bitwarden-cli
+ansible
+yt-dlp
+qpdf

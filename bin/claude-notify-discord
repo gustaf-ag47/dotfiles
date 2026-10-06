@@ -1,0 +1,50 @@
+#!/bin/bash
+# Claude Code Discord Notification Script
+# Sends completion notifications to Discord via webhook
+
+WEBHOOK_FILE="$HOME/.config/claude-discord-webhook"
+WEBHOOK_URL=$(cat "$WEBHOOK_FILE" 2>/dev/null)
+
+if [ -z "$WEBHOOK_URL" ]; then
+    echo "Error: Webhook URL not found in $WEBHOOK_FILE" >&2
+    exit 1
+fi
+
+# Get current directory and git branch info
+folder="$PWD"
+branch=''
+if git rev-parse --git-dir >/dev/null 2>&1; then
+    branch=" ($(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null))"
+fi
+
+# Get timestamp
+
+# Build Discord message with embed for better formatting
+json_payload=$(cat <<EOF
+{
+  "embeds": [{
+    "title": "🤖 Claude Code Complete",
+    "description": "\`\`\`\nFinished in: $folder$branch\n\`\`\`",
+    "color": 5814783,
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
+    "footer": {
+      "text": "Claude Code Notification"
+    }
+  }]
+}
+EOF
+)
+
+# Send to Discord
+curl -X POST \
+    -H "Content-Type: application/json" \
+    -d "$json_payload" \
+    "$WEBHOOK_URL" \
+    2>/dev/null &
+
+# Play sound (non-blocking)
+if command -v paplay >/dev/null 2>&1 && [ -f /usr/share/sounds/freedesktop/stereo/complete.oga ]; then
+    paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null &
+fi
+
+exit 0

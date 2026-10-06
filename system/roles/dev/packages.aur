@@ -1,0 +1,6 @@
+# role: dev -- AUR packages, built with paru as the invoking user.
+lazydocker-bin
+wrk
+mycli
+marp-cli
+slides

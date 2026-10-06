@@ -1,0 +1,6 @@
+# role: work -- Professional (day job): cloud CLIs, VPN, company chat and IDEs.
+# Official repos, one per line. AUR packages go in packages.aur.
+aws-cli
+composer
+qopenvpn
+openresolv

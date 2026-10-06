@@ -5,3 +5,6 @@ vulkan-intel
 intel-media-driver
 nvidia-open-dkms
 nvidia-utils
+# GPU debugging/diagnostics
+libva-utils
+intel-gpu-tools
