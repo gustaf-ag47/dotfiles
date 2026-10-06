@@ -2,6 +2,17 @@
 
 This document describes the backup and restore system for your dotfiles and system configuration.
 
+## Encryption (since 2026-10-06)
+
+Archives are written as **`<timestamp>.tar.gz.age`**, encrypted to the same
+recipients as the bootstrap kit (`secrets/recipients.txt`: two YubiKeys and the
+offline paper key), and staged in a temp dir outside `$SYNC`. Before that the
+script wrote a plaintext `.tar.gz` of SSH/GPG/age keys and Wi-Fi passwords into
+the synced folder. `restore` decrypts `.age` archives with
+`BACKUP_IDENTITY` (default: the YubiKey identity stub in `secrets/`); older
+plaintext `.tar.gz` archives still restore. Examples below that show
+`.tar.gz` apply to those old archives.
+
 ## Overview
 
 The backup system creates timestamped, comprehensive backups of critical system and user data to `$SYNC/backup/`. All backups are stored as compressed tarballs with preserved permissions.

@@ -10,7 +10,8 @@ tests/
 ├── bootstrap-preflight.sh  # bootstrap kit preconditions
 ├── install-assertions.sh   # post-install state assertions (CI install job)
 ├── idempotency.sh          # re-run safety + non-destructiveness (CI install job)
-└── system-layer.sh         # system/ applied per profile into a fake root (CI system-layer job)
+├── system-layer.sh         # system/ applied per profile into a fake root (CI system-layer job)
+└── git-bundles.sh          # git-bundle-backup -> git-rehydrate round trip (CI unit job)
 ```
 
 `make test-system` runs `system-layer.sh` without root. CI runs it inside

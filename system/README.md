@@ -9,6 +9,8 @@ Applied by `scripts/install-system.sh`, from the same `profiles/<name>.env`
 that drives `install-arch` and `make install`.
 
 ```bash
+scripts/install-system.sh --profile xps14 --list   # review a machine's apps BEFORE installing it
+scripts/install-system.sh --undeclared     # installed here, declared nowhere
 make install-system                        # dry run: what differs on this machine
 scripts/install-system.sh --check          # same, exit 1 on drift
 sudo scripts/install-system.sh --apply     # make it so
@@ -25,6 +27,7 @@ Applied in order; a later layer wins when two write the same path.
 | Layer | Selected by | Holds |
 |---|---|---|
 | `common/` | always | logind idle hand-off to hypridle, AnnePro2 BLE keyboard DKMS source |
+| `roles/<role>/` | each role in `PROFILE_ROLES`, in order | the machine's applications and user services |
 | `gpu/<PROFILE_GPU>/` | `PROFILE_GPU` | graphics drivers; early KMS + `nvidia_drm.modeset=1` for NVIDIA |
 | `hosts/<profile>/` | profile name | everything specific to one machine |
 
@@ -39,10 +42,43 @@ Applied in order; a later layer wins when two write the same path.
 The same value selects the Hyprland GPU overlay,
 `config/gui/Wayland/hypr/gpu/<gpu>.conf`.
 
+### Roles: apps per machine
+
+A role is a named bundle of applications (and the user services that go with
+them). A profile picks its roles; nothing else decides what gets installed.
+
+| Role | What | arch | skrubben | xps14 |
+|---|---|---|---|---|
+| `base` | shell, CLI tools, Syncthing, Tailscale, YubiKey, sops/age | x | x | x |
+| `desktop` | Hyprland stack, audio, Bluetooth, fonts, browsers, desktop apps | x | x | x |
+| `xorg` | i3/X11 fallback session | x | | |
+| `dev` | languages, containers, Kubernetes, IaC, IDEs | x | x | x |
+| `work` | day job: cloud CLIs, VPN, company chat/IDEs, prod DB tunnel | x | x | x |
+| `personal` | finance, media, reading, chat, homelab, personal backups | x | x | x |
+| `latex` | TeX Live (~2 GB) | x | | |
+
+The lists were built (2026-10-06) from the union of what arch and skrubben
+actually had installed, then sorted. To change what a machine gets: edit
+`PROFILE_ROLES` in its profile, or move packages between roles. To review
+before an install, `--list` prints every package per layer with an
+installed/not-installed mark. `--undeclared` on a live machine prints what is
+installed but in no layer: decide for each one (declare it, or `pacman -Rns`).
+
+`apps.csv` in install-arch is now only the bootstrap set the installer itself
+needs (kit unlock, `make install`, the services it enables); everything else
+comes from roles.
+
 Each layer directory may contain:
 
 - `packages`: one pacman package per line, `#` comments allowed. Official
   repos only (CI resolves every name against today's Arch repos).
+- `packages.aur`: AUR packages, built with `paru` as the user who ran `sudo`
+  (makepkg refuses root). CI checks each exists in the AUR and is *not* in the
+  official repos.
+- `user-services` (roles and hosts): `enable|disable <unit>` for
+  `systemd --user`. `make install` links every unit file (public
+  `config/systemd/user/`, private `local/config/systemd/user/`) and enables
+  only these.
 - `services`: `enable|disable|mask <unit>` per line. Enabled, not started;
   the next boot (or a manual `systemctl start`) picks them up.
 - `files/`: a tree mirrored onto `/`. The repo decides the mode: executable

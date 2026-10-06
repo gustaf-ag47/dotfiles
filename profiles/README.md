@@ -29,6 +29,7 @@ make install
 | `PROFILE_CLASS` | dotfiles | `desktop` or `laptop`. Selects class overlays. |
 | `PROFILE_HAS_BATTERY` | dotfiles | `yes`/`no`. A desktop with a wireless mouse still reports a `power_supply`, so this is declared rather than detected. |
 | `PROFILE_GPU` | dotfiles + system | What drives the displays: `intel` (iGPU only), `hybrid` (Intel iGPU + NVIDIA on demand, Optimus), `nvidia` (dGPU only). Selects `system/gpu/<gpu>/` and `hypr/gpu/<gpu>.conf`. |
+| `PROFILE_ROLES` | system + dotfiles | Space-separated roles (`system/roles/<role>/`): which applications and user services the machine gets. |
 | `PROFILE_DISK` | install-arch | Whole-disk device to partition. **No default — the installer refuses to guess.** |
 | `PROFILE_SWAP_GIB` | install-arch | Swap size in **GiB**. `0` disables swap. |
 | `PROFILE_HOSTNAME` | install-arch | Hostname to set. |
