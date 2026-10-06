@@ -60,7 +60,13 @@ class ForecastRenderingTests(unittest.TestCase):
         with patch.object(usage, 'use_color', return_value=False):
             waste = usage.window_line({**base, 'forecast': {'burn_per_hour': .031, 'forecast': 'waste', 'projected_at_reset': .6}}, NOW)
             self.assertIn('burn 3.1%/h', waste)
-            self.assertIn('will waste ~40%', waste)
+            # 5h leftovers are not waste by themselves; only the weekly line judges.
+            self.assertNotIn('will waste', waste)
+            weekly = usage.window_line({**base, 'name': 'seven_day', 'forecast': {
+                'burn_per_hour': .031, 'forecast': 'waste', 'projected_at_reset': .6, 'needed_per_hour': .6}}, NOW)
+            self.assertIn('will waste ~40%', weekly)
+            self.assertIn('need 60.0%/h', weekly)
+            self.assertEqual(usage.until(NOW + 42, NOW), '42s')
             exhaust = usage.window_line({**base, 'forecast': {'forecast': 'exhaust', 'exhaust_at': NOW+7200}}, NOW)
             self.assertIn('exhausts in 2h', exhaust)
             track = usage.window_line({**base, 'forecast': {'forecast': 'on_track'}}, NOW)

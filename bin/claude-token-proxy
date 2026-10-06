@@ -247,6 +247,8 @@ class Tok:
         self.cache_read_input_tokens = 0
         self.cache_creation_input_tokens = 0
         self.by_model: dict[str, dict[str, int]] = {}
+        self.last_429: dict | None = None
+        self.request_scoped_429s = 0
 
     def name(self) -> str:
         return f"{self.fp} ({self.label})" if self.label else self.fp
@@ -294,6 +296,8 @@ class Tok:
             "quota_retry_until": datetime.fromtimestamp(self.quota_retry_until, timezone.utc).isoformat()
             if self.quota_retry_until > now else None,
             "quota_scope_denied": self.quota_scope_denied,
+            "last_429": self.last_429,
+            "request_scoped_429s": self.request_scoped_429s,
             "counters": {
                 "requests": self.requests,
                 "responses": self.responses,
@@ -351,9 +355,15 @@ def ramp_upstream(tok, method, path, headers, body):
 def forecast(samples, utilization, reset_at, now=None):
     now = time.time() if now is None else now
     points = sorted(samples or [], key=lambda p: p[0])
+    # A drop in utilization is a window reset (rolling 5h, or an early weekly
+    # reset): a slope across it is meaningless (it produced negative burn).
+    for i in range(len(points) - 1, 0, -1):
+        if points[i][1] < points[i - 1][1] - 0.005:
+            points = points[i:]
+            break
     slope = None
     if len(points) >= 2 and points[-1][0] - points[0][0] >= 900:
-        slope = (points[-1][1] - points[0][1]) / ((points[-1][0] - points[0][0]) / 3600)
+        slope = max(0.0, (points[-1][1] - points[0][1]) / ((points[-1][0] - points[0][0]) / 3600))
     projected = None
     state, exhaust_at = "unknown", None
     if slope is not None and utilization is not None and reset_at:
@@ -364,8 +374,11 @@ def forecast(samples, utilization, reset_at, now=None):
             state = "waste"
         else:
             state = "on_track"
+    needed = None
+    if utilization is not None and reset_at and reset_at > now:
+        needed = max(0.0, 1.0 - utilization) / ((reset_at - now) / 3600)
     return {"burn_per_hour": slope, "projected_at_reset": projected,
-            "forecast": state, "exhaust_at": exhaust_at}
+            "forecast": state, "exhaust_at": exhaust_at, "needed_per_hour": needed}
 
 
 def append_route(event):
@@ -668,6 +681,58 @@ def quota_cooldown_scope(headers) -> str | None:
                 if hdrs.get(f"anthropic-ratelimit-unified-{abbrev}-status", "").lower() == "rejected"]
     identified = {scopes.get(name) for name in rejected}
     return identified.pop() if len(identified) == 1 else None
+
+
+# 429s that describe the *request*, not the account: every account answers the
+# same way, so cooling the account down (and failing over) only starves every
+# other session. Seen 2026-10-06: one oversized Opus request cooled all three
+# accounts for 60s every minute for hours.
+REQUEST_SCOPED_429_RE = re.compile(
+    r"long context|extra usage is required|usage credits are required|prompt is too long|context window",
+    re.IGNORECASE)
+REJECTION_LOG_MAX = 300
+
+
+def error_message(raw: bytes) -> str:
+    """The upstream error message (or a bounded raw snippet) for logging."""
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+        err = data.get("error") if isinstance(data, dict) else None
+        if isinstance(err, dict) and err.get("message"):
+            return str(err.get("type") or "error") + ": " + str(err["message"])[:REJECTION_LOG_MAX]
+    except (ValueError, AttributeError):
+        pass
+    return raw[:REJECTION_LOG_MAX].decode("utf-8", "replace").replace("\n", " ")
+
+
+def is_request_scoped_429(message: str) -> bool:
+    return bool(REQUEST_SCOPED_429_RE.search(message or ""))
+
+
+class BufferedResponse:
+    """An already-read upstream response that `_stream` can still relay."""
+
+    def __init__(self, resp, raw: bytes):
+        import io
+        self.status = resp.status
+        self.headers = resp.headers
+        try:
+            self._headers = [(str(k), str(v)) for k, v in resp.getheaders()]
+        except Exception:
+            self._headers = [(str(k), str(v)) for k, v in header_map(resp.headers).items()]
+        self._body = io.BytesIO(raw)
+
+    def getheader(self, name, default=None):
+        for key, value in self._headers:
+            if key.lower() == name.lower():
+                return value
+        return default
+
+    def getheaders(self):
+        return self._headers
+
+    def read(self, amt=None):
+        return self._body.read() if amt is None else self._body.read(amt)
 
 
 def apply_cooldown(tok: Tok, headers) -> str:
@@ -2274,7 +2339,31 @@ class Handler(BaseHTTPRequestHandler):
                 tok.responses += 1
                 pause = None
                 cooldown_scope = None
+                request_scoped = False
                 if resp.status == 429:
+                    try:
+                        raw = resp.read(65536)
+                    except Exception:
+                        raw = b""
+                    raw = bytes(raw) if isinstance(raw, (bytes, bytearray)) else b""
+                    resp = BufferedResponse(resp, raw)
+                    hdrs = header_map(resp.headers)
+                    message = error_message(raw)
+                    request_scoped = is_request_scoped_429(message)
+                    tok.last_429 = {
+                        "ts": datetime.now(timezone.utc).isoformat(), "model": model,
+                        "kind": "request" if request_scoped else classify_429(resp.headers),
+                        "message": message,
+                        "claim": hdrs.get("anthropic-ratelimit-unified-representative-claim"),
+                        "unified_status": hdrs.get("anthropic-ratelimit-unified-status"),
+                        "retry_after": hdrs.get("retry-after"),
+                    }
+                    log(f"429 detail token {tok.fp} model={model} kind={tok.last_429['kind']} "
+                        f"claim={tok.last_429['claim']} status={tok.last_429['unified_status']} "
+                        f"retry-after={tok.last_429['retry_after']} msg={message!r}")
+                    if request_scoped:
+                        tok.request_scoped_429s += 1
+                if resp.status == 429 and not request_scoped:
                     if tok.fp not in paced:
                         pause = burst_pause_seconds(resp.headers)
                     if pause is None:  # spent bucket (or unpaceable): cool down + rotate
@@ -2294,6 +2383,7 @@ class Handler(BaseHTTPRequestHandler):
                 f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
                 + (f" cooldown_scope={cooldown_scope}" if cooldown_scope else "")
                 + (f" [burst, pausing {pause}s]" if pause is not None
+                   else " [request-scoped, relayed]" if request_scoped
                    else " [failover]" if resp.status in FAILOVER_STATUSES else ""))
 
             if pause is not None:
@@ -2309,7 +2399,7 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(pause)  # outside LOCK: never block other requests
                 continue
 
-            if resp.status in FAILOVER_STATUSES and len(tried) < valid_count:
+            if resp.status in FAILOVER_STATUSES and not request_scoped and len(tried) < valid_count:
                 tried.add(tok.fp)
                 try:
                     resp.read()

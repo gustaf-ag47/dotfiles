@@ -43,6 +43,15 @@ class LedgerTests(ProxyIsolationMixin, unittest.TestCase):
         self.assertEqual(exhaust['exhaust_at'], now+2400)
         self.assertEqual(proxy.forecast([[now-3600, .7], [now, .8]], .8, now+3600, now)['forecast'], 'on_track')
 
+    def test_forecast_ignores_samples_before_a_reset(self):
+        now = 1_000_000
+        # 5h window reset 30 min ago: old high readings must not give negative burn.
+        samples = [[now - 7200, .6], [now - 3600, .9], [now - 1800, .0], [now, .1]]
+        fc = proxy.forecast(samples, .1, now + 3600, now)
+        self.assertAlmostEqual(fc['burn_per_hour'], .2)
+        self.assertAlmostEqual(fc['needed_per_hour'], .9)
+        self.assertGreaterEqual(proxy.forecast([[now - 3600, .5], [now, .4]], .4, now + 3600, now)['burn_per_hour'] or 0, 0)
+
     def test_codex_refresh_samples_enable_forecast(self):
         now = 2_000_000
         result = {'status': 'ok', 'windows': [{'name': 'primary_window', 'used_percent': 50,
