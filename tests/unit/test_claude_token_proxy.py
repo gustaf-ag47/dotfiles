@@ -351,6 +351,10 @@ class PickPolicyTests(ProxyIsolationMixin, TestCase):
         self.assertEqual(proxy.error_message(raw), "rate_limit_error: slow down")
         self.assertEqual(proxy.error_message(b"not json"), "not json")
         self.assertFalse(proxy.is_request_scoped_429("rate_limit_error: slow down"))
+        # Anthropic's body-shape/third-party rejection: bare "Error", no unified headers.
+        self.assertTrue(proxy.is_request_scoped_429("rate_limit_error: Error", {}))
+        self.assertFalse(proxy.is_request_scoped_429(
+            "rate_limit_error: Error", {"anthropic-ratelimit-unified-status": "rejected"}))
 
     def test_fable_quota_429_does_not_block_opus_or_get_cleared_by_opus(self):
         import io

@@ -705,8 +705,21 @@ def error_message(raw: bytes) -> str:
     return raw[:REJECTION_LOG_MAX].decode("utf-8", "replace").replace("\n", " ")
 
 
-def is_request_scoped_429(message: str) -> bool:
-    return bool(REQUEST_SCOPED_429_RE.search(message or ""))
+def is_request_scoped_429(message: str, headers=None) -> bool:
+    """True when the 429 rejects this request's shape/billing lane, not the account.
+
+    Anthropic answers OAuth requests that fail its Claude Code body-shape /
+    subscription classifier with a bare `rate_limit_error: Error` (or a
+    "monthly spend limit" overage message) and *no* unified rate-limit status
+    headers. Every account answers that request the same way.
+    """
+    if REQUEST_SCOPED_429_RE.search(message or ""):
+        return True
+    hdrs = header_map(headers) if headers is not None else {}
+    has_unified_status = any(UNIFIED_STATUS_RE.match(name) for name in hdrs)
+    text = (message or "").strip().lower()
+    return not has_unified_status and (text in ("rate_limit_error: error", "error")
+                                       or "monthly spend limit" in text)
 
 
 class BufferedResponse:
@@ -2349,7 +2362,7 @@ class Handler(BaseHTTPRequestHandler):
                     resp = BufferedResponse(resp, raw)
                     hdrs = header_map(resp.headers)
                     message = error_message(raw)
-                    request_scoped = is_request_scoped_429(message)
+                    request_scoped = is_request_scoped_429(message, resp.headers)
                     tok.last_429 = {
                         "ts": datetime.now(timezone.utc).isoformat(), "model": model,
                         "kind": "request" if request_scoped else classify_429(resp.headers),
@@ -2358,7 +2371,11 @@ class Handler(BaseHTTPRequestHandler):
                         "unified_status": hdrs.get("anthropic-ratelimit-unified-status"),
                         "retry_after": hdrs.get("retry-after"),
                     }
-                    log(f"429 detail token {tok.fp} model={model} kind={tok.last_429['kind']} "
+                    client = (self.headers.get("user-agent") or "?")[:60]
+                    tok.last_429["client"] = client
+                    tok.last_429["class"] = class_name
+                    log(f"429 detail token {tok.fp} model={model} class={class_name} client={client!r} "
+                        f"session={str(session_key)[:24]} kind={tok.last_429['kind']} "
                         f"claim={tok.last_429['claim']} status={tok.last_429['unified_status']} "
                         f"retry-after={tok.last_429['retry_after']} msg={message!r}")
                     if request_scoped:
