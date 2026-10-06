@@ -240,7 +240,12 @@ if [ ${#aur[@]} -gt 0 ]; then
 		echo "   missing: ${aur_missing[*]}"
 		# makepkg refuses to run as root: build as the user who invoked sudo.
 		aur_user="${SUDO_USER:-}"
-		if [ -z "$aur_user" ] || [ "$aur_user" = root ] || ! command -v paru >/dev/null 2>&1; then
+		if [ -n "$aur_user" ] && command -v paru >/dev/null 2>&1 &&
+			! sudo -u "$aur_user" paru --version >/dev/null 2>&1; then
+			# e.g. paru-bin linked against an older libalpm after a pacman update
+			echo "   ! paru is installed but does not run (rebuild it: paru from source)" >&2
+			failures=$((failures + 1))
+		elif [ -z "$aur_user" ] || [ "$aur_user" = root ] || ! command -v paru >/dev/null 2>&1; then
 			echo "   cannot build AUR packages here (need paru and sudo from a normal user);"
 			echo "   run as that user: paru -S --needed ${aur_missing[*]}"
 		else
