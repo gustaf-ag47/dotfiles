@@ -30,6 +30,11 @@ set -euo pipefail
 DOTFILES="${DOTFILES:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SYSTEM_DIR="$DOTFILES/system"
 
+# Run from / so the hooks never inherit a deleted working directory. install-arch
+# once called this from ~/dotfiles, which `make install` had just moved away:
+# mkinitcpio's pushd and dkms's `cd -` both failed on the dangling cwd.
+cd / || exit 1
+
 APPLY=0
 CHECK=0
 ROOT=/
