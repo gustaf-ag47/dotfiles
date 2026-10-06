@@ -131,6 +131,8 @@ def anthropic(_auth):
                          'model_cooldowns': token.get('model_cooldowns', {}),
                          'quota_scope_denied': token.get('quota_scope_denied', False),
                          'quota_checked_at': token.get('quota_checked_at'),
+                         'last_429': token.get('last_429'),
+                         'request_scoped_429s': token.get('request_scoped_429s', 0),
                          'windows': windows,
                          'observed': {key: numeric(counters.get(key)) for key in
                                       ('requests', 'input_tokens', 'output_tokens',
@@ -880,7 +882,18 @@ def until(epoch, now):
         return f'{days}d {hours:02d}h'
     if hours:
         return f'{hours}h {minutes:02d}m'
-    return f'{minutes}m'
+    if minutes:
+        return f'{minutes}m'
+    return f'{seconds}s'
+
+
+def duration_ago(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f'{seconds}s'
+    if seconds < 3600:
+        return f'{seconds // 60}m'
+    return f'{seconds // 3600}h {seconds % 3600 // 60:02d}m'
 
 
 def bar(left):
@@ -925,7 +938,16 @@ def window_line(window, now):
     burn = fc.get('burn_per_hour')
     if isinstance(burn, (int, float)):
         tail += f' · burn {burn * 100:.1f}%/h'
-    if state == 'waste':
+    needed = fc.get('needed_per_hour')
+    weekly = window.get('name') != 'five_hour'
+    if weekly and isinstance(needed, (int, float)) and needed > 0:
+        # The pace that spends this bucket exactly at reset.
+        tail += f' · need {needed * 100:.1f}%/h'
+    if state == 'waste' and not weekly:
+        # Unused 5h capacity is only lost if the weekly bucket is also left over;
+        # the weekly line carries that verdict.
+        pass
+    elif state == 'waste':
         projected = fc.get('projected_at_reset')
         tail += paint(f' · will waste ~{max(0, (1-projected)*100):.0f}%', '33') if isinstance(projected, (int, float)) else paint(' · will waste', '33')
     elif state == 'exhaust':
@@ -1022,6 +1044,12 @@ def anthropic_lines(info, now):
         for window in group.get('windows', []):
             stale |= window.get('source', '').startswith('header')
             lines.append(window_line(window, now))
+        last = group.get('last_429') or {}
+        seen = to_epoch(last.get('ts'))
+        if seen is not None and now - seen < 6 * 3600:
+            extra = f" · {group['request_scoped_429s']} request-scoped since restart" if group.get('request_scoped_429s') else ''
+            lines.append(paint(f"    last 429 {duration_ago(now - seen)} ago"
+                               f" [{last.get('kind')}] {str(last.get('message') or '')[:110]}{extra}", '33'))
     return lines + routing_lines(info.get('routing'), labels), stale
 
 

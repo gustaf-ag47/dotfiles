@@ -309,6 +309,49 @@ class PickPolicyTests(ProxyIsolationMixin, TestCase):
         self.assertEqual(handler._send_api_error.call_args.args[0], 503)
         self.assertIn("cooldown until", handler._send_api_error.call_args.args[1])
 
+    def test_request_scoped_429_is_relayed_without_cooldown_or_failover(self):
+        import io
+        from email.message import Message
+
+        first = self.make("gs", u7=0.5)
+        second = self.make("other", u7=0.6)
+        body = b'{"model":"claude-opus-5-5"}'
+        handler = object.__new__(proxy.Handler)
+        handler.command = "POST"
+        handler.path = "/v1/messages"
+        handler.headers = Message()
+        handler.headers["Content-Length"] = str(len(body))
+        handler.rfile = io.BytesIO(body)
+        handler._send_api_error = mock.Mock()
+        handler._stream = mock.Mock()
+        error = (b'{"type":"error","error":{"type":"rate_limit_error",'
+                 b'"message":"Extra usage is required for long context requests."}}')
+        response = mock.Mock(status=429, headers=Message())
+        response.read.return_value = error
+        response.getheaders.return_value = [("content-type", "application/json")]
+        connection = mock.Mock()
+        with mock.patch.object(proxy.time, "time", return_value=1000), \
+                mock.patch.object(proxy, "save_usage_state"), \
+                mock.patch.object(proxy, "upstream", return_value=(connection, response)) as upstream:
+            handler._proxy()
+
+        self.assertEqual(upstream.call_count, 1)
+        self.assertEqual(first.cooldown_until + second.cooldown_until, 0)
+        handler._send_api_error.assert_not_called()
+        relayed = handler._stream.call_args.args[0]
+        self.assertEqual(relayed.status, 429)
+        self.assertEqual(relayed.read(), error)
+        picked = first if first.last_429 else second
+        self.assertEqual(picked.last_429["kind"], "request")
+        self.assertIn("long context", picked.last_429["message"])
+        self.assertEqual(picked.request_scoped_429s, 1)
+
+    def test_error_message_extracts_type_and_message(self):
+        raw = b'{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}'
+        self.assertEqual(proxy.error_message(raw), "rate_limit_error: slow down")
+        self.assertEqual(proxy.error_message(b"not json"), "not json")
+        self.assertFalse(proxy.is_request_scoped_429("rate_limit_error: slow down"))
+
     def test_fable_quota_429_does_not_block_opus_or_get_cleared_by_opus(self):
         import io
         from email.message import Message
