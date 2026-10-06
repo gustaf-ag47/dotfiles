@@ -110,7 +110,7 @@ jobs:
           docker run --rm --pull=always -v "$PWD:/src:ro" \
             archlinux:latest bash -c '
             set -e
-            pacman -Sy --noconfirm --needed diffutils >/dev/null
+            pacman -Sy --noconfirm --needed diffutils python >/dev/null
             cp -a /src /tmp/dotfiles
             cd /tmp/dotfiles
             SYSTEM_LAYER_RESOLVE=1 bash tests/system-layer.sh

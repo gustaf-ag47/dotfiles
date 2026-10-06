@@ -146,8 +146,12 @@ if [ "${SYSTEM_LAYER_RESOLVE:-0}" = 1 ]; then
 		sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' | sort -u)
 	if [ ${#aurpk[@]} -gt 0 ]; then
 		q="$(printf 'arg[]=%s&' "${aurpk[@]}")"
-		found="$(curl -fsS "https://aur.archlinux.org/rpc/v5/info?${q%&}" |
-			python3 -c 'import sys,json;print("\n".join(r["Name"] for r in json.load(sys.stdin)["results"]))')"
+		if ! found="$(curl -fsS "https://aur.archlinux.org/rpc/v5/info?${q%&}" |
+			python3 -c 'import sys,json;print("\n".join(r["Name"] for r in json.load(sys.stdin)["results"]))')" ||
+			[ -z "$found" ]; then
+			no "AUR lookup itself failed (network, or no python3?): cannot check ${#aurpk[@]} packages"
+			aurpk=()
+		fi
 		for pkg in "${aurpk[@]}"; do
 			if pacman -Si "$pkg" >/dev/null 2>&1; then
 				no "$pkg is in the official repos: move it to packages"
