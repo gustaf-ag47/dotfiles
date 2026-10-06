@@ -1,0 +1,4 @@
+# Every machine. One package per line; '#' comments allowed.
+# dkms builds the hid-annepro2 module (files/usr/src); each host lists the
+# headers for the kernel it runs.
+dkms

@@ -1,0 +1,7 @@
+# Intel iGPU drives the displays, NVIDIA dGPU on demand (Optimus).
+# VA-API stays on Intel (iHD) -- see config/gui/Wayland/hypr/gpu/hybrid.conf.
+mesa
+vulkan-intel
+intel-media-driver
+nvidia-open-dkms
+nvidia-utils

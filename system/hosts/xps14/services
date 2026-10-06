@@ -1,0 +1,3 @@
+enable intel-cvs-late.service
+enable tlp.service
+enable fwupd-refresh.timer

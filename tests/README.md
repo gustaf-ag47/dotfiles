@@ -9,8 +9,13 @@ tests/
 ├── bootstrap-kit.sh        # age bootstrap kit round-trip (CI bootstrap-kit job)
 ├── bootstrap-preflight.sh  # bootstrap kit preconditions
 ├── install-assertions.sh   # post-install state assertions (CI install job)
-└── idempotency.sh          # re-run safety + non-destructiveness (CI install job)
+├── idempotency.sh          # re-run safety + non-destructiveness (CI install job)
+└── system-layer.sh         # system/ applied per profile into a fake root (CI system-layer job)
 ```
+
+`make test-system` runs `system-layer.sh` without root. CI runs it inside
+`archlinux:latest` with `SYSTEM_LAYER_RESOLVE=1`, which also resolves every
+package in `system/*/packages` against today's repos (the drift canary).
 
 ## Unit tests
 

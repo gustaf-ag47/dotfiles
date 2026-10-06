@@ -1,0 +1,12 @@
+[Unit]
+Description=Recover Intel AX211 iwlwifi from firmware NMI crash loop
+After=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=@DOTFILES@/bin/iwlwifi-watchdog
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

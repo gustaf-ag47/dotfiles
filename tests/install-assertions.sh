@@ -44,7 +44,11 @@ done
 check "local/bin/git-setup-hooks exists" test -e "$HOME/.local/bin/git-setup-hooks"
 
 echo "-- machine overlays --"
-check "waybar profile overlay" test -e "$XDG_CONFIG_HOME/waybar/profile.jsonc"
+check "waybar overlay" test -e "$XDG_CONFIG_HOME/waybar-host.jsonc"
+# The old target sat inside the repo-symlinked waybar dir, i.e. in the working
+# tree; it got committed and fought over by Syncthing. It must never come back.
+check "no overlay link inside the repo" test ! -e "$DOTFILES/config/gui/Wayland/waybar/profile.jsonc"
+check "hypr gpu overlay" test -e "$XDG_CONFIG_HOME/hypr-gpu.conf"
 check "hypr host overlay" test -e "$XDG_CONFIG_HOME/hypr-host.conf"
 check "hypridle overlay" test -e "$XDG_CONFIG_HOME/hypridle-host.conf"
 check "alacritty overlay" test -e "$XDG_CONFIG_HOME/alacritty-host.toml"

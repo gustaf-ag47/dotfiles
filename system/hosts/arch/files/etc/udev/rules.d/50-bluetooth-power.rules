@@ -1,0 +1,8 @@
+# udev rule to disable USB autosuspend for Intel AX211 Bluetooth
+# Ensures maximum power delivery for best range and stability
+
+# Intel AX211 Bluetooth (USB ID 8087:0033)
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", ATTR{power/control}="on"
+
+# Alternative: Disable autosuspend for all Bluetooth devices
+# ACTION=="add", SUBSYSTEM=="usb", ATTR{bDeviceClass}=="e0", ATTR{bDeviceSubClass}=="01", ATTR{bDeviceProtocol}=="01", ATTR{power/control}="on"

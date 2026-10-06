@@ -230,12 +230,29 @@ link_overlay() {
 	fi
 }
 
-link_overlay "$DOTFILES/config/gui/Wayland/waybar" jsonc "$XDG_CONFIG_HOME/waybar/profile.jsonc" '{}'
+# Waybar's target used to be $XDG_CONFIG_HOME/waybar/profile.jsonc. That dir is a
+# symlink INTO the repo, so the link landed in the working tree, got committed,
+# and Syncthing fought over it between machines. Remove the old one if present.
+legacy_waybar="$DOTFILES/config/gui/Wayland/waybar/profile.jsonc"
+[ -L "$legacy_waybar" ] && rm -f "$legacy_waybar"
+link_overlay "$DOTFILES/config/gui/Wayland/waybar" jsonc "$XDG_CONFIG_HOME/waybar-host.jsonc" '{}'
 link_overlay "$DOTFILES/config/gui/Wayland/hypr" conf "$XDG_CONFIG_HOME/hypr-host.conf"
 link_overlay "$DOTFILES/config/gui/Wayland/hypr/hypridle" conf "$XDG_CONFIG_HOME/hypridle-host.conf"
 link_overlay "$DOTFILES/config/gui/alacritty" toml "$XDG_CONFIG_HOME/alacritty-host.toml"
 link_overlay "$DOTFILES/config/tmux" conf "$XDG_CONFIG_HOME/tmux-host.conf"
 link_overlay "$DOTFILES/config/environment.d" conf "$XDG_CONFIG_HOME/environment.d/50-host.conf"
+
+# GPU overlay: keyed on PROFILE_GPU, not host/class (one hybrid laptop and one
+# intel laptop share a class but not a GPU setup).
+gpu_overlay="$DOTFILES/config/gui/Wayland/hypr/gpu/${PROFILE_GPU:-intel}.conf"
+if [ -f "$gpu_overlay" ]; then
+	ln -sfn "$gpu_overlay" "$XDG_CONFIG_HOME/hypr-gpu.conf"
+	echo "  overlay: ${gpu_overlay#"$DOTFILES/"}"
+else
+	echo "Warning: no hypr gpu overlay for PROFILE_GPU=${PROFILE_GPU:-}, using an empty one"
+	[ -L "$XDG_CONFIG_HOME/hypr-gpu.conf" ] && rm -f "$XDG_CONFIG_HOME/hypr-gpu.conf"
+	[ -e "$XDG_CONFIG_HOME/hypr-gpu.conf" ] || : >"$XDG_CONFIG_HOME/hypr-gpu.conf"
+fi
 
 link_config "$DOTFILES/config/gui/Xorg/i3" "$XDG_CONFIG_HOME/i3"
 link_config "$DOTFILES/config/gui/Xorg/rofi" "$XDG_CONFIG_HOME/rofi"

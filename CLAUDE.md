@@ -22,9 +22,17 @@ make install
 # 6. Symlinks both Wayland (Hyprland) and Xorg (i3) configs
 # 7. Copies .desktop files to $XDG_DATA_HOME/applications
 
+# Root-side machine setup (packages, /etc, kernel params, services) from system/
+make install-system                      # dry run: show drift on this machine
+sudo scripts/install-system.sh --apply   # apply (install-arch does this on a fresh box)
+
 # Run the unit test suites (python + node)
 make test
 ```
+
+Machines are described once in `profiles/<hostname>.env` (class, GPU, disk);
+see `profiles/README.md` (user-config overlays) and `system/README.md`
+(root-side layer).
 
 ### Git Workflow (Trunk-Based Development)
 ```bash
@@ -43,6 +51,7 @@ git clean-branches          # Interactive branch cleanup (clean is the git built
 
 ### Core Scripts
 - `scripts/install.sh` - Main installation script that symlinks configurations to proper XDG locations
+- `scripts/install-system.sh` - Applies the root-owned `system/` layer for the machine's profile (dry run by default)
 - `bin/` - Custom utility scripts (75+ tools):
   - `git-*` - Git workflow tools (setup-hooks, new-branch, clean-branches, version)
   - `backup`/`restore` - System backup/restore utilities
@@ -183,6 +192,8 @@ config/
 
 bin/              # 75+ utility scripts
 scripts/          # Installation and testing
+profiles/         # One <hostname>.env per machine (class, GPU, disk)
+system/           # Root-owned layer: common/, gpu/<gpu>/, hosts/<host>/
 ```
 
 ### Key Integration Points
@@ -221,8 +232,12 @@ The system uses enhanced versions of standard tools:
 
 **Hardware:** Intel Iris Xe + NVIDIA RTX 3050 Ti Mobile (Optimus hybrid)
 
-The `make install` script only manages user-space configs. The following
-system-level files must be created manually on a fresh install:
+The system-level files below are **codified in `system/`** (`system/common`,
+`system/gpu/hybrid`, `system/hosts/arch`) and applied by
+`scripts/install-system.sh`, which install-arch runs on a fresh install. These
+sections keep the *why*; change the repo copy, then run
+`sudo scripts/install-system.sh --apply`. Never hand-edit `/etc` first; it
+drifts. `make install-system` shows any drift.
 
 #### `/etc/modprobe.d/nvidia-suspend.conf`
 Required for the display to survive suspend/resume (lid close). The laptop has
@@ -316,40 +331,21 @@ The AnnePro2 sends a malformed 44-byte HID descriptor over BLE. A DKMS module
 is required to replace it with a valid 6KRO descriptor. Without it, the kernel
 truncates the descriptor to 4 bytes, creating no input device.
 
-The module source lives at `/usr/src/hid-annepro2-1.0/hid-annepro2.c` and is
-**not owned by any pacman package** — it must be created manually. The key fix:
+The module source is **not owned by any pacman package**; it lives in
+`system/common/files/usr/src/hid-annepro2-1.0/` and `install-system.sh` runs
+`dkms install hid-annepro2/1.0` whenever it changes. The key fix:
 `report_fixup` must return a hardcoded valid descriptor, not try to trim the
 malformed one (the trim approach always produces a 4-byte no-op descriptor).
 
-```bash
-sudo dkms add /usr/src/hid-annepro2-1.0
-sudo dkms build hid-annepro2/1.0
-sudo dkms install hid-annepro2/1.0
-```
 `AUTOINSTALL=yes` in `dkms.conf` rebuilds automatically on kernel updates.
 
-#### `/etc/systemd/system/zram-swap.service` — zram swap (24G, lz4)
-The box runs heavy agent workloads; an 8G zram swap pinned at 100% full caused
+#### `/etc/systemd/system/zram-swap.service` — zram swap (24G, lz4), **skrubben**
+This is on skrubben (`system/hosts/skrubben`), not the XPS 15 (which has an 8G
+swap partition). The box runs heavy agent workloads; an 8G zram swap pinned at 100% full caused
 system-wide reclaim stalls (PSI memory `full` ~5%). 24G disksize costs RAM only
 for what is actually swapped (lz4 compresses ~2.5:1).
-
-```ini
-[Unit]
-Description=zram swap (24G, lz4)
-DefaultDependencies=no
-After=systemd-modules-load.service
-Before=swap.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/sh -c 'modprobe zram; echo lz4 > /sys/block/zram0/comp_algorithm; echo 24G > /sys/block/zram0/disksize; mkswap -q /dev/zram0; swapon -p 100 /dev/zram0'
-ExecStop=/usr/bin/sh -c 'swapoff /dev/zram0; echo 1 > /sys/block/zram0/reset'
-
-[Install]
-WantedBy=swap.target
-```
-`sudo systemctl enable zram-swap.service`
+The unit is `system/hosts/skrubben/files/etc/systemd/system/zram-swap.service`,
+enabled through `system/hosts/skrubben/services`.
 
 #### Syncthing tuning (the `sync` folder is 400GB / 1.2M files on LUKS)
 Unlimited hashers + hourly rescans + 10s watcher delay kept syncthing at a
