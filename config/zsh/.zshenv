@@ -7,7 +7,7 @@ export DOTFILES="$HOME/sync/src/dotfiles"
 # Used by: Neovim (leetcode storage), backup scripts, local configs
 export SYNC="$HOME/sync"
 export NOTES="$SYNC/Vault"
-export BACKUP_DIR="$SYNC/backup"
+export BACKUP_DIR="$SYNC/archive/backups/backup"
 
 # LOCAL_CONFIG: Personal/private configurations (symlinked in dotfiles)
 # Stored in $SYNC for automatic backup and sync between machines

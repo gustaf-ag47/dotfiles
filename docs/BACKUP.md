@@ -10,7 +10,7 @@ The backup system creates timestamped, comprehensive backups of critical system 
 
 - **Backup Scripts**: `$DOTFILES/bin/backup` and `$DOTFILES/bin/backup-borg`
 - **Restore Script**: `$DOTFILES/bin/restore`
-- **Backup Storage**: `$BACKUP_DIR` (defaults to `$SYNC/backup/`)
+- **Backup Storage**: `$BACKUP_DIR` (defaults to `$SYNC/archive/backups/backup/`)
 - **Environment**: `BACKUP_DIR` must be set (automatically configured in dotfiles)
 
 ## Quick Start
