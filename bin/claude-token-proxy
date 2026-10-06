@@ -2185,6 +2185,44 @@ def usage_payload() -> dict:
     }
 
 
+CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def ensure_claude_code_identity(body: bytes) -> bytes:
+    """Make the Claude Code identity the exact, separate first system block.
+
+    Subscription OAuth only serves Sonnet/Opus when it is; otherwise Anthropic
+    answers a headerless 429 `rate_limit_error: Error`. Generic clients
+    (LiteLLM for paperless) send a plain or missing system prompt.
+    """
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    if not isinstance(data, dict) or "messages" not in data:
+        return body
+    system = data.get("system")
+    if isinstance(system, list):
+        # Real Claude Code / Pi already carry it (possibly after a billing
+        # block); never reshape a request that works.
+        if any(isinstance(b, dict) and CLAUDE_CODE_IDENTITY in str(b.get("text", "")) for b in system):
+            return body
+        blocks = system
+    elif isinstance(system, str) and system.strip():
+        if system.strip() == CLAUDE_CODE_IDENTITY:
+            return body
+        text = system
+        if text.startswith(CLAUDE_CODE_IDENTITY):
+            text = text[len(CLAUDE_CODE_IDENTITY):].lstrip()
+        blocks = [{"type": "text", "text": text}] if text else []
+    elif system in (None, ""):
+        blocks = []
+    else:
+        return body
+    data["system"] = [{"type": "text", "text": CLAUDE_CODE_IDENTITY}] + blocks
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
     conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=timeout)
     # This upstream always uses subscription OAuth, even when a client (e.g.
@@ -2282,6 +2320,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
+        if self.command == "POST" and self.path.split("?", 1)[0] == "/v1/messages" and body:
+            body = ensure_claude_code_identity(body)
         fwd = self._forward_headers()
         tried: set[str] = set()
         valid_count = len([t for t in STATE if t.valid])

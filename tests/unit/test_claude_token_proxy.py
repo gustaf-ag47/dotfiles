@@ -346,6 +346,20 @@ class PickPolicyTests(ProxyIsolationMixin, TestCase):
         self.assertIn("long context", picked.last_429["message"])
         self.assertEqual(picked.request_scoped_429s, 1)
 
+    def test_claude_code_identity_is_its_own_first_system_block(self):
+        import json as _json
+        ident = proxy.CLAUDE_CODE_IDENTITY
+        out = _json.loads(proxy.ensure_claude_code_identity(b'{"messages":[],"system":"Classify docs"}'))
+        self.assertEqual(out["system"], [{"type": "text", "text": ident}, {"type": "text", "text": "Classify docs"}])
+        out = _json.loads(proxy.ensure_claude_code_identity(b'{"messages":[]}'))
+        self.assertEqual(out["system"], [{"type": "text", "text": ident}])
+        glued = _json.dumps({"messages": [], "system": ident + "\n\nMore"}).encode()
+        out = _json.loads(proxy.ensure_claude_code_identity(glued))
+        self.assertEqual(out["system"][1]["text"], "More")
+        ok = _json.dumps({"messages": [], "system": [{"type": "text", "text": ident}, {"type": "text", "text": "x"}]}).encode()
+        self.assertIs(proxy.ensure_claude_code_identity(ok), ok)
+        self.assertEqual(proxy.ensure_claude_code_identity(b"not json"), b"not json")
+
     def test_error_message_extracts_type_and_message(self):
         raw = b'{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}'
         self.assertEqual(proxy.error_message(raw), "rate_limit_error: slow down")
