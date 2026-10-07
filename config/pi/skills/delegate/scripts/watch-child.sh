@@ -37,19 +37,32 @@ TASK="${5:-}"
 LANE_MANIFEST="${6:-}"
 
 # Workspace-as-code: this watcher is the reaper for the lane manifest ws up
-# reopens on login. Mark it closed on every terminal verdict, best-effort.
+# reopens on login. Mark it closed on every terminal verdict, best-effort, and
+# record what the child actually reported so Hermes' cron (ws lanes
+# --finished-since) can read a result without re-scraping tmux history.
 close_lane_manifest() {
 	[ -n "$LANE_MANIFEST" ] && [ -f "$LANE_MANIFEST" ] || return 0
 	command -v python3 >/dev/null 2>&1 || return 0
-	python3 - "$LANE_MANIFEST" <<-'PY' 2>/dev/null || true
-		import json, sys
-		path = sys.argv[1]
-		with open(path, encoding="utf-8") as handle:
-			manifest = json.load(handle)
+	# <<- strips only LEADING TABS, and strips every one of them from every
+	# line, so python's own indentation below is built from spaces, not tabs
+	# (see delegate.sh, which hit this first).
+	python3 - "$LANE_MANIFEST" "$1" "$2" "$3" "$4" "$5" "$6" "$7" <<-'PY' 2>/dev/null || true
+		import json, os, sys, tempfile
+		path, result, status, sha, result_path, finished_at, cost, mailbox_record = sys.argv[1:9]
+		manifest = json.load(open(path, encoding="utf-8"))
 		manifest["status"] = "closed"
-		with open(path, "w", encoding="utf-8") as handle:
-			json.dump(manifest, handle, indent=2)
-			handle.write("\n")
+		manifest["result"] = result or None
+		manifest["result_status"] = status or None
+		manifest["result_sha"] = sha or None
+		manifest["result_path"] = result_path or None
+		manifest["finished_at"] = finished_at or None
+		manifest["cost"] = cost or None
+		manifest["mailbox_record"] = mailbox_record or None
+		dir_name = os.path.dirname(path) or "."
+		fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".manifest-", suffix=".tmp")
+		os.write(fd, (json.dumps(manifest, indent=2) + "\n").encode("utf-8"))
+		os.close(fd)
+		os.replace(tmp_path, path)
 	PY
 }
 
@@ -103,11 +116,33 @@ verdict="idle"
 # A result or blocker is terminal for the watcher, not proof the work passed.
 # Keep the old PARENT handshake for children launched before this contract.
 # Exclude template placeholders and ACK/progress chatter from the new format.
+RESULT_LINE_RE='^[[:space:]]*[^[:space:]<>][^<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+[[:space:]]*$'
+
 child_reported_result() {
 	local pane
 	pane=$(tmux capture-pane -t "$TARGET" -J -p -S -400 2>/dev/null) || return 1
 	# Join terminal wrapping, and avoid grep -q/pipefail SIGPIPE on long histories.
-	grep -qE '^ ?PARENT: .*\b(done|accepted)\b|^[[:space:]]*[^[:space:]<>][^<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+[[:space:]]*$' <<< "$pane"
+	grep -qE "^ ?PARENT: .*\\b(done|accepted)\\b|$RESULT_LINE_RE" <<< "$pane"
+}
+
+# Pull the last matching line verbatim plus its STATUS/SHA/PATH fields. The
+# task name may itself contain a colon ("example: nested task: PASS ..."), so
+# the fields are lifted off the end of the line instead of split on the first
+# colon.
+result_fields_from_pane() {
+	local pane line tail_match
+	pane=$(tmux capture-pane -t "$TARGET" -J -p -S -400 2>/dev/null) || return 0
+	line=$(grep -E "$RESULT_LINE_RE" <<< "$pane" | tail -1)
+	line="${line#"${line%%[![:space:]]*}"}"
+	line="${line%"${line##*[![:space:]]}"}"
+	result_line="$line"
+	result_status=""
+	result_sha=""
+	result_path=""
+	[ -n "$line" ] || return 0
+	tail_match=$(grep -oE '(PASS|BLOCKER|DONE|FAILED)[[:space:]]+([[:xdigit:]]{7,40}|none)[[:space:]]+-[[:space:]]+[^[:space:]<>]+' <<< "$line" | tail -1)
+	[ -n "$tail_match" ] || return 0
+	read -r result_status result_sha _dash result_path <<< "$tail_match"
 }
 
 while :; do
@@ -159,14 +194,22 @@ while :; do
 	fi
 done
 
-close_lane_manifest
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cost="$(pane_cost)"
 tail_txt="$(tmux capture-pane -t "$TARGET" -p 2>/dev/null |
 	grep -v '^[[:space:]]*$' | grep -vE '^─|^↑[0-9]' | tail -12)"
+result_line=""
+result_status=""
+result_sha=""
+result_path=""
+result_fields_from_pane
+[ -n "$result_status" ] || result_status="$verdict"
 
 # Durable record first: if the nudge is dropped, this is still here.
 rec="$MAILBOX/${ts//:/-}_${RUN_ID}.md"
+
+close_lane_manifest "$result_line" "$result_status" "$result_sha" "$result_path" "$ts" "$cost" "$rec"
+
 {
 	echo "# Delegation finished: ${TASK:-$RUN_ID}"
 	echo

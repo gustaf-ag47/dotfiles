@@ -700,5 +700,187 @@ class CmdLaneSetTest(unittest.TestCase):
             self.assertNotEqual(rc, 0)
 
 
+class ParseResultLineTest(unittest.TestCase):
+    def test_parses_sha_and_path(self):
+        parsed = ws.parse_result_line("demo: PASS abcdef1234567 - docs/report.md")
+        self.assertEqual(parsed, {
+            "result": "demo: PASS abcdef1234567 - docs/report.md",
+            "result_status": "PASS",
+            "result_sha": "abcdef1234567",
+            "result_path": "docs/report.md",
+        })
+
+    def test_parses_none_sha(self):
+        parsed = ws.parse_result_line("demo: BLOCKER none - docs/report.md")
+        self.assertEqual(parsed["result_sha"], "none")
+        self.assertEqual(parsed["result_status"], "BLOCKER")
+
+    def test_task_name_with_colon_still_parses(self):
+        parsed = ws.parse_result_line("demo: nested task: DONE abcdef1 - docs/x.md")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["result_status"], "DONE")
+        self.assertEqual(parsed["result_sha"], "abcdef1")
+
+    def test_rejects_non_matching_line(self):
+        self.assertIsNone(ws.parse_result_line("demo: ACK abcdef1234567 - docs/report.md"))
+        self.assertIsNone(ws.parse_result_line("not a result line"))
+        self.assertIsNone(ws.parse_result_line(None))
+        self.assertIsNone(ws.parse_result_line(""))
+
+
+class CmdLaneSetResultTest(unittest.TestCase):
+    def test_result_sets_structured_fields_and_finished_at(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            manifest_path.write_text(json.dumps({"session": "Demo", "status": "open"}))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                assignments=[], result="demo: PASS abcdef1234567 - docs/report.md",
+                dry_run=False,
+            )
+            rc = ws.cmd_lane_set(args)
+            self.assertEqual(rc, 0)
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest["result_status"], "PASS")
+            self.assertEqual(manifest["result_sha"], "abcdef1234567")
+            self.assertEqual(manifest["result_path"], "docs/report.md")
+            self.assertIn("finished_at", manifest)
+            # Untouched: --result does not close the lane by itself.
+            self.assertEqual(manifest["status"], "open")
+
+    def test_malformed_result_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            manifest_path.write_text(json.dumps({"session": "Demo"}))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                assignments=[], result="not a result line", dry_run=False,
+            )
+            rc = ws.cmd_lane_set(args)
+            self.assertNotEqual(rc, 0)
+            self.assertNotIn("result_status", json.loads(manifest_path.read_text()))
+
+
+class CmdLaneCloseTest(unittest.TestCase):
+    def test_close_without_result_only_sets_status_and_finished_at(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            manifest_path.write_text(json.dumps({"session": "Demo", "status": "open"}))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                result=None, dry_run=False,
+            )
+            rc = ws.cmd_lane_close(args)
+            self.assertEqual(rc, 0)
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest["status"], "closed")
+            self.assertIn("finished_at", manifest)
+            self.assertNotIn("result_status", manifest)
+
+    def test_close_with_result_sets_status_and_result_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            manifest_path.write_text(json.dumps({"session": "Demo", "status": "open"}))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                result="demo: BLOCKER none - docs/blocker.md", dry_run=False,
+            )
+            rc = ws.cmd_lane_close(args)
+            self.assertEqual(rc, 0)
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest["status"], "closed")
+            self.assertEqual(manifest["result_status"], "BLOCKER")
+            self.assertEqual(manifest["result_sha"], "none")
+
+    def test_dry_run_does_not_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            original = {"session": "Demo", "status": "open"}
+            manifest_path.write_text(json.dumps(original))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                result="demo: PASS abcdef1 - docs/x.md", dry_run=True,
+            )
+            rc = ws.cmd_lane_close(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(manifest_path.read_text()), original)
+
+
+class CmdLanesTest(unittest.TestCase):
+    def test_filters_by_finished_since_and_includes_documented_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            lanes_dir = root / "runs" / ".lanes"
+            lanes_dir.mkdir(parents=True)
+            (lanes_dir / "old.json").write_text(json.dumps({
+                "run_id": "old", "session": "Dotfiles", "window": "w0",
+                "status": "closed", "finished_at": "2026-01-01T00:00:00Z",
+            }))
+            (lanes_dir / "new.json").write_text(json.dumps({
+                "run_id": "new", "session": "Dotfiles", "window": "w1",
+                "brief": "docs/brief.md", "status": "closed",
+                "result": "demo: PASS abcdef1 - docs/out.md",
+                "result_status": "PASS", "result_sha": "abcdef1",
+                "result_path": "docs/out.md", "finished_at": "2026-06-01T00:00:00Z",
+                "cost": "$0.42", "mailbox_record": "/tmp/mailbox/new.md",
+            }))
+            (lanes_dir / "open.json").write_text(json.dumps({
+                "run_id": "open", "session": "Dotfiles", "window": "w2", "status": "open",
+            }))
+            doc = ws_yaml.load(FIXTURE)
+            doc["areas"][0]["runs"] = str(root / "runs")
+            with mock.patch.object(ws, "load_workspace", return_value=doc):
+                args = argparse.Namespace(
+                    workspace=str(workspace), finished_since="2026-03-01T00:00:00Z", json=True,
+                )
+                with mock.patch("builtins.print") as mock_print:
+                    rc = ws.cmd_lanes(args)
+            self.assertEqual(rc, 0)
+            printed = mock_print.call_args[0][0]
+            rows = json.loads(printed)
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row["run_id"], "new")
+            self.assertEqual(row["session"], "Dotfiles")
+            self.assertEqual(row["window"], "w1")
+            self.assertEqual(row["brief"], "docs/brief.md")
+            self.assertEqual(row["result_status"], "PASS")
+            self.assertEqual(row["result_sha"], "abcdef1")
+            self.assertEqual(row["result_path"], "docs/out.md")
+            self.assertEqual(row["cost"], "$0.42")
+            self.assertEqual(row["mailbox_record"], "/tmp/mailbox/new.md")
+
+    def test_no_matches_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            doc = ws_yaml.load(FIXTURE)
+            doc["areas"][0]["runs"] = str(root / "runs")
+            with mock.patch.object(ws, "load_workspace", return_value=doc):
+                args = argparse.Namespace(
+                    workspace=str(workspace), finished_since="2026-01-01T00:00:00Z", json=False,
+                )
+                rc = ws.cmd_lanes(args)
+            self.assertEqual(rc, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
