@@ -283,21 +283,23 @@ def cmd_check(args):
     else:
         lines.append(f"open lanes: {len(lanes)}, all have a matching window")
 
-    rissne_root = Path(doc["env"].get("SRC", "")) / "rissne"
-    rissne_validators = [
-        rissne_root / "scripts/validate-hardware.py",
-        rissne_root / "scripts/validate-boot-dependencies.py",
+    homelab_root = Path(doc["env"].get("SRC", "")) / "homelab"
+    homelab_validators = [
+        homelab_root / "scripts/validate-hardware.py",
+        homelab_root / "scripts/validate-boot-dependencies.py",
+        homelab_root / "scripts/check-live-drift.sh",
     ]
-    present = [v for v in rissne_validators if v.exists()]
+    present = [v for v in homelab_validators if v.exists()]
     if present:
         failed = []
         for validator in present:
-            result = subprocess.run(["python3", str(validator)], capture_output=True, text=True, cwd=str(rissne_root))
+            runner = ["bash", str(validator)] if validator.suffix == ".sh" else ["python3", str(validator)]
+            result = subprocess.run(runner, capture_output=True, text=True, cwd=str(homelab_root))
             if result.returncode != 0:
                 failed.append(validator.name)
-        lines.append(f"host layer (rissne validators): {'FAILED ' + ', '.join(failed) if failed else 'ok (' + ', '.join(v.name for v in present) + ')'}")
+        lines.append(f"host layer (homelab validators): {'FAILED ' + ', '.join(failed) if failed else 'ok (' + ', '.join(v.name for v in present) + ')'}")
     else:
-        lines.append("host layer (rissne validators): not found, skipped")
+        lines.append("host layer (homelab validators): not found, skipped")
 
     print("\n".join(lines))
     return 0 if ok else 1
