@@ -12,3 +12,7 @@ openbox
 xterm
 opensc
 virt-viewer
+
+# Builds agent-git/agent-gh (nix/agent-git) for guarded Pi-agent git/gh. See
+# docs/agent-git.md.
+nix

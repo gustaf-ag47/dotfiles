@@ -1,1 +1,3 @@
 enable zram-swap.service
+
+enable nix-daemon.service

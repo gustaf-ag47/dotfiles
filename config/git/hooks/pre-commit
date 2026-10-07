@@ -179,7 +179,8 @@ fi
 # Check for high-entropy strings (possible secrets)
 # This catches base64-encoded secrets and random strings
 # Exclude:
-#   - lazy-lock.json (contains git commit SHAs)
+#   - lazy-lock.json, flake.lock (contain git commit SHAs / nix narHashes --
+#     base64, high-entropy by construction, and public by design)
 #   - Path-shaped matches (3+ slash-separated segments). base64's alphabet
 #     includes '/', so a long filesystem path matches the heuristic; a real
 #     base64 secret with that many slashes is vanishingly rare.
@@ -193,8 +194,9 @@ fi
 #     trip the entropy heuristic. The private half is AGE-SECRET-KEY-1..., which
 #     the private-material check above catches by content.
 #   - Bare 40-hex strings: git commit SHAs (upstreams.json pins, research docs
-#     quoting them). lazy-lock.json is the same case; this covers it generally.
-suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' | grep '^+' | grep -vE '^\+\+\+ ' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' | grep -vE '(/[^/]+){3,}' | grep -vE '^[0-9a-f]{40}$' || true)
+#     quoting them). lazy-lock.json/flake.lock are the same case; this covers
+#     it generally.
+suspicious_strings=$(git diff --cached -- . ':!*lazy-lock.json' ':!*flake.lock' | grep '^+' | grep -vE '^\+\+\+ ' | grep -vE '/(sys|proc|dev|etc|usr|var|home|tmp)/' | grep -vE 'https?://' | grep -vE 'age1[a-z0-9]{20,}' | grep -oE '[A-Za-z0-9+/]{40,}={0,2}' | grep -vE '(/[^/]+){3,}' | grep -vE '^[0-9a-f]{40}$' || true)
 if [ -n "$suspicious_strings" ]; then
     echo "⚠️  High-entropy strings detected (possible secrets):"
     echo "$suspicious_strings" | head -3
