@@ -73,7 +73,9 @@ class WorktreeGuardTest(unittest.TestCase):
         self.assertIn("must not be under /tmp", run.stderr)
 
     def test_persistent_worktrees_passes_guard(self):
-        with tempfile.TemporaryDirectory(prefix="worktrees-") as persistent:
+        # dir=str(ROOT): the guard rejects /tmp, and on a CI runner without a
+        # TMPDIR override $TMPDIR/tempfile.TemporaryDirectory() IS /tmp.
+        with tempfile.TemporaryDirectory(prefix="worktrees-", dir=str(ROOT)) as persistent:
             run = self.run_delegate(
                 ["--worktree", "some-branch", "--cwd", str(ROOT)],
                 {"WORKTREES": persistent},
