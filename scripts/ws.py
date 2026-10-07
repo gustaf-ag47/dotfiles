@@ -115,13 +115,49 @@ def git_status_line(repo_path):
         return None
 
 
-def find_tmp_worktrees():
+def git_worktrees_under(repo_paths, tmp_root="/tmp"):
+    """Real git worktrees (per `git worktree list --porcelain`) whose path
+    is under tmp_root, across the given repos. A directory that merely
+    matches the naming convention but that git doesn't know about (a log
+    file, a leftover scratch dir, ...) is not a worktree and must not be
+    reported here -- see stray_tmp_dirs.
+    """
+    tmp_root = str(tmp_root).rstrip("/") or "/"
     found = []
-    for base in ("/tmp",):
-        p = Path(base)
-        if not p.exists():
+    seen_repos = set()
+    for repo_path in repo_paths:
+        repo_path = str(repo_path)
+        if repo_path in seen_repos or not Path(repo_path).exists():
             continue
-        for entry in p.glob("wt-*"):
+        seen_repos.add(repo_path)
+        result = subprocess.run(
+            ["git", "-C", repo_path, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            if not line.startswith("worktree "):
+                continue
+            wt_path = line[len("worktree "):].strip()
+            if wt_path == tmp_root or wt_path.startswith(tmp_root + "/"):
+                if wt_path not in found:
+                    found.append(wt_path)
+    return found
+
+
+def stray_tmp_dirs(known_worktrees, tmp_root="/tmp"):
+    """wt-* directories under tmp_root that git doesn't report as a
+    worktree for any of the checked repos -- informational only, never a
+    reason to fail ws check.
+    """
+    known = set(known_worktrees)
+    found = []
+    p = Path(tmp_root)
+    if not p.exists():
+        return found
+    for entry in sorted(p.glob("wt-*")):
+        if entry.is_dir() and str(entry) not in known:
             found.append(str(entry))
     return found
 
@@ -207,12 +243,16 @@ def cmd_check(args):
             repo_lines.append(f"  {repo['path']}: {', '.join(flags)}")
     lines.append(f"repos: {len(doc['repos'])} declared" + (f"\n" + "\n".join(repo_lines) if repo_lines else ", all clean/in sync"))
 
-    tmp_worktrees = find_tmp_worktrees()
+    repo_paths = [repo["path"] for repo in doc["repos"] if repo.get("path")]
+    tmp_worktrees = git_worktrees_under(repo_paths)
     if tmp_worktrees:
         ok = False
         lines.append(f"worktrees in /tmp (forbidden): {', '.join(tmp_worktrees)}")
     else:
         lines.append("worktrees in /tmp: none")
+    stray = stray_tmp_dirs(tmp_worktrees)
+    if stray:
+        lines.append(f"stray /tmp dirs (not worktrees): {', '.join(stray)}")
 
     cron_hits = find_pane_ids_in_cron_prompts(doc["env"].get("NOTES", ""))
     if cron_hits:
