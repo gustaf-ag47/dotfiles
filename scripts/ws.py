@@ -58,6 +58,27 @@ def resolve_route(doc, target):
     }
 
 
+def declared_sessions_with_cwd(doc):
+    # One entry per session declared anywhere: directly on an area, or on a
+    # project that overrides its area's session (ws route resolves those the
+    # same way, so ws check/up must agree on what's "declared" instead of
+    # only looking at areas and calling every project session "unmanaged").
+    result = {}
+    for area in doc["areas"]:
+        session = area.get("session")
+        if session:
+            result.setdefault(session, area.get("cwd"))
+    for project in doc["projects"]:
+        area = find_by_name(doc["areas"], project.get("area"))
+        session = project.get("session") or (area.get("session") if area else None)
+        if not session:
+            continue
+        cwd = project.get("cwd") or (area.get("cwd") if area else None)
+        if not result.get(session):
+            result[session] = cwd
+    return result
+
+
 def cmd_route(args):
     doc = load_workspace(Path(args.workspace))
     route = resolve_route(doc, args.target)
@@ -503,7 +524,7 @@ def cmd_check(args):
         lines.append("env: ok (" + ", ".join(f"{n}={os.environ[n]}" for n in REQUIRED_ENV) + ")")
 
     sessions = set(tmux_sessions())
-    declared_sessions = {area["session"] for area in doc["areas"] if area.get("session")}
+    declared_sessions = set(declared_sessions_with_cwd(doc))
     missing_sessions = sorted(declared_sessions - sessions)
     if missing_sessions:
         lines.append(f"sessions: missing {', '.join(missing_sessions)}")
@@ -601,10 +622,8 @@ def cmd_up(args):
             actions.append(f"env: {name} is not set in this shell; source config/zsh/.zshenv or re-login")
 
     sessions = set(tmux_sessions())
-    for area in doc["areas"]:
-        session = area.get("session")
-        cwd = area.get("cwd")
-        if not session or session in sessions:
+    for session, cwd in declared_sessions_with_cwd(doc).items():
+        if session in sessions:
             continue
         actions.append(f"session: create {session!r} at {cwd}")
         if not args.dry_run:
