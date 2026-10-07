@@ -26,7 +26,7 @@
 # fallback for parents without the extension.
 # attempts spaced PI_DELEGATE_RENUDGE_SECS apart.
 #
-# usage: watch-child.sh <session:window> <parent-window> <run-id> <cwd> [task]
+# usage: watch-child.sh <session:window> <parent-window> <run-id> <cwd> [task] [lane-manifest]
 set -uo pipefail
 
 TARGET="${1:?target window}"
@@ -34,6 +34,24 @@ PARENT="${2:?parent window}"
 RUN_ID="${3:?run id}"
 CHILD_CWD="${4:-}"
 TASK="${5:-}"
+LANE_MANIFEST="${6:-}"
+
+# Workspace-as-code: this watcher is the reaper for the lane manifest ws up
+# reopens on login. Mark it closed on every terminal verdict, best-effort.
+close_lane_manifest() {
+	[ -n "$LANE_MANIFEST" ] && [ -f "$LANE_MANIFEST" ] || return 0
+	command -v python3 >/dev/null 2>&1 || return 0
+	python3 - "$LANE_MANIFEST" <<-'PY' 2>/dev/null || true
+		import json, sys
+		path = sys.argv[1]
+		with open(path, encoding="utf-8") as handle:
+			manifest = json.load(handle)
+		manifest["status"] = "closed"
+		with open(path, "w", encoding="utf-8") as handle:
+			json.dump(manifest, handle, indent=2)
+			handle.write("\n")
+	PY
+}
 
 MAILBOX="${PI_DELEGATE_MAILBOX:-$HOME/.pi/agent/delegate-mailbox}"
 POLL_SECS="${PI_DELEGATE_POLL_SECS:-20}"
@@ -141,6 +159,7 @@ while :; do
 	fi
 done
 
+close_lane_manifest
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cost="$(pane_cost)"
 tail_txt="$(tmux capture-pane -t "$TARGET" -p 2>/dev/null |

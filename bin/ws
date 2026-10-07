@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+exec python3 "$ROOT/scripts/ws.py" "$@"

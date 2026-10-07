@@ -9,6 +9,14 @@ export SYNC="$HOME/sync"
 export NOTES="$SYNC/Vault"
 export BACKUP_DIR="$SYNC/archive/backups/backup"
 
+# SRC: Repo checkouts live under here, not loose inside $SYNC
+# Used by: delegate.sh worktree isolation, ws (bin/ws), area sessions
+export SRC="$SYNC/src"
+
+# WORKTREES: Scratch worktrees for delegated agents; a persistent mount, never /tmp
+# Used by: delegate.sh --worktree, ws
+export WORKTREES="/mnt/my_encrypted_nvme/scratch/tmp"
+
 # LOCAL_CONFIG: Personal/private configurations (symlinked in dotfiles)
 # Stored in $SYNC for automatic backup and sync between machines
 export LOCAL_CONFIG="$SYNC/dotfiles-local"

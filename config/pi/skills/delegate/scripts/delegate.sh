@@ -24,11 +24,18 @@
 #   --model <model>    Qualified model preferred; default: Pi's configured default.
 #   --agent <bin>      Launcher binary (default: pi).
 #   --provider <name>  Optional provider; usually use --model provider/model.
-#   --worktree <branch>  Create a git worktree for <branch> off origin/main and use it as --cwd.
+#   --worktree <branch>  Create a git worktree for <branch> off $WORKTREES and use it as --cwd.
 #   --session <name>   Target tmux session (default: auto-detected).
+#   --project <name>   Resolve session and cwd from `ws route <name>` (see docs/WORKSPACE.md).
+#   --resume auto|confirm  Lane manifest resume policy read by `ws up` (default: confirm).
 #   --no-probe         Skip the model availability probe (faster, riskier).
 #   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
+# Worktrees land under $WORKTREES, a persistent mount; /tmp is refused. The
+# parent and the completion-report target are session:window-name, resolved to
+# a pane at send time (a bare %id from an older caller still works). At launch
+# a lane manifest is written to <runs>/.lanes/<run-id>.json, where <runs> comes
+# from `ws route`; `ws up`/watch-child.sh mark it closed.
 # Jev observes only --task (never the brief), after validation/probing. It cannot
 # change CLASS/MODEL. PI_JEV_MODE=off disables observation; failures never block.
 set -euo pipefail
@@ -36,6 +43,7 @@ set -euo pipefail
 BRIEF="" TASK="" NAME="" CWD="$PWD" MODEL="${PI_DELEGATE_MODEL:-}" AGENT="pi"
 CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0
 PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
+PROJECT="" RESUME=confirm SESSION_EXPLICIT=0 CWD_EXPLICIT=0
 ORIGINAL_ARGS=("$@")
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
@@ -45,14 +53,16 @@ while [ $# -gt 0 ]; do
 	--brief) BRIEF="${2:?}"; shift 2 ;;
 	--task) TASK="${2:?}"; shift 2 ;;
 	--name) NAME="${2:?}"; shift 2 ;;
-	--cwd) CWD="${2:?}"; shift 2 ;;
+	--cwd) CWD="${2:?}"; CWD_EXPLICIT=1; shift 2 ;;
 	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
 	--class) CLASS="${2:?}"; shift 2 ;;
 	--when) WHEN="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
 	--provider) PROVIDER="${2:?}"; shift 2 ;;
 	--worktree) WORKTREE="${2:?}"; shift 2 ;;
-	--session) SESSION="${2:?}"; shift 2 ;;
+	--session) SESSION="${2:?}"; SESSION_EXPLICIT=1; shift 2 ;;
+	--project) PROJECT="${2:?}"; shift 2 ;;
+	--resume) RESUME="${2:?}"; shift 2 ;;
 	--no-probe) PROBE=0; shift ;;
 	--no-notify) NOTIFY=0; shift ;;
 	--dry-run) DRY=1; shift ;;
@@ -62,6 +72,7 @@ while [ $# -gt 0 ]; do
 done
 
 case "$WHEN" in now|reset|waste) ;; *) die "--when must be reset, waste or now" ;; esac
+case "$RESUME" in auto|confirm) ;; *) die "--resume must be auto or confirm" ;; esac
 [ -n "$BRIEF" ] || [ -n "$TASK" ] || die "need --brief and/or --task"
 if [ "$WHEN" != now ]; then
 	# Preserve every argument except --when, including --worktree: worktree
@@ -79,6 +90,16 @@ fi
 [ -z "$BRIEF" ] || [ -f "$BRIEF" ] || die "brief not found: $BRIEF"
 command -v tmux >/dev/null || die "tmux not found"
 command -v "$AGENT" >/dev/null || die "$AGENT not in PATH"
+
+# ── --project: session and cwd come from the workspace reconciler ────────────
+PROJECT_RUNS=""
+if [ -n "$PROJECT" ]; then
+	command -v ws >/dev/null 2>&1 || die "--project needs bin/ws on PATH"
+	project_route="$(ws route "$PROJECT")" || die "ws route $PROJECT failed"
+	read -r project_session _project_prefix project_cwd PROJECT_RUNS <<<"$project_route"
+	[ "$SESSION_EXPLICIT" = "1" ] || SESSION="$project_session"
+	[ "$CWD_EXPLICIT" = "1" ] || CWD="$project_cwd"
+fi
 
 # ── the current tmux session ────────────────────────────────────────────────
 if [ -z "$SESSION" ]; then
@@ -108,15 +129,18 @@ tmux has-session -t "$SESSION" 2>/dev/null || die "no such tmux session: $SESSIO
 # walk our own process ancestry until it matches a pane pid. Never guess.
 resolve_parent_window() {
 	[ -n "${TMUX:-}" ] || { printf 'unknown'; return; }
+	# Workspace-as-code: parents are addressed as session:window-name so they
+	# survive a tmux server restart (pane ids do not). $TMUX_PANE still pins the
+	# EXACT calling pane -t, so this is not the client-focus bug the previous
+	# pane-id-only approach guarded against; -t "$TMUX_PANE" is deterministic
+	# regardless of which pane is focused. Two independent conversations sharing
+	# one window still collide on this name — give each its own window.
 	if [ -n "${TMUX_PANE:-}" ]; then
+		tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_name}' 2>/dev/null && return
 		printf '%s' "$TMUX_PANE"; return
 	fi
 	local panes pid match
-	# Emit the immutable pane id (%N), not session:window. A window name targets the
-	# ACTIVE pane at delivery time — with two operator conversations split over two
-	# panes of one window, completion nudges were delivered to whichever conversation
-	# happened to have focus (observed 2026-09-01, window 'speedup ci', panes 1 and 2).
-	panes=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null)
+	panes=$(tmux list-panes -a -F '#{pane_pid} #{session_name}:#{window_name}' 2>/dev/null)
 	pid=$$
 	while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
 		match=$(printf '%s\n' "$panes" | awk -v p="$pid" '$1==p {sub(/^[0-9]+[ \t]+/, ""); print; exit}')
@@ -128,9 +152,26 @@ resolve_parent_window() {
 PARENT_WINDOW="$(resolve_parent_window)"
 
 # ── worktree isolation (children that write code must not share a checkout) ──
+# Fail closed: WORKTREES must be set to a persistent mount, never /tmp (tmpfs
+# loses every worktree on reboot; 22 were found there on 2026-10-07).
+worktrees_guard() {
+	[ -n "${WORKTREES:-}" ] || die "WORKTREES is not set; see config/environment.d/workspace.conf"
+	case "$WORKTREES" in
+	/tmp | /tmp/*) die "WORKTREES must not be under /tmp: $WORKTREES" ;;
+	esac
+	[ -d "$WORKTREES" ] || die "WORKTREES does not exist: $WORKTREES"
+	if command -v findmnt >/dev/null 2>&1; then
+		fstype="$(findmnt -no FSTYPE -T "$WORKTREES" 2>/dev/null)"
+		case "$fstype" in
+		tmpfs | ramfs) die "WORKTREES ($WORKTREES) is on $fstype, not a persistent mount" ;;
+		esac
+	fi
+}
 if [ -n "$WORKTREE" ]; then
+	worktrees_guard
 	repo_root="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)" || die "--worktree needs a git repo"
-	wt_dir="${TMPDIR:-/tmp}/wt-${WORKTREE//\//-}"
+	wt_dir="$WORKTREES/wt-${WORKTREE//\//-}"
+	mkdir -p "$WORKTREES"
 	# Do not assume origin/main: this repo may use master (or anything else).
 	# Ask the remote what its HEAD is, and fall back to the local branch.
 	base_ref="$(git -C "$repo_root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
@@ -169,7 +210,7 @@ if [ -n "$WORKTREE" ]; then
 	fi
 	CWD="$wt_dir"
 fi
-[ -d "$CWD" ] || die "cwd does not exist: $CWD"
+[ "$DRY" = "1" ] || [ -d "$CWD" ] || die "cwd does not exist: $CWD"
 
 # ── window name (unique) ────────────────────────────────────────────────────
 if [ -z "$NAME" ]; then
@@ -282,6 +323,43 @@ printf -v child_command '%q ' "${CHILD_ENV[@]}" "$AGENT" "${MODEL_ARGS[@]}"
 tmux send-keys -t "$SESSION:$NAME" -l -- "$child_command"
 tmux send-keys -t "$SESSION:$NAME" Enter
 
+# ── lane manifest: survives a tmux/server restart, unlike the pane itself ────
+RUNS_DIR="$PROJECT_RUNS"
+if [ -z "$RUNS_DIR" ] && command -v ws >/dev/null 2>&1; then
+	fallback_route="$(ws route "$(printf '%s' "$SESSION" | tr '[:upper:]' '[:lower:]')" 2>/dev/null)" || true
+	[ -z "$fallback_route" ] || read -r _fb_session _fb_prefix _fb_cwd RUNS_DIR <<<"$fallback_route"
+fi
+[ -n "$RUNS_DIR" ] || RUNS_DIR="${NOTES:-$HOME/.local/state/pi}/.unrouted-lanes"
+LANE_DIR="$RUNS_DIR/.lanes"
+LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
+if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
+	# <<- strips only LEADING TABS, and strips every one of them from every
+	# line, so python's own indentation below is built from spaces, not tabs.
+	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" <<-'PY'
+	import json, sys, datetime
+	(path, session, window, cwd, branch, model, brief, parent, resume, run_id) = sys.argv[1:11]
+	manifest = {
+	    "run_id": run_id,
+	    "session": session,
+	    "window": window,
+	    "cwd": cwd,
+	    "branch": branch,
+	    "model": model,
+	    "brief": brief,
+	    "pi_session": None,
+	    "parent": parent,
+	    "resume": resume,
+	    "status": "open",
+	    "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+	}
+	with open(path, "w", encoding="utf-8") as handle:
+	    json.dump(manifest, handle, indent=2)
+	    handle.write("\n")
+	PY
+else
+	echo "delegate: warning: could not write lane manifest at $LANE_MANIFEST" >&2
+fi
+
 # Wait for the TUI to be ready; keystrokes sent too early are silently DISCARDED
 # (observed: three agents booted, prompt sent, input box empty, context 0.0%).
 # The model name is not a reliable readiness signal — it can be absent from the
@@ -384,10 +462,10 @@ if [ "${NOTIFY:-1}" = "1" ] && [ -x "$WATCHER" ]; then
 	# (2026-09-28: zero watchers alive after 7 delegations, no nudges ever landed).
 	if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --quiet --collect \
 		--setenv=PI_DELEGATE_GOAL="$PI_DELEGATE_GOAL" --setenv=PI_DELEGATE_MAILBOX="${PI_DELEGATE_MAILBOX:-$HOME/.pi/agent/delegate-mailbox}" \
-		--unit "pi-delegate-watch-${RUN_ID}" "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" 2>/dev/null; then
+		--unit "pi-delegate-watch-${RUN_ID}" "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" "$LANE_MANIFEST" 2>/dev/null; then
 		NOTIFY_STATE="watching via systemd unit pi-delegate-watch-${RUN_ID} (nudges $PARENT_WINDOW on idle)"
 	else
-		setsid -f "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" >/dev/null 2>&1 </dev/null
+		setsid -f "$WATCHER" "$SESSION:$NAME" "$PARENT_WINDOW" "$RUN_ID" "$CWD" "${TASK:-}" "$LANE_MANIFEST" >/dev/null 2>&1 </dev/null
 		NOTIFY_STATE="watching via setsid (nudges $PARENT_WINDOW on idle)"
 	fi
 else
