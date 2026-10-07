@@ -2475,8 +2475,11 @@ class Handler(BaseHTTPRequestHandler):
                     check_health("token rejected upstream")
                 save_usage_state()
 
-            log(f"{self.command} {endpoint} -> token {tok.name()} model={model} "
-                f"u7={tok.u7} u7_oi={tok.u7_oi} u5={tok.u5} status {resp.status}"
+            client = self.headers.get("user-agent", "?")
+            class_name = getattr(self, "class_name", "?")
+            log(f"{self.command} {endpoint} -> token {tok.name()} client={client!r} "
+                f"class={class_name} model={model} u7={tok.u7} u7_oi={tok.u7_oi} "
+                f"u5={tok.u5} status {resp.status}"
                 + (f" cooldown_scope={cooldown_scope}" if cooldown_scope else "")
                 + (f" [burst, pausing {pause}s]" if pause is not None
                    else " [request-scoped, relayed]" if request_scoped

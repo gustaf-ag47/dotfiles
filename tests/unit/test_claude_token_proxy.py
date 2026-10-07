@@ -385,6 +385,36 @@ class PickPolicyTests(ProxyIsolationMixin, TestCase):
         self.assertTrue(out["messages"][0]["content"][0]["text"].startswith("Instructions"))
         self.assertEqual(out["messages"][0]["content"][1], mixed_payload["messages"][0]["content"][1])
 
+    def test_success_log_includes_litellm_client_and_class(self):
+        import io
+        from email.message import Message
+
+        self.make("paperless", u7=0.2)
+        body = json.dumps({"model": "claude-opus-5-5", "messages": []}).encode()
+        handler = object.__new__(proxy.Handler)
+        handler.command = "POST"
+        handler.path = "/v1/messages"
+        handler.headers = Message()
+        handler.headers["Content-Length"] = str(len(body))
+        handler.headers["User-Agent"] = "litellm/1.81.0"
+        handler.headers["x-cc-proxy-class"] = "documents"
+        handler.headers["x-cc-proxy-session"] = "paperless"
+        handler.rfile = io.BytesIO(body)
+        handler._send_api_error = mock.Mock()
+        handler._stream = mock.Mock()
+        response = mock.Mock(status=200, headers=Message())
+        connection = mock.Mock()
+        with mock.patch.object(proxy, "save_usage_state"), \
+                mock.patch.object(proxy, "upstream", return_value=(connection, response)), \
+                mock.patch.object(proxy, "log") as logged:
+            handler._proxy()
+
+        messages = [c.args[0] for c in logged.call_args_list]
+        self.assertTrue(any("status 200" in line for line in messages), messages)
+        success = next(line for line in messages if "status 200" in line)
+        self.assertIn("client='litellm/1.81.0'", success)
+        self.assertIn("class=documents", success)
+
     def test_error_message_extracts_type_and_message(self):
         raw = b'{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}'
         self.assertEqual(proxy.error_message(raw), "rate_limit_error: slow down")
