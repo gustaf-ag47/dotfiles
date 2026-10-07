@@ -1,0 +1,9 @@
+[Unit]
+Description=Hourly Hermes state snapshot (also covers 03:50, before sync-backup at 04:00)
+
+[Timer]
+OnCalendar=*-*-* *:50:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
