@@ -20,7 +20,7 @@
 # should get a private remote instead of being re-synced on every change.
 #
 # Excluded paths (space-separated globs: GIT_BUNDLE_EXCLUDE, else the words in
-# $SYNC/dotfiles-local/git-bundle-exclude, plus always tmp/*) keep a
+# $LOCAL_CONFIG/git-bundle-exclude, plus always tmp/*) keep a
 # repo in the manifest -- so git-rehydrate can still clone it from its remote
 # -- but never bundles its contents into the personal Syncthing mesh. Company
 # code stays on company remotes; push those branches instead.
@@ -33,7 +33,7 @@ OUT="${GIT_BUNDLE_DIR:-$SYNC/archive/git-bundles}/$(cat /etc/hostname 2>/dev/nul
 MAX_MB="${GIT_BUNDLE_MAX_MB:-200}"
 # The company workspace path is private, so the default list lives in the
 # private overlay rather than this public repo.
-EXCLUDE_FILE="${GIT_BUNDLE_EXCLUDE_FILE:-$SYNC/dotfiles-local/git-bundle-exclude}"
+EXCLUDE_FILE="${GIT_BUNDLE_EXCLUDE_FILE:-${LOCAL_CONFIG:-$SYNC/state/dotfiles-local}/git-bundle-exclude}"
 EXCLUDE="${GIT_BUNDLE_EXCLUDE-$(sed 's/#.*//' "$EXCLUDE_FILE" 2>/dev/null | tr '\n' ' ')} tmp/*"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1

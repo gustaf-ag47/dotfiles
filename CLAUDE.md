@@ -118,7 +118,7 @@ rm test.sh
 - @docs/SECURITY.md - **Security guide for preventing secret leaks**
 - @docs/LINTING.md - Lint gates and how to reproduce CI locally
 - @docs/BACKUP.md - Backup/restore of system state outside the repo
-- @docs/LOCAL_CONFIG.md - Private config overlay ($SYNC/dotfiles-local)
+- @docs/LOCAL_CONFIG.md - Private config overlay ($SYNC/state/dotfiles-local)
 - @docs/pi-resources.md - Pi agent resources installed from config/pi/
 - @docs/pi-delegate-contract.md - Delegation coordination contract
 
@@ -381,7 +381,7 @@ changes; the full rescan is only a daily safety net).
 - **Modular independence**: Components (shell, editor, WM) function independently
 
 ### Local/Private Configurations
-- **Location**: `$SYNC/dotfiles-local/` (symlinked as `$DOTFILES/local/`)
+- **Location**: `$SYNC/state/dotfiles-local/` (symlinked as `$DOTFILES/local/`)
 - **Purpose**: Store personal, company-specific, or sensitive configs (gitignored but backed up)
 - **Structure**: `local/{applications,bin,config,env}/` - automatically loaded during installation
 - **Backup**: Automatically backed up via `$SYNC` and synced across machines

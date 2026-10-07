@@ -43,13 +43,14 @@ mkdir -p "$XDG_DATA_HOME"
 
 # Setup local configuration directory in $SYNC
 # This allows personal configs to be backed up and synced
-if [ ! -d "$SYNC/dotfiles-local" ]; then
-	echo "Creating local configuration directory in $SYNC..."
-	mkdir -p "$SYNC/dotfiles-local"/{applications,bin,config/zsh,config/git,env}
-	echo "✅ Created $SYNC/dotfiles-local/"
+LOCAL_CONFIG="${LOCAL_CONFIG:-$SYNC/state/dotfiles-local}"
+if [ ! -d "$LOCAL_CONFIG" ]; then
+	echo "Creating local configuration directory $LOCAL_CONFIG..."
+	mkdir -p "$LOCAL_CONFIG"/{applications,bin,config/zsh,config/git,env}
+	echo "✅ Created $LOCAL_CONFIG/"
 fi
 
-# Create symlink from dotfiles/local to $SYNC/dotfiles-local.
+# Create symlink from dotfiles/local to $LOCAL_CONFIG ($SYNC/state/dotfiles-local).
 # A REAL local/ directory holds user data (private configs, keys): back it up
 # next to itself, never rm -rf it (same non-destructive rule as link_config).
 #
@@ -58,7 +59,7 @@ fi
 # whichever machine wrote it last and dangled on the other (users differ:
 # gustaf vs gud1). Both machines keep dotfiles-local at the same place relative
 # to the repo, so the relative link resolves everywhere.
-local_target="$(realpath -m --relative-to="$DOTFILES" "$SYNC/dotfiles-local")"
+local_target="$(realpath -m --relative-to="$DOTFILES" "$LOCAL_CONFIG")"
 if [ -L "$DOTFILES/local" ] && [ "$(readlink "$DOTFILES/local")" != "$local_target" ]; then
 	echo "Replacing local/ link ($(readlink "$DOTFILES/local")) with relative $local_target"
 	rm -f "$DOTFILES/local"
@@ -71,7 +72,7 @@ if [ ! -L "$DOTFILES/local" ]; then
 	fi
 	echo "Creating symlink: $DOTFILES/local → $local_target"
 	ln -s "$local_target" "$DOTFILES/local"
-	echo "✅ Local configurations will be stored in $SYNC/dotfiles-local"
+	echo "✅ Local configurations will be stored in $LOCAL_CONFIG"
 fi
 
 # Idempotent and non-destructive.
@@ -102,6 +103,22 @@ link_config() {
 	mkdir -p "$(dirname "$dst")"
 	ln -sfn "$src" "$dst"
 }
+
+# App state: ~/.<name> -> $SYNC/state/<name> (synced + backed up, see
+# $SYNC/README.md). Hosts not migrated yet keep the legacy $SYNC/.<name>, so
+# re-running install never points a working link at a missing dir.
+# Not listed: .mozilla/.thunderbird hold per-host profiles that Syncthing
+# ignores; they stay host-local links for now.
+STATE_LINKS=(aws docker kube password-store zotero)
+for name in "${STATE_LINKS[@]}"; do
+	src="$SYNC/state/$name"
+	[ -d "$src" ] || src="$SYNC/.$name"
+	[ -d "$src" ] || continue
+	# resolve the legacy compat link so ~/.<name> points at the real dir
+	src="$(realpath "$src")"
+	link_config "$src" "$HOME/.$name"
+done
+link_config "$LOCAL_CONFIG/config/tmuxp" "$XDG_CONFIG_HOME/tmuxp"
 
 # NOTE: do NOT `rm -rf "$ZDOTDIR"` here. HISTFILE is $ZDOTDIR/.zhistory, so
 # that wiped the entire zsh history on every `make install`, along with

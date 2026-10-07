@@ -14,7 +14,7 @@ set -euo pipefail
 HERMES_HOME=${HERMES_HOME:-$HOME/.hermes}
 SYNC=${SYNC:-$HOME/sync}
 OUT="$SYNC/hermes/snapshot"
-SECRETS_OUT="$SYNC/dotfiles-local/config/hermes/secrets"
+SECRETS_OUT="${LOCAL_CONFIG:-$SYNC/state/dotfiles-local}/config/hermes/secrets"
 
 # name in snapshot -> path relative to HERMES_HOME
 DBS=(

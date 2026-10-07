@@ -181,7 +181,7 @@ def main():
     mode.add_argument('--rollback', type=Path, metavar='MANIFEST')
     mode.add_argument('--fetch-upstreams', action='store_true', help='Clone missing pinned third-party skills; preserve existing checkouts')
     parser.add_argument('--agent-dir', type=Path, default=Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent')))
-    parser.add_argument('--private-root', type=Path, default=Path(os.environ.get('LOCAL_CONFIG', Path.home() / 'sync/dotfiles-local')) / 'config/pi')
+    parser.add_argument('--private-root', type=Path, default=Path(os.environ.get('LOCAL_CONFIG', Path.home() / 'sync/state/dotfiles-local')) / 'config/pi')
     parser.add_argument('--pi-bin', default=os.environ.get('PI_CLAUDE_SUB_PI_BIN', 'pi'))
     args = parser.parse_args()
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'pi-dotfiles'

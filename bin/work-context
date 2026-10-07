@@ -5,7 +5,7 @@
 # Reads the project index and latest daily log, then asks Claude
 # what the current context is and what should be done next.
 #
-# Configuration (set in $SYNC/dotfiles-local/env/.env or environment):
+# Configuration (set in $LOCAL_CONFIG/env/.env or environment):
 #   WORK_PROJECT_NAME - Name of the work project directory in notes
 #   WORK_PROJECT_DIR  - Path to the work project source directory
 #
@@ -13,8 +13,9 @@
 set -euo pipefail
 
 # Load environment from local config if available
-if [[ -f "${SYNC:-$HOME/sync}/dotfiles-local/env/.env" ]]; then
-    source "${SYNC:-$HOME/sync}/dotfiles-local/env/.env"
+if [[ -f "${LOCAL_CONFIG:-$HOME/sync/state/dotfiles-local}/env/.env" ]]; then
+    # shellcheck source=/dev/null
+    source "${LOCAL_CONFIG:-$HOME/sync/state/dotfiles-local}/env/.env"
 fi
 
 NOTES_DIR="${NOTES:-${SYNC:-$HOME/sync}/Vault}"
@@ -25,7 +26,7 @@ PROJECT_DIR="${WORK_PROJECT_DIR:-}"
 if [[ -z "$PROJECT_NAME" ]] || [[ -z "$PROJECT_DIR" ]]; then
     echo "Error: Work context not configured"
     echo ""
-    echo "Please set the following variables in ${SYNC:-$HOME/sync}/dotfiles-local/env/.env:"
+    echo "Please set the following variables in ${LOCAL_CONFIG:-$HOME/sync/state/dotfiles-local}/env/.env:"
     echo "  export WORK_PROJECT_NAME='YourProjectName'"
     echo "  export WORK_PROJECT_DIR='$HOME/sync/src/your-project'"
     exit 1

@@ -157,7 +157,7 @@ The DeepSeek skill needs minor factual maintenance: its “no models means key a
 
 ### Private resources
 
-Default to `$SYNC/dotfiles-local/config/pi/skills/` for:
+Default to `$SYNC/state/dotfiles-local/config/pi/skills/` for:
 
 - `betterstack-logs`, `linear`
 - `<company>-prod-db`, `<company>-sandbox` (work-account skills)

@@ -9,8 +9,8 @@ config/tmux/plugins/
 .claude/settings.local.json
 
 # Local/private configurations (personal, company-specific, etc.)
-# Now stored in $SYNC/dotfiles-local and symlinked
-# See $SYNC/dotfiles-local/README.md for usage
+# Now stored in $SYNC/state/dotfiles-local and symlinked
+# See $SYNC/state/dotfiles-local/README.md for usage
 /local
 
 # Neovim minimal.lua repro environment (plugin installs for isolated testing)

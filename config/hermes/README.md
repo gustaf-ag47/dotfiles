@@ -5,7 +5,7 @@ Hermes runs from `~/.hermes` (HERMES_HOME). Its files are split three ways:
 | What | Where | Why |
 |---|---|---|
 | `SOUL.md` | `config/hermes/SOUL.md` (this repo, public) | Generic persona, no private data |
-| `config.yaml` | `local/config/hermes/config.yaml` (= `$SYNC/dotfiles-local`, private) | Contains Discord IDs and per-channel business prompts |
+| `config.yaml` | `local/config/hermes/config.yaml` (= `$SYNC/state/dotfiles-local`, private) | Contains Discord IDs and per-channel business prompts |
 | memories, skills, handovers, scripts, assets, sessions | `$SYNC/hermes/<dir>`, bind-mounted onto `~/.hermes/<dir>` | Durable state, Syncthing + restic |
 | live SQLite DBs, secrets | stay in `~/.hermes`; hourly `hermes-state-snapshot` (:50) copies them to `$SYNC/hermes/snapshot` and `local/config/hermes/secrets` | Syncthing ignores `*.db-wal`, so live DBs can't be synced safely |
 

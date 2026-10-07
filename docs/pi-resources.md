@@ -18,7 +18,7 @@ What it manages (file-level symlinks, reversible backups under
 | `config/pi/lib/*` | `~/.pi/agent/lib/` | shared `.mjs` modules the extensions import |
 | `config/pi/bin/*` | `~/.pi/agent/bin/` | agent-side tools (e.g. `pi-scratch`) |
 | `config/pi/skills/*` | `~/.pi/agent/skills/` | public skills |
-| `$SYNC/dotfiles-local/config/pi/skills/*` | `~/.pi/agent/skills/` | private skills (company/personal infra) |
+| `$SYNC/state/dotfiles-local/config/pi/skills/*` | `~/.pi/agent/skills/` | private skills (company/personal infra) |
 | `config/pi/{settings,models}.example.json` | `~/.pi/agent/{settings,models}.json` | **seed-only**: copied when missing, never overwritten — live drift from the examples afterwards is by design |
 | pi-ai dependency | `config/pi/node_modules/…`, `~/.pi/agent/node_modules/…` | lets `.ts` extensions resolve imports |
 
@@ -48,7 +48,7 @@ pinned in `config/pi/upstreams.json`. Fetch missing ones with
 ## Private skills live in `local/`
 
 Skills tied to personal machines or company infra belong in
-`$SYNC/dotfiles-local/config/pi/skills/` (gitignored, synced across machines),
+`$SYNC/state/dotfiles-local/config/pi/skills/` (gitignored, synced across machines),
 not in `~/.pi/agent/skills` directly. Adopted there 2026-10-03:
 `laptop-cobrowse`, `neko-cobrowse`, `browse-shop`, `tcg-store-search` — the
 last two had been deleted from this repo ("moved to project repo") while the

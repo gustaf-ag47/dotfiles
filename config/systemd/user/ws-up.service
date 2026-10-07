@@ -9,7 +9,7 @@ Wants=syncthing.service tmux.service
 
 [Service]
 Type=oneshot
-Environment=WORKSPACE_YAML=%h/sync/dotfiles-local/workspace/workspace.yaml
+Environment=WORKSPACE_YAML=%h/sync/state/dotfiles-local/workspace/workspace.yaml
 ExecStart=%h/sync/src/dotfiles/bin/ws up --non-interactive
 Nice=10
 

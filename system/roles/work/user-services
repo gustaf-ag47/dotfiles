@@ -1,4 +1,4 @@
-# role: work -- the units live in the PRIVATE overlay ($SYNC/dotfiles-local/
+# role: work -- the units live in the PRIVATE overlay ($SYNC/state/dotfiles-local/
 # config/systemd/user/): company infrastructure does not belong in this repo.
 enable prod-db-tunnel.service
 enable prod-db-token.timer

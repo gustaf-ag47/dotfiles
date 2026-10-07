@@ -14,7 +14,7 @@ import ws_yaml  # noqa: E402
 
 DEFAULT_WORKSPACE_YAML = Path(
     os.environ.get("WORKSPACE_YAML")
-    or (Path(os.environ.get("LOCAL_CONFIG", str(Path.home() / "sync/dotfiles-local"))) / "workspace/workspace.yaml")
+    or (Path(os.environ.get("LOCAL_CONFIG", str(Path.home() / "sync/state/dotfiles-local"))) / "workspace/workspace.yaml")
 )
 
 REQUIRED_ENV = ["SYNC", "NOTES", "DOTFILES", "SRC", "WORKTREES"]

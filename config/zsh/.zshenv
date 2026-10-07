@@ -7,7 +7,14 @@ export DOTFILES="$HOME/sync/src/dotfiles"
 # Used by: Neovim (leetcode storage), backup scripts, local configs
 export SYNC="$HOME/sync"
 export NOTES="$SYNC/Vault"
-export BACKUP_DIR="$SYNC/archive/backups/backup"
+# Data classes inside $SYNC (layout + filing rules: $SYNC/README.md).
+# Use these instead of hardcoding ~/sync/<dir> in scripts.
+export DOCS="$SYNC/docs"         # records: bank, tax, house, health
+export LIBRARY="$SYNC/library"   # books, papers, courses
+export STATE="$SYNC/state"       # app state behind ~/.aws, ~/.kube, pass, ...
+export ARCHIVE="$SYNC/archive"   # finished/old, device backups, move logs
+export SCRATCH="/mnt/my_encrypted_nvme/scratch"  # NOT synced, NOT backed up
+export BACKUP_DIR="$ARCHIVE/backups/backup"
 
 # SRC: Repo checkouts live under here, not loose inside $SYNC
 # Used by: delegate.sh worktree isolation, ws (bin/ws), area sessions
@@ -19,7 +26,12 @@ export WORKTREES="/mnt/my_encrypted_nvme/scratch/tmp"
 
 # LOCAL_CONFIG: Personal/private configurations (symlinked in dotfiles)
 # Stored in $SYNC for automatic backup and sync between machines
-export LOCAL_CONFIG="$SYNC/dotfiles-local"
+# Lives in $STATE since 2026-10-07; fall back on hosts not yet migrated.
+if [ -d "$STATE/dotfiles-local" ]; then
+    export LOCAL_CONFIG="$STATE/dotfiles-local"
+else
+    export LOCAL_CONFIG="$SYNC/dotfiles-local"
+fi
 
 # Find latest Obsidian AppImage dynamically
 # `|| true`: with no AppImage present the glob/ls pipeline exits non-zero, which

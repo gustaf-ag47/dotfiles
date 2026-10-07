@@ -10,7 +10,7 @@ in the private overlay, never in this repo.
 This repo is public. Area names, session names, repo remotes and filesystem
 paths under `$SYNC` are not. `bin/ws` and `scripts/ws.py` are generic: they
 take a `--workspace <path>` flag (or `$WORKSPACE_YAML`), defaulting to
-`$LOCAL_CONFIG/workspace/workspace.yaml` (`$SYNC/dotfiles-local/workspace/workspace.yaml`,
+`$LOCAL_CONFIG/workspace/workspace.yaml` (`$SYNC/state/dotfiles-local/workspace/workspace.yaml`,
 which is Syncthing-synced but not a git repo).
 
 ## Schema
