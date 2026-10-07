@@ -13,6 +13,11 @@ ROOT = Path(__file__).resolve().parents[2]
 DELEGATE = ROOT / "config/pi/skills/delegate/scripts/delegate.sh"
 
 
+def write_fake_pi(commands_dir):
+    (commands_dir / "pi").write_text("#!/bin/bash\nexit 0\n")
+    (commands_dir / "pi").chmod(0o755)
+
+
 def write_fake_tmux(commands_dir, session_window):
     (commands_dir / "tmux").write_text(
         "#!/bin/bash\n"
@@ -36,6 +41,7 @@ class WorktreeGuardTest(unittest.TestCase):
             commands = root / "bin"
             commands.mkdir()
             write_fake_tmux(commands, "demo:caller-window")
+            write_fake_pi(commands)
             env = os.environ | {
                 "PATH": str(commands) + os.pathsep + os.environ["PATH"],
                 "HOME": tmp,
