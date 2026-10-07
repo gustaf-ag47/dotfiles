@@ -1,6 +1,6 @@
 [Unit]
 Description=Expose claude-token-proxy to the paperless docker network (gateway bind only)
-Documentation=file:///home/gud1/sync/src/paperless/README.md
+Documentation=file:///home/gud1/sync/src/homelab/services/paperless/README.md
 # The token proxy deliberately binds 127.0.0.1 only. Containers cannot reach
 # host loopback, so this forwards the paperless_internal bridge gateway
 # (pinned to 192.168.144.1 in that project's compose ipam) to the proxy.
