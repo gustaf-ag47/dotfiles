@@ -64,3 +64,4 @@ docs/handover/
 # Machine overlay links are created OUTSIDE the repo by scripts/install.sh; the
 # old waybar target landed inside it. Never track it again.
 config/gui/Wayland/waybar/profile.jsonc
+nix/agent-git/.built/

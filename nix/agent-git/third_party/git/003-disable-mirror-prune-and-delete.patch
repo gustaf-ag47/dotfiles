@@ -1,0 +1,23 @@
+--- a/builtin/push.c
++++ b/builtin/push.c
+@@ -737,6 +737,20 @@
+ 			die(_("force push via +refspec '%s' is disabled and not allowed"),
+ 			    argv[i]);
+ 
++	if (flags & TRANSPORT_PUSH_MIRROR)
++		die(_("push --mirror is disabled and not allowed"));
++
++	if (flags & TRANSPORT_PUSH_PRUNE)
++		die(_("push --prune is disabled and not allowed"));
++
++	if (deleterefs)
++		die(_("push --delete/-d is disabled and not allowed"));
++
++	for (int i = 1; i < argc; i++)
++		if (argv[i][0] == ':')
++			die(_("ref deletion via refspec '%s' is disabled and not allowed"),
++			    argv[i]);
++
+ 	die_for_incompatible_opt4(deleterefs, "--delete",
+ 				  tags, "--tags",
+ 				  flags & TRANSPORT_PUSH_ALL, "--all/--branches",

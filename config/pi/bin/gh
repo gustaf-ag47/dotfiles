@@ -1,0 +1,11 @@
+#!/bin/bash
+# Dispatcher: resolves to agent-gh (nix/agent-git), guarded gh for Pi agents.
+# Built by scripts/agent-git-setup.sh. See docs/agent-git.md.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../../.." && pwd)"
+PATH_FILE="$ROOT/nix/agent-git/.built/gh-path"
+if [ ! -r "$PATH_FILE" ]; then
+	echo "blocked for agents: ask Gustaf (via Hermes) — agent-gh not built yet (run scripts/agent-git-setup.sh)" >&2
+	exit 1
+fi
+exec "$(cat "$PATH_FILE")" "$@"
