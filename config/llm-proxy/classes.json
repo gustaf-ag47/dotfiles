@@ -2,5 +2,6 @@
   "interactive": {"routes": [["anthropic", "claude-fable-5-1"], ["anthropic", "claude-opus-5-5"], ["openai-codex", "gpt-6-astra"], ["openai-codex", "gpt-6-luna"], ["deepseek", "deepseek-v4-pro"]]},
   "build": {"routes": [["anthropic", "claude-sonnet-5"], ["anthropic", "claude-opus-5-5"], ["openai-codex", "gpt-6-luna"], ["openai-codex", "gpt-6-sol"], ["deepseek", "deepseek-v4-pro"]], "ceiling": {"anthropic": {"oi_max_used": 0.7, "no_oi": true}}},
   "research": {"routes": [["anthropic", "claude-sonnet-5"], ["openai-codex", "gpt-6-sol"], ["deepseek", "deepseek-v4-pro"]], "ceiling": {"anthropic": {"oi_max_used": 0.7, "no_oi": true}}},
+  "documents": {"routes": [["anthropic", "claude-opus-5-5"], ["anthropic", "claude-sonnet-5"]]},
   "mechanical": {"routes": [["deepseek", "deepseek-flash"], ["anthropic", "claude-haiku-4-5"], ["openai-codex", "gpt-6-luna"]], "ceiling": {"anthropic": {"no_oi": true}}}
 }

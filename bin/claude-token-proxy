@@ -25,6 +25,11 @@ Token values are never logged; rows are identified by a short SHA-256 fingerprin
 `GET /_status` returns the live pool as JSON (fingerprints, utilization, validity,
 retry cooldowns, quota status, and local response counters) without touching upstream.
 `GET /_usage` is the same redacted per-token view intended for Waybar and scripts.
+Identity-free Messages requests are normalized to the Claude Code subscription
+shape: only the identity remains in `system`, and other system text moves into
+the first user message. `x-cc-proxy-shape: claude-code` is available to clients
+as an explicit declaration. Requests already carrying the identity are never
+reshaped.
 The proxy refreshes the read-only `/api/oauth/usage` endpoint every five minutes;
 OAuth scope failures are reported per token and never invalidate inference.
 
@@ -2188,12 +2193,12 @@ def usage_payload() -> dict:
 CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 
-def ensure_claude_code_identity(body: bytes) -> bytes:
-    """Make the Claude Code identity the exact, separate first system block.
+def ensure_claude_code_identity(body: bytes, reshape: bool = False) -> bytes:
+    """Apply Claude Code OAuth identity and optionally move app instructions to user.
 
-    Subscription OAuth only serves Sonnet/Opus when it is; otherwise Anthropic
-    answers a headerless 429 `rate_limit_error: Error`. Generic clients
-    (LiteLLM for paperless) send a plain or missing system prompt.
+    Subscription OAuth rejects some long app-specific system prompts. In shape
+    mode retain only the identity in system and prepend the rest to the first
+    user message. Existing identity-bearing requests are left byte-for-byte alone.
     """
     try:
         data = json.loads(body)
@@ -2202,6 +2207,40 @@ def ensure_claude_code_identity(body: bytes) -> bytes:
     if not isinstance(data, dict) or "messages" not in data:
         return body
     system = data.get("system")
+    if reshape and ((isinstance(system, list) and any(
+            isinstance(b, dict) and CLAUDE_CODE_IDENTITY in str(b.get("text", "")) for b in system
+        )) or (isinstance(system, str) and CLAUDE_CODE_IDENTITY in system)):
+        return body
+    if reshape:
+        if isinstance(system, str):
+            prompt = system
+        elif isinstance(system, list) and all(isinstance(b, dict) for b in system):
+            prompt = "\n\n".join(str(b.get("text", "")) for b in system if b.get("text"))
+        elif system in (None, ""):
+            prompt = ""
+        else:
+            return body
+        data["system"] = [{"type": "text", "text": CLAUDE_CODE_IDENTITY}]
+        if prompt:
+            messages = data.get("messages")
+            if not isinstance(messages, list):
+                return body
+            prefix = prompt + "\n\n"
+            if messages and isinstance(messages[0], dict):
+                content = messages[0].get("content")
+                if isinstance(content, str):
+                    messages[0]["content"] = prefix + content
+                elif isinstance(content, list):
+                    first_text = next((i for i, b in enumerate(content) if isinstance(b, dict) and b.get("type") == "text"), None)
+                    if first_text is not None:
+                        content[first_text] = {**content[first_text], "text": prefix + str(content[first_text].get("text", ""))}
+                    else:
+                        messages.insert(0, {"role": "user", "content": prompt})
+                else:
+                    messages.insert(0, {"role": "user", "content": prompt})
+            else:
+                messages.insert(0, {"role": "user", "content": prompt})
+        return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if isinstance(system, list):
         # Real Claude Code / Pi already carry it (possibly after a billing
         # block); never reshape a request that works.
@@ -2321,7 +2360,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         if self.command == "POST" and self.path.split("?", 1)[0] == "/v1/messages" and body:
-            body = ensure_claude_code_identity(body)
+            body = ensure_claude_code_identity(body, reshape=True)
         fwd = self._forward_headers()
         tried: set[str] = set()
         valid_count = len([t for t in STATE if t.valid])

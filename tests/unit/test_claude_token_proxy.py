@@ -360,6 +360,16 @@ class PickPolicyTests(ProxyIsolationMixin, TestCase):
         self.assertIs(proxy.ensure_claude_code_identity(ok), ok)
         self.assertEqual(proxy.ensure_claude_code_identity(b"not json"), b"not json")
 
+    def test_oauth_shape_moves_prompt_and_preserves_image_blocks(self):
+        ident = proxy.CLAUDE_CODE_IDENTITY
+        payload = {"system": [{"type": "text", "text": "long app instructions"}], "messages": [
+            {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "data": "abc"}}]}
+        ]}
+        out = json.loads(proxy.ensure_claude_code_identity(json.dumps(payload).encode(), reshape=True))
+        self.assertEqual(out["system"], [{"type": "text", "text": ident}])
+        self.assertEqual(out["messages"][0]["content"], "long app instructions")
+        self.assertEqual(out["messages"][1]["content"][0], payload["messages"][0]["content"][0])
+
     def test_error_message_extracts_type_and_message(self):
         raw = b'{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}'
         self.assertEqual(proxy.error_message(raw), "rate_limit_error: slow down")
