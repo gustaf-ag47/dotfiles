@@ -324,6 +324,7 @@ link_config "$DOTFILES/config/mimeapps/mimeapps.list" "$XDG_CONFIG_HOME/mimeapps
 # Link Wayland environment configuration
 mkdir -p "$XDG_CONFIG_HOME/environment.d"
 link_config "$DOTFILES/config/environment.d/wayland.conf" "$XDG_CONFIG_HOME/environment.d/wayland.conf"
+link_config "$DOTFILES/config/environment.d/workspace.conf" "$XDG_CONFIG_HOME/environment.d/workspace.conf"
 
 # Link starship configuration
 link_config "$DOTFILES/config/starship.toml" "$XDG_CONFIG_HOME/starship.toml"

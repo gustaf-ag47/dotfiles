@@ -1,0 +1,17 @@
+[Unit]
+Description=Workspace-as-code: bring back env, repos, sessions and auto lanes
+# RequiresMountsFor= resolves by PATH against whatever covers it, system or
+# user mount; a system mount unit name like mnt-my_encrypted_nvme.mount is not
+# visible to the --user manager and must never be named directly here.
+RequiresMountsFor=%h/sync
+After=syncthing.service tmux.service
+Wants=syncthing.service tmux.service
+
+[Service]
+Type=oneshot
+Environment=WORKSPACE_YAML=%h/sync/dotfiles-local/workspace/workspace.yaml
+ExecStart=%h/sync/src/dotfiles/bin/ws up --non-interactive
+Nice=10
+
+[Install]
+WantedBy=default.target
