@@ -1,4 +1,5 @@
 # skrubben -- systemd --user units
 enable cc-proxy-docker-bridge.service
+enable decision-gate.service
 enable tmux.service
 enable ws-up.service

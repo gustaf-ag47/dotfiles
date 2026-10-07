@@ -1,0 +1,24 @@
+[Unit]
+Description=decision-gate: cheap typed decision layer (shadow-evaluated, fail-open)
+Documentation=https://github.com/
+After=network.target
+
+[Service]
+Type=simple
+# %h/.local/bin/decision-gate is a symlink to $DOTFILES/bin/decision-gate,
+# provided by `make install` the same way as the other user-service units.
+ExecCondition=/usr/bin/test -x %h/.local/bin/decision-gate
+ExecStart=%h/.local/bin/decision-gate
+Restart=on-failure
+RestartSec=10
+# Loopback-only HTTP service; no secrets in argv/env (the jev key and policy
+# file are read from disk inside the process, never logged).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=%h/.local/state/decision-gate %h/.config/decision-gate
+ReadOnlyPaths=%h/.config/jev
+
+[Install]
+WantedBy=default.target
