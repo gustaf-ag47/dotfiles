@@ -1,0 +1,11 @@
+[Unit]
+Description=Consistent snapshot of Hermes state into $SYNC (before restic sync-backup)
+RequiresMountsFor=%h/sync
+
+[Service]
+Type=oneshot
+Environment=SYNC=%h/sync
+Environment=HERMES_HOME=%h/.hermes
+ExecStart=%h/.local/bin/hermes-state-snapshot
+Nice=10
+IOSchedulingClass=idle

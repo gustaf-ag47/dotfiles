@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# hermes-state-snapshot — consistent hourly copies of Hermes' live state into $SYNC.
+#
+# Live SQLite DBs (state.db, kanban.db, cron/*.db) stay in ~/.hermes: Syncthing
+# ignores *.db-wal, so syncing them live would ship torn databases. This takes
+# an online `sqlite3 .backup` (consistent even while the gateway writes) and
+# copies the small non-DB state files plus the cron prompt files, so
+# sync-backup.service (restic, 04:00) picks up a clean copy. Secrets go to the private dotfiles-local overlay.
+#
+# Restore: stop hermes-gateway, copy files from $SYNC/hermes/snapshot back to
+# ~/.hermes (db/<name>.db -> its original path, see DB list below), start it.
+set -euo pipefail
+
+HERMES_HOME=${HERMES_HOME:-$HOME/.hermes}
+SYNC=${SYNC:-$HOME/sync}
+OUT="$SYNC/hermes/snapshot"
+SECRETS_OUT="$SYNC/dotfiles-local/config/hermes/secrets"
+
+# name in snapshot -> path relative to HERMES_HOME
+DBS=(
+	"state.db:state.db"
+	"kanban.db:kanban.db"
+	"shared-state.db:shared-state.db"
+	"cron-executions.db:cron/executions.db"
+	"cron-deliveries.db:cron/deliveries.db"
+	"cron-notepad.db:cron/notepad.db"
+)
+FILES=(cron/jobs.json channel_directory.json discord_threads.json gateway_state.json)
+DIRS=(cron/prompts)
+SECRETS=(.env auth.json google_token.json google_client_secret.json)
+
+umask 077
+mkdir -p "$OUT/db" "$OUT/files/cron" "$SECRETS_OUT"
+tmp=$(mktemp -d "$OUT/.tmp.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+for entry in "${DBS[@]}"; do
+	name=${entry%%:*} rel=${entry#*:}
+	src="$HERMES_HOME/$rel"
+	[ -f "$src" ] || continue
+	sqlite3 -bail "file:$src?mode=ro" ".timeout 30000" ".backup '$tmp/$name'"
+	check=$(sqlite3 "$tmp/$name" "PRAGMA quick_check;")
+	if [ "$check" != "ok" ]; then
+		echo "quick_check failed for $name: $check" >&2
+		exit 1
+	fi
+	mv -f "$tmp/$name" "$OUT/db/$name"
+done
+
+for rel in "${FILES[@]}"; do
+	[ -f "$HERMES_HOME/$rel" ] && cp -p "$HERMES_HOME/$rel" "$OUT/files/$rel"
+done
+for rel in "${DIRS[@]}"; do
+	[ -d "$HERMES_HOME/$rel" ] || continue
+	mkdir -p "$OUT/files/$rel"
+	rsync -a --delete "$HERMES_HOME/$rel/" "$OUT/files/$rel/"
+done
+for rel in "${SECRETS[@]}"; do
+	[ -f "$HERMES_HOME/$rel" ] && cp -p "$HERMES_HOME/$rel" "$SECRETS_OUT/$rel"
+done
+
+date -Is >"$OUT/LAST_SNAPSHOT"
+echo "hermes-state-snapshot: ok -> $OUT"
