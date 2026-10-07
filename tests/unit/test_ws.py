@@ -186,6 +186,31 @@ class LaneManifestTest(unittest.TestCase):
             self.assertEqual(len(lanes_found), 1)
             self.assertEqual(lanes_found[0]["window"], "sub-open")
 
+    def test_open_lanes_also_scans_unrouted_lanes(self):
+        # A session with no declared area (e.g. not yet added to
+        # workspace.yaml) still gets a lane manifest, written under
+        # NOTES/.unrouted-lanes/.lanes by both delegate.sh and
+        # runs_dir_for_session. Without this, ws adopt can never see it was
+        # already adopted and keeps re-adopting the same pane forever.
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = Path(tmp) / "notes"
+            unrouted_lanes = notes / ".unrouted-lanes" / ".lanes"
+            unrouted_lanes.mkdir(parents=True)
+            (unrouted_lanes / "open.json").write_text(json.dumps({
+                "session": "Ghost", "window": "sub-ghost", "status": "open", "resume": "confirm",
+            }))
+            doc = {"areas": [], "env": {"NOTES": str(notes)}}
+            lanes_found = ws.open_lanes(doc)
+            self.assertEqual(len(lanes_found), 1)
+            self.assertEqual(lanes_found[0]["window"], "sub-ghost")
+
+    def test_lane_manifest_dirs_ignores_process_environ(self):
+        # The doc is the only source of truth for NOTES; a NOTES exported in
+        # this process' shell must never leak into what gets scanned.
+        with mock.patch.dict(os.environ, {"NOTES": "/should/not/be/used"}):
+            dirs = ws.lane_manifest_dirs({"areas": []})
+        self.assertEqual(dirs, [])
+
 
 class UnitsBusRetryTest(unittest.TestCase):
     def run_with_fake_systemctl(self, script_body, declared=None):

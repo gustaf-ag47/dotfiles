@@ -177,11 +177,24 @@ def find_pane_ids_in_cron_prompts(notes_dir):
 
 
 def lane_manifest_dirs(doc):
+    # Includes the .unrouted-lanes fallback delegate.sh and runs_dir_for_session
+    # both write to for sessions with no declared area: without this, a manifest
+    # written there is invisible to open_lanes, so ws adopt re-adopts the same
+    # pane on every run and ws check's "open lanes" undercounts.
     dirs = []
     for area in doc["areas"]:
         runs = area.get("runs")
         if runs:
             dirs.append(Path(runs) / ".lanes")
+    # No os.environ fallback here, unlike runs_dir_for_session: a doc built
+    # without an "env" section (as plain dicts in tests do) means "NOTES is
+    # not known", not "ask the process environment", so callers stay isolated
+    # from whatever happens to be exported in this shell.
+    notes = doc.get("env", {}).get("NOTES", "")
+    if notes:
+        unrouted = Path(notes) / ".unrouted-lanes" / ".lanes"
+        if unrouted not in dirs:
+            dirs.append(unrouted)
     return dirs
 
 
@@ -395,9 +408,6 @@ def resolve_tmux_session_name(raw_target):
 def cmd_lane_fix(args):
     doc = load_workspace(Path(args.workspace))
     dirs = lane_manifest_dirs(doc)
-    notes = doc["env"].get("NOTES") or os.environ.get("NOTES", "")
-    if notes:
-        dirs.append(Path(notes) / ".unrouted-lanes" / ".lanes")
     windows = set(tmux_windows())
     actions = []
     seen_dirs = set()
