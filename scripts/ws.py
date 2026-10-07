@@ -265,7 +265,7 @@ def tmux_agent_panes():
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{window_name}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
+            "#{session_name}\t#{window_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
         ]
     )
     if result.returncode != 0:
@@ -273,19 +273,35 @@ def tmux_agent_panes():
     panes = []
     for line in result.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) != 5:
+        if len(parts) != 6:
             continue
-        session, window, pane_pid, command, cwd = parts
+        session, window, pane_id, pane_pid, command, cwd = parts
         panes.append(
             {
                 "session": session,
                 "window": window,
+                "pane_id": pane_id,
                 "pane_pid": pane_pid,
                 "command": command,
                 "cwd": cwd,
             }
         )
     return panes
+
+
+def multi_pane_agent_windows(panes=None):
+    # Addressing (parent/report targets, lane manifests, ws up's reopen) all
+    # assume one agent pane per window. A window with more than one "pi"
+    # pane breaks that silently: ws adopt can't tell the panes apart (see
+    # pi_session_file_for_pid) and ws up would resume both from one manifest.
+    panes = tmux_agent_panes() if panes is None else panes
+    groups = {}
+    for pane in panes:
+        if pane["command"] != "pi":
+            continue
+        key = f"{pane['session']}:{pane['window']}"
+        groups.setdefault(key, []).append(pane.get("pane_id") or pane.get("pane_pid"))
+    return {window: panes_ for window, panes_ in groups.items() if len(panes_) > 1}
 
 
 def unmatched_agent_panes(doc, session_filter=None, panes=None, lanes=None):
@@ -307,6 +323,34 @@ def unmatched_agent_panes(doc, session_filter=None, panes=None, lanes=None):
     return result
 
 
+def pi_session_file_for_pid(pid, proc_root="/proc"):
+    # A pi process that is actively writing a session keeps that .jsonl file
+    # open. Matching it by cwd + newest mtime instead looked right for a
+    # single long-lived pane, but is wrong in general: a pane running
+    # `pi --continue` starts a new session file without changing cwd, so the
+    # newest file for a cwd is not evidence of which session a given
+    # long-running process is actually in (confirmed live: two pi processes
+    # started Oct 6, long since switched sessions, both "newest" by mtime for
+    # the same cwd). Only an open file descriptor is unambiguous, and even
+    # that is only trusted when exactly one such fd exists.
+    fd_dir = Path(proc_root) / str(pid) / "fd"
+    try:
+        entries = list(fd_dir.iterdir())
+    except OSError:
+        return None
+    candidates = set()
+    for entry in entries:
+        try:
+            target = os.readlink(entry)
+        except OSError:
+            continue
+        if target.endswith(".jsonl") and "/.pi/agent/sessions/" in target:
+            candidates.add(target)
+    if len(candidates) == 1:
+        return candidates.pop()
+    return None
+
+
 def git_branch_for(cwd):
     result = subprocess.run(
         ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
@@ -317,15 +361,6 @@ def git_branch_for(cwd):
     branch = result.stdout.strip()
     return branch or None
 
-
-def pi_session_file_for_cwd(cwd, sessions_root=None):
-    root = Path(sessions_root) if sessions_root else Path.home() / ".pi/agent/sessions"
-    normalized = str(cwd).rstrip("/").lstrip("/")
-    session_dir = root / f"--{normalized.replace('/', '-')}--"
-    if not session_dir.is_dir():
-        return None
-    files = sorted(session_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return str(files[0]) if files else None
 
 
 def find_pi_pid(pane_pid, ps_text=None):
@@ -371,7 +406,7 @@ def find_pi_env_var(pid, var, proc_root="/proc"):
     return None
 
 
-def build_adopt_manifest(doc, pane, proc_root="/proc", sessions_root=None, ps_text=None):
+def build_adopt_manifest(doc, pane, proc_root="/proc", ps_text=None):
     pi_pid = find_pi_pid(pane["pane_pid"], ps_text=ps_text)
     parent = find_pi_env_var(pi_pid, "PI_DELEGATE_PARENT", proc_root=proc_root)
     run_id = (
@@ -384,9 +419,10 @@ def build_adopt_manifest(doc, pane, proc_root="/proc", sessions_root=None, ps_te
         "run_id": run_id,
         "session": pane["session"],
         "window": pane["window"],
+        "pane": pane.get("pane_id"),
         "cwd": pane["cwd"],
         "branch": git_branch_for(pane["cwd"]),
-        "pi_session": pi_session_file_for_cwd(pane["cwd"], sessions_root=sessions_root),
+        "pi_session": pi_session_file_for_pid(pi_pid, proc_root=proc_root) if pi_pid else None,
         "parent": parent,
         "resume": "confirm",
         "status": "open",
@@ -469,6 +505,72 @@ def cmd_lane_fix(args):
         print("ws lane fix: nothing to fix")
     else:
         print("\n".join(actions))
+    return 0
+
+
+LANE_SET_ALLOWED_FIELDS = {
+    "session", "window", "pane", "parent_pane", "pi_session", "parent",
+    "resume", "status", "branch", "cwd",
+}
+
+
+def parse_lane_set_value(raw):
+    if raw == "null":
+        return None
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return raw
+
+
+def find_manifest_path(doc, target):
+    # Accepts either an exact path or a bare run_id, searching every lane
+    # dir ws already knows about (declared areas plus .unrouted-lanes), so a
+    # one-off repair never needs the caller to know which runs folder a
+    # manifest ended up in.
+    direct = Path(target)
+    if direct.exists():
+        return direct
+    for lane_dir in lane_manifest_dirs(doc):
+        candidate = lane_dir / f"{target}.json"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def cmd_lane_set(args):
+    doc = load_workspace(Path(args.workspace))
+    manifest_path = find_manifest_path(doc, args.target)
+    if manifest_path is None:
+        print(f"ws lane set: no manifest found for {args.target!r}", file=sys.stderr)
+        return 1
+    updates = {}
+    for assignment in args.assignments:
+        if "=" not in assignment:
+            print(f"ws lane set: expected key=value, got {assignment!r}", file=sys.stderr)
+            return 1
+        key, _, raw_value = assignment.partition("=")
+        if key not in LANE_SET_ALLOWED_FIELDS:
+            print(
+                f"ws lane set: field {key!r} is not settable (allowed: "
+                f"{', '.join(sorted(LANE_SET_ALLOWED_FIELDS))})",
+                file=sys.stderr,
+            )
+            return 1
+        updates[key] = parse_lane_set_value(raw_value)
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"ws lane set: could not read {manifest_path}: {exc}", file=sys.stderr)
+        return 1
+    manifest.update(updates)
+    change_desc = ", ".join(f"{k}={v!r}" for k, v in updates.items())
+    if args.dry_run:
+        print(f"would set {manifest_path}: {change_desc}")
+        return 0
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"set {manifest_path}: {change_desc}")
     return 0
 
 
@@ -597,6 +699,13 @@ def cmd_check(args):
     unadopted = unmatched_agent_panes(doc, lanes=lanes)
     lines.append(f"agent panes without a lane manifest: {len(unadopted)}")
 
+    multi_pane = multi_pane_agent_windows()
+    if multi_pane:
+        detail = ", ".join(f"{window} ({', '.join(ids)})" for window, ids in sorted(multi_pane.items()))
+        lines.append(f"multi-pane agent windows: {detail}")
+    else:
+        lines.append("multi-pane agent windows: none")
+
     homelab_root = Path(doc["env"].get("SRC", "")) / "homelab"
     homelab_validators = [
         homelab_root / "scripts/validate-hardware.py",
@@ -716,6 +825,12 @@ def main():
     lane_fix_parser = lane_sub.add_parser("fix")
     lane_fix_parser.add_argument("--dry-run", action="store_true")
     lane_fix_parser.set_defaults(func=cmd_lane_fix)
+
+    lane_set_parser = lane_sub.add_parser("set")
+    lane_set_parser.add_argument("target")
+    lane_set_parser.add_argument("assignments", nargs="+")
+    lane_set_parser.add_argument("--dry-run", action="store_true")
+    lane_set_parser.set_defaults(func=cmd_lane_set)
 
     args = parser.parse_args()
     return args.func(args)

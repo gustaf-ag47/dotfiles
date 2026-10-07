@@ -328,24 +328,46 @@ class UnitsBusRetryTest(unittest.TestCase):
         self.assertEqual(missing, ["tmux.service"])
 
 
-class PiSessionFileForCwdTest(unittest.TestCase):
-    def test_picks_newest_jsonl_in_mapped_dir(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            session_dir = root / "--home-example-src-widgetco--"
-            session_dir.mkdir()
-            old = session_dir / "old.jsonl"
-            new = session_dir / "new.jsonl"
-            old.write_text("{}")
-            new.write_text("{}")
-            os.utime(old, (1000, 1000))
-            os.utime(new, (2000, 2000))
-            found = ws.pi_session_file_for_cwd("/home/example/src/widgetco", sessions_root=root)
-            self.assertEqual(found, str(new))
+class PiSessionFileForPidTest(unittest.TestCase):
+    # cwd + newest-mtime (the previous approach) is not evidence of which
+    # session a long-running process is actually in: a `pi --continue` pane
+    # starts a new .jsonl without changing cwd, and switches sessions over
+    # its lifetime. An open file descriptor is the only unambiguous signal.
+    def _make_fd(self, proc_root, pid, fd_num, target):
+        fd_dir = Path(proc_root) / str(pid) / "fd"
+        fd_dir.mkdir(parents=True, exist_ok=True)
+        (fd_dir / str(fd_num)).symlink_to(target)
 
-    def test_returns_none_when_no_session_dir(self):
+    def test_single_open_jsonl_fd_is_unambiguous(self):
         with tempfile.TemporaryDirectory() as tmp:
-            found = ws.pi_session_file_for_cwd("/home/example/missing", sessions_root=Path(tmp))
+            target = "/home/example/.pi/agent/sessions/--example--/abc.jsonl"
+            self._make_fd(tmp, 111, 5, target)
+            self._make_fd(tmp, 111, 6, "/dev/null")
+            found = ws.pi_session_file_for_pid(111, proc_root=tmp)
+            self.assertEqual(found, target)
+
+    def test_multiple_open_jsonl_fds_are_ambiguous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_fd(tmp, 222, 5, "/home/example/.pi/agent/sessions/--a--/one.jsonl")
+            self._make_fd(tmp, 222, 6, "/home/example/.pi/agent/sessions/--b--/two.jsonl")
+            found = ws.pi_session_file_for_pid(222, proc_root=tmp)
+            self.assertIsNone(found)
+
+    def test_no_jsonl_fd_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_fd(tmp, 333, 5, "/dev/null")
+            found = ws.pi_session_file_for_pid(333, proc_root=tmp)
+            self.assertIsNone(found)
+
+    def test_missing_proc_entry_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            found = ws.pi_session_file_for_pid(9999, proc_root=tmp)
+            self.assertIsNone(found)
+
+    def test_jsonl_fd_outside_sessions_dir_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_fd(tmp, 444, 5, "/home/example/notes/random.jsonl")
+            found = ws.pi_session_file_for_pid(444, proc_root=tmp)
             self.assertIsNone(found)
 
 
@@ -418,6 +440,30 @@ class UnmatchedAgentPanesTest(unittest.TestCase):
         self.assertEqual([p["window"] for p in found], ["sub-a"])
 
 
+class MultiPaneAgentWindowsTest(unittest.TestCase):
+    def test_detects_window_with_two_pi_panes(self):
+        panes = [
+            {"session": "Demo", "window": "pi", "pane_id": "%1", "pane_pid": "10", "command": "pi", "cwd": "/x"},
+            {"session": "Demo", "window": "pi", "pane_id": "%2", "pane_pid": "11", "command": "pi", "cwd": "/x"},
+            {"session": "Demo", "window": "sub-a", "pane_id": "%3", "pane_pid": "12", "command": "pi", "cwd": "/x"},
+        ]
+        found = ws.multi_pane_agent_windows(panes=panes)
+        self.assertEqual(found, {"Demo:pi": ["%1", "%2"]})
+
+    def test_ignores_non_pi_panes_sharing_a_window(self):
+        panes = [
+            {"session": "Demo", "window": "pi", "pane_id": "%1", "pane_pid": "10", "command": "pi", "cwd": "/x"},
+            {"session": "Demo", "window": "pi", "pane_id": "%2", "pane_pid": "11", "command": "zsh", "cwd": "/x"},
+        ]
+        found = ws.multi_pane_agent_windows(panes=panes)
+        self.assertEqual(found, {})
+
+    def test_single_pane_windows_are_not_reported(self):
+        panes = [{"session": "Demo", "window": "pi", "pane_id": "%1", "pane_pid": "10", "command": "pi", "cwd": "/x"}]
+        found = ws.multi_pane_agent_windows(panes=panes)
+        self.assertEqual(found, {})
+
+
 class CmdAdoptTest(unittest.TestCase):
     def setUp(self):
         self.doc = ws_yaml.load(FIXTURE)
@@ -433,6 +479,7 @@ class CmdAdoptTest(unittest.TestCase):
             pane = {
                 "session": "Dotfiles",
                 "window": "sub-fix-thing",
+                "pane_id": "%555",
                 "pane_pid": "555",
                 "command": "pi",
                 "cwd": "/home/example/sync/src/dotfiles",
@@ -441,8 +488,7 @@ class CmdAdoptTest(unittest.TestCase):
                  mock.patch.object(ws, "open_lanes", return_value=[]), \
                  mock.patch.object(ws, "runs_dir_for_session", return_value=str(lane_root)), \
                  mock.patch.object(ws, "find_pi_pid", return_value=None), \
-                 mock.patch.object(ws, "git_branch_for", return_value="main"), \
-                 mock.patch.object(ws, "pi_session_file_for_cwd", return_value=None):
+                 mock.patch.object(ws, "git_branch_for", return_value="main"):
                 rc = ws.cmd_adopt(self._args(workspace))
             self.assertEqual(rc, 0)
             lane_dir = lane_root / ".lanes"
@@ -456,6 +502,8 @@ class CmdAdoptTest(unittest.TestCase):
             self.assertTrue(manifest["adopted"])
             self.assertEqual(manifest["branch"], "main")
             self.assertIsNone(manifest["parent"])
+            self.assertIsNone(manifest["pi_session"])
+            self.assertEqual(manifest["pane"], "%555")
 
     def test_adopt_dry_run_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -562,6 +610,94 @@ class LaneFixTest(unittest.TestCase):
             resolve_mock.assert_not_called()
             manifest = json.loads(fine.read_text())
             self.assertEqual(manifest["status"], "open")
+
+
+class CmdLaneSetTest(unittest.TestCase):
+    def test_sets_allowed_fields_by_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            lanes = root / "lanes" / ".lanes"
+            lanes.mkdir(parents=True)
+            manifest_path = lanes / "adopted-x-2528960.json"
+            manifest_path.write_text(json.dumps({
+                "run_id": "adopted-x-2528960", "session": "Demo", "window": "pi",
+                "pi_session": "/some/stale/path.jsonl", "status": "open",
+            }))
+            doc = ws_yaml.load(FIXTURE)
+            doc["areas"].append({"name": "demo", "session": "Demo", "cwd": "/x", "runs": str(root / "lanes")})
+            with mock.patch.object(ws, "load_workspace", return_value=doc):
+                args = argparse.Namespace(
+                    workspace=str(workspace), target="adopted-x-2528960",
+                    assignments=["window=pi-2", "pi_session=null"], dry_run=False,
+                )
+                rc = ws.cmd_lane_set(args)
+            self.assertEqual(rc, 0)
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest["window"], "pi-2")
+            self.assertIsNone(manifest["pi_session"])
+            # Untouched fields survive the repair.
+            self.assertEqual(manifest["session"], "Demo")
+
+    def test_accepts_an_explicit_path_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "direct.json"
+            manifest_path.write_text(json.dumps({"session": "Demo", "status": "open"}))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                assignments=["status=closed"], dry_run=False,
+            )
+            rc = ws.cmd_lane_set(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(manifest_path.read_text())["status"], "closed")
+
+    def test_rejects_disallowed_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            manifest_path.write_text(json.dumps({"session": "Demo"}))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                assignments=["run_id=hijacked"], dry_run=False,
+            )
+            rc = ws.cmd_lane_set(args)
+            self.assertNotEqual(rc, 0)
+            manifest = json.loads(manifest_path.read_text())
+            self.assertNotIn("run_id", manifest)
+
+    def test_dry_run_does_not_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            manifest_path = root / "x.json"
+            original = {"session": "Demo", "window": "pi"}
+            manifest_path.write_text(json.dumps(original))
+            args = argparse.Namespace(
+                workspace=str(workspace), target=str(manifest_path),
+                assignments=["window=pi-2"], dry_run=True,
+            )
+            rc = ws.cmd_lane_set(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(manifest_path.read_text()), original)
+
+    def test_target_not_found_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace.yaml"
+            workspace.write_text(FIXTURE)
+            args = argparse.Namespace(
+                workspace=str(workspace), target="does-not-exist",
+                assignments=["window=pi-2"], dry_run=False,
+            )
+            rc = ws.cmd_lane_set(args)
+            self.assertNotEqual(rc, 0)
 
 
 if __name__ == "__main__":
