@@ -43,8 +43,30 @@ without spaces or angle-bracket placeholders. The watcher recognizes this line
 and the older `PARENT: … done|accepted` handshake. A BLOCKER or FAILED line
 ends automatic `/goal` retries; it does not claim that work passed.
 Keep reports in their designated path; never git-commit or push the operator Vault.
-At about 80% context, write a handover with remaining work, evidence and paths,
-report that pointer and stop. A parent verifies results against gates and CI itself.
+At 300k tokens of context (the TUI footer's absolute count, not a percentage), write
+a handover with remaining work, evidence and paths; report that pointer and stop.
+Briefs reference this rule by name; they do not restate a number. A parent verifies
+results against gates and CI itself.
+
+When the brief's DONE condition is met, report and stop, even if more work is in
+sight — do not widen scope. The parent re-delegates follow-on work to a new session.
+
+Before the final report: destroy your own stack (`scripts/worktree-stack.sh destroy`
+if you started one), remove images you built (`docker rmi`, never `docker system
+prune` or anything you did not create), and confirm with `df -h /`.
+
+Parents never sleep-poll a child's pane with `tmux capture-pane` in a loop; the
+mailbox delivers completions in-band (see In-band delivery below). After push, call
+`ci_wait` with the PR number and end the turn; never sleep or poll for CI. Keep the
+interactive/RPC session open: the tool wakes it with a verdict or timeout. On a
+superseded head, register the new head. After wake-up, check the merge gates and
+continue owning the merge. If the tool is unavailable, return the verification
+command to the parent rather than blocking in `gh --watch`.
+
+Merge only through `merge-pr.sh` (`scripts/merge-pr.sh`, wraps `gh pr merge`): it
+appends pane/run-id/pr/head-sha to `~/.pi/agent/merge-log.tsv`, and refuses when the
+caller's brief contains "do not merge"/"no-merge"/"don't merge", or when the PR or any
+of its commits were authored by someone other than the agent identity.
 
 One coordinator owns the queue. Owners merge their own reviewed, green PRs unless
 the brief assigns merge ownership to the coordinator or declares a deploy hold;

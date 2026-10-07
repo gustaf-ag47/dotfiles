@@ -25,7 +25,7 @@ local DEFAULTS = {
   aws_sso_session = vim.env.DBUI_AWS_SSO_SESSION,
   sso_start_url = vim.env.DBUI_SSO_START_URL,
   tunnel_port = tonumber(vim.env.DBUI_TUNNEL_PORT) or 13307,
-  connections_path = nil, -- resolved at call time from $NOTES or g:db_ui_save_location
+  connections_path = nil, -- resolved at call time from DB_UI_ROOT or g:db_ui_save_location
   expected_db_url_marker = 'X%-Amz%-Date%%3D', -- pattern in URL signalling IAM
 }
 
@@ -43,8 +43,7 @@ local function resolve_connections_path()
   if saveloc and saveloc ~= '' then
     return saveloc .. '/connections.json'
   end
-  local notes = vim.env.NOTES or ((vim.env.SYNC or vim.env.HOME) .. '/Vault')
-  return notes .. '/db_ui/connections.json'
+  return require 'features.dbui_root'() .. '/connections.json'
 end
 
 -- ---------------------------------------------------------------------------
@@ -271,7 +270,7 @@ end
 local function check_scope()
   local ok, mod = pcall(require, 'features.dbui_project')
   if not ok then
-    return { ok = true, detail = 'scope module not loaded (using global $NOTES/db_ui)' }
+    return { ok = true, detail = 'scope module not loaded (using global DB_UI_ROOT)' }
   end
   local s = mod.status()
   local detail = ('%s (save_location=%s'):format(s.scope_label or 'default', s.save_location or '?')

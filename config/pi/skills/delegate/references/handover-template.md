@@ -27,6 +27,11 @@ will find a better route than a step list written by someone not looking at the 
 - **You own:** `<paths>`
 - **Do NOT touch:** `<paths owned by sibling agents, or out of scope>`
 - Sibling agents running in parallel right now: `<list, or "none">`
+- **Shared files:** `<plan/index/ratchet files touched by more than one lane, and who
+  owns edits to each — re-measure before writing a number into one, do not copy from
+  prose>`
+- **Merge:** `<who may merge this work — self once checks are green, the
+  coordinator, or "no merge: <reason>">`
 
 ## Constraints
 
@@ -50,9 +55,9 @@ limits and evidenced out-of-scope findings. Never commit or push the operator Va
 
 Send the parent **one results-or-blocker line only**:
 `<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
-No ACK, receipt, progress relay or repeated unchanged verification. At about 80%
-context, write a handover file with state, remaining work, evidence and paths;
-send its path in the line above and stop.
+No ACK, receipt, progress relay or repeated unchanged verification. At 300k tokens
+of context (the TUI footer's absolute count), write a handover file with state,
+remaining work, evidence and paths; send its path in the line above and stop.
 
 ## When blocked
 
@@ -60,5 +65,11 @@ Do not improvise past a genuine blocker. Record what blocked you, what you tried
 what would unblock it; leave the work in a reviewable state; stop.
 
 ## Cost guidance
+
+After push, call `ci_wait` with the PR number and end the turn; never sleep or poll
+for CI. Keep this interactive/RPC session open for the in-band wake-up. On wake-up,
+verify the current head and merge gates, then continue under the assigned merge
+ownership. If superseded, register again; if unavailable, hand back the verification
+command instead of blocking in `gh --watch`.
 
 Target ~$<n>. If you exceed it with no clear progress, write up what you have and stop.
