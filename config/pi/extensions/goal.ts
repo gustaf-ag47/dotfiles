@@ -27,6 +27,7 @@ const TRANSCRIPT_CHAR_BUDGET = Number(process.env.PI_GOAL_TRANSCRIPT_CHARS ?? "1
 
 let goal: GoalState | null = null;
 let evaluating = false;
+let waitingForCI = false;
 
 const extractText = (content: unknown): string => {
 	if (typeof content === "string") return content;
@@ -121,7 +122,7 @@ const clearGoal = (ctx: ExtensionContext, note: string) => {
 };
 
 const runEvaluator = async (ctx: ExtensionContext): Promise<void> => {
-	if (!goal || evaluating || !ctx.isIdle()) return;
+	if (!goal || evaluating || waitingForCI || !ctx.isIdle()) return;
 	evaluating = true;
 	try {
 		const model = pickEvaluatorModel(ctx);
@@ -148,7 +149,7 @@ const runEvaluator = async (ctx: ExtensionContext): Promise<void> => {
 			.map((c) => c.text)
 			.join("\n");
 		const verdict = parseVerdict(text);
-		if (!goal) return;
+		if (!goal || waitingForCI) return;
 		goal.spendUsd += response.usage?.cost?.total ?? 0;
 		goal.lastReason = verdict.reason;
 
@@ -186,6 +187,9 @@ let pi!: ExtensionAPI;
 
 export default function (api: ExtensionAPI) {
 	pi = api;
+	pi.events.on("ci-wait:state", (state: unknown) => {
+		waitingForCI = Boolean((state as { active?: boolean }).active);
+	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
 		await runEvaluator(ctx);
@@ -226,7 +230,7 @@ export default function (api: ExtensionAPI) {
 			goal = { condition: arg, turns: 0, startedAt: Date.now(), lastReason: "", spendUsd: 0 };
 			setGoalStatus(ctx);
 			ctx.ui.notify(`◎ goal set: ${arg}`, "info");
-			if (ctx.isIdle()) {
+			if (ctx.isIdle() && !waitingForCI) {
 				pi.sendUserMessage(
 					[
 						`Work autonomously toward this goal until it is satisfied. Do not stop to ask me.`,

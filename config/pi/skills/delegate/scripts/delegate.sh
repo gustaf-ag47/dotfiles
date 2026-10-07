@@ -319,6 +319,12 @@ tmux new-window -t "${SESSION}:" -n "$NAME" -c "$CWD" -d
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
 CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS")
+# Expose the brief path so merge-pr.sh (and the child itself) can find it without
+# re-deriving it from the prompt text. Absolute, so it resolves regardless of cwd.
+if [ -n "$BRIEF" ]; then
+	brief_abs_for_env="$(realpath "$BRIEF" 2>/dev/null || echo "$BRIEF")"
+	CHILD_ENV+=("PI_DELEGATE_BRIEF=$brief_abs_for_env")
+fi
 # tmux's server environment may predate this shell/profile. Pass only the
 # explicitly selected profile/offline settings, never credentials in argv.
 [ -z "${PI_CODING_AGENT_DIR:-}" ] || CHILD_ENV+=("PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR")
@@ -394,7 +400,7 @@ if [ -n "$BRIEF" ]; then
 	prompt="$prompt Read ${brief_rel} in full — it is your complete brief — then execute it."
 fi
 [ -n "$TASK" ] && prompt="$prompt Task: ${TASK}"
-prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings in-repo. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. No ACK, receipt or relay messages. At about 80% context, write a handover file with remaining work and evidence, send its path in that line, and stop."
+prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings in-repo. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. No ACK, receipt or relay messages. At 300k tokens of context (the TUI footer's absolute count, not a percentage), write a handover file with remaining work and evidence, send its path in that line, and stop."
 
 # -l sends the string literally: without it tmux parses words like "Enter" or
 # "Space" inside the prompt as key names. Submit separately, and send Enter

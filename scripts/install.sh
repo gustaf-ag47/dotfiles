@@ -166,6 +166,19 @@ for unit_dir in "$DOTFILES/config/systemd/user" "$DOTFILES/local/config/systemd/
 	done
 done
 
+# Hermes Agent: only on the host that runs the gateway (see config/hermes/README.md).
+# State dirs are fstab bind mounts from $SYNC/hermes (not managed here).
+if [ -d "$HOME/.hermes/hermes-agent" ]; then
+	link_config "$DOTFILES/config/hermes/SOUL.md" "$HOME/.hermes/SOUL.md"
+	link_config "$DOTFILES/local/config/hermes/config.yaml" "$HOME/.hermes/config.yaml"
+	link_config "$DOTFILES/config/systemd/user/hermes-gateway.service.d" \
+		"$XDG_CONFIG_HOME/systemd/user/hermes-gateway.service.d"
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl --user daemon-reload 2>/dev/null || true
+		systemctl --user enable --now hermes-state-snapshot.timer 2>/dev/null || true
+	fi
+fi
+
 # mkdir -p, not rm -rf + mkdir: transmission keeps its runtime state (stats,
 # resume files, torrent list) in this directory and wiping it every install
 # loses all of it.
