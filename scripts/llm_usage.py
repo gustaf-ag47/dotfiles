@@ -717,6 +717,180 @@ def jev_classifier_lines(activity):
     return lines
 
 
+# --- decision-gate local classifier activity (shadow + live, metadata-only) ---
+#
+# Same spirit as the Jev section above (local-only, metadata-only, never
+# reads credentials or makes a network call) but reads decision-gate's own
+# ledger (schema decision-gate-event.v1, one JSON object per decide/outcome
+# call) instead of Jev's. See docs/decision-gate.md for the ledger schema.
+
+DG_EVENT_SCHEMA = 'decision-gate-event.v1'
+DG_VALID_KINDS = {'decide', 'outcome'}
+DG_VALID_BACKENDS = {'jev', 'ollama'}
+DG_VALID_SENSITIVITY = {'private', 'internal', 'public'}
+DG_MAX_LEDGER_BYTES = 5 * 1024 * 1024
+DG_MAX_EVENTS = 50_000
+DG_SAFE_TOKEN_RE = JEV_SAFE_TOKEN_RE  # same whitelist shape; reused rather than duplicated
+
+
+def dg_ledger_path():
+    state_home = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local' / 'state')).expanduser()
+    return state_home / 'decision-gate' / 'events.jsonl'
+
+
+def dg_safe_token(value):
+    value = text(value)
+    if value is None:
+        return None
+    return value if DG_SAFE_TOKEN_RE.match(value) else None
+
+
+def dg_validate_event(record):
+    """Validate+normalize one decision-gate ledger line. Returns None if not trustworthy (see jev_validate_event)."""
+    if not isinstance(record, dict) or record.get('schema') != DG_EVENT_SCHEMA:
+        return None
+    kind = jev_enum(record.get('kind'), DG_VALID_KINDS)
+    if kind is None:
+        return None
+    day = jev_event_day(record.get('timestamp'))
+    if day is None:
+        return None
+    return {
+        'day': day, 'kind': kind, 'purpose': dg_safe_token(record.get('purpose')),
+        'sensitivity': jev_enum(record.get('sensitivity'), DG_VALID_SENSITIVITY),
+        'backend': jev_enum(record.get('backend'), DG_VALID_BACKENDS),
+        'model': dg_safe_token(record.get('model')),
+        'latency_ms': jev_nonneg_finite(record.get('latency_ms')),
+        'cached': record.get('cached') if isinstance(record.get('cached'), bool) else None,
+        'abstained': record.get('abstained') if isinstance(record.get('abstained'), bool) else None,
+        'input_tokens': jev_nonneg_int(record.get('input_tokens')),
+        'output_tokens': jev_nonneg_int(record.get('output_tokens')),
+        'estimated_cost_usd': jev_nonneg_finite(record.get('estimated_cost_usd')),
+        'cost_source': jev_enum(record.get('cost_source'), JEV_VALID_COST_SOURCES),
+        'overridden_for_privacy': record.get('overridden_for_privacy') if isinstance(record.get('overridden_for_privacy'), bool) else None,
+    }
+
+
+def dg_read_ledger(path, max_bytes=DG_MAX_LEDGER_BYTES, max_events=DG_MAX_EVENTS):
+    """Same bounded, never-raising read as jev_read_ledger(), against the decision-gate ledger."""
+    meta = {'ledger_status': 'missing', 'parse_errors': 0, 'schema_errors': 0,
+            'truncated_bytes': False, 'truncated_events': False}
+    try:
+        if not path.exists():
+            return [], meta
+        with open(path, 'rb') as handle:
+            raw = handle.read(max_bytes + 1)
+    except (PermissionError, OSError):
+        meta['ledger_status'] = 'unreadable'
+        return [], meta
+    if len(raw) > max_bytes:
+        meta['truncated_bytes'] = True
+        raw = raw[:max_bytes]
+    meta['ledger_status'] = 'ok'
+    lines = raw.decode('utf-8', errors='replace').split('\n')
+    if lines:
+        lines = lines[:-1]
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if len(events) >= max_events:
+            meta['truncated_events'] = True
+            break
+        try:
+            record = json.loads(line)
+        except ValueError:
+            meta['parse_errors'] += 1
+            continue
+        validated = dg_validate_event(record)
+        if validated is None:
+            meta['schema_errors'] += 1
+            continue
+        events.append(validated)
+    return events, meta
+
+
+def dg_aggregate(events):
+    decides = [e for e in events if e['kind'] == 'decide']
+    outcomes = [e for e in events if e['kind'] == 'outcome']
+    by_purpose, by_backend, latencies = {}, {}, []
+    abstained = cached = overridden = 0
+    estimated_cost_usd = cost_unknown_calls = 0
+    for e in decides:
+        purpose = e['purpose'] or 'unknown'
+        by_purpose[purpose] = by_purpose.get(purpose, 0) + 1
+        if e['backend']:
+            by_backend[e['backend']] = by_backend.get(e['backend'], 0) + 1
+        if e['abstained']:
+            abstained += 1
+        if e['cached']:
+            cached += 1
+        if e['overridden_for_privacy']:
+            overridden += 1
+        if e['cost_source'] in JEV_KNOWN_COST_SOURCES and e['estimated_cost_usd'] is not None:
+            estimated_cost_usd += e['estimated_cost_usd']
+        else:
+            cost_unknown_calls += 1
+        if e['latency_ms'] is not None:
+            latencies.append(e['latency_ms'])
+    return {
+        'decides': len(decides), 'outcomes': len(outcomes), 'abstained': abstained, 'cached': cached,
+        'overridden_for_privacy': overridden, 'by_purpose': by_purpose, 'by_backend': by_backend,
+        'estimated_cost_usd': round(estimated_cost_usd, 6), 'cost_unknown_calls': cost_unknown_calls,
+        'latency_ms_summary': ({'count': len(latencies), 'avg': round(statistics.fmean(latencies), 1),
+                                'min': round(min(latencies), 1), 'max': round(max(latencies), 1)}
+                               if latencies else None),
+    }
+
+
+def decision_gate_activity(now=None, ledger_path=None):
+    """Local-only decision-gate activity: today UTC + retained-total. Same guarantees as jev_classifier_activity()."""
+    now = time.time() if now is None else now
+    path = ledger_path or dg_ledger_path()
+    events, meta = dg_read_ledger(path)
+    today_utc = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
+    return {
+        'schema': 'decision-gate-classifier-activity.v1',
+        'note': 'Local observation only: decision-gate decide/outcome activity. Metadata only, no state/answer text.',
+        'ledger_path': str(path),
+        'ledger_status': meta['ledger_status'],
+        'malformed_lines_skipped': meta['parse_errors'] + meta['schema_errors'],
+        'truncated_bytes': meta['truncated_bytes'], 'truncated_events': meta['truncated_events'],
+        'today_utc': today_utc,
+        'today': dg_aggregate([e for e in events if e['day'] == today_utc]),
+        'retained_total': dg_aggregate(events),
+    }
+
+
+def decision_gate_lines(activity):
+    """Render the 'decision-gate activity' text block."""
+    today = activity['today']
+    lines = [f"  today UTC ({activity['today_utc']}): decides={today['decides']} outcomes={today['outcomes']} "
+             f"abstained={today['abstained']} cached={today['cached']} overridden_for_privacy={today['overridden_for_privacy']}"]
+    if today['decides']:
+        cost = f"${today['estimated_cost_usd']:.6f} est."
+        lines.append(f'  estimated cost={cost}')
+        if today['latency_ms_summary']:
+            lat = today['latency_ms_summary']
+            lines.append(f"  latency ms avg={lat['avg']} min={lat['min']} max={lat['max']} (n={lat['count']})")
+        if today['by_purpose']:
+            purposes = ', '.join(f'{name}={count}' for name, count in sorted(today['by_purpose'].items()))
+            lines.append(f'  purposes: {purposes}')
+        if today['by_backend']:
+            backends = ', '.join(f'{name}={count}' for name, count in sorted(today['by_backend'].items()))
+            lines.append(f'  backends: {backends}')
+    elif activity['ledger_status'] == 'missing':
+        lines.append('  no local activity observed (ledger not found)')
+    elif activity['ledger_status'] == 'unreadable':
+        lines.append('  ledger present but unreadable (permission denied?)')
+    else:
+        lines.append('  no activity recorded today')
+    if activity['malformed_lines_skipped']:
+        lines.append(f"  skipped {activity['malformed_lines_skipped']} malformed ledger line(s)")
+    return lines
+
+
 def _freshness(checked_at, now=None):
     now = time.time() if now is None else now
     age = max(0, int(now - checked_at))
@@ -1234,6 +1408,10 @@ def render(report):
     if activity:
         lines += ['', paint('Jev classifier activity (observation only)', '1')]
         lines += jev_classifier_lines(activity)
+    dg_activity = report.get('decision_gate_activity')
+    if dg_activity:
+        lines += ['', paint('decision-gate activity', '1')]
+        lines += decision_gate_lines(dg_activity)
     return '\n'.join(lines)
 
 
@@ -1406,6 +1584,7 @@ def main():
     # Read fresh every run, even on a cached provider report: this is local
     # observation data, not a remote quota response worth throttling reads of.
     report['classifier_activity'] = jev_classifier_activity()
+    report['decision_gate_activity'] = decision_gate_activity()
     if args.waybar:
         print(json.dumps(waybar_payload(report), separators=(',', ':')))
     else:

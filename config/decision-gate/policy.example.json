@@ -1,0 +1,30 @@
+{
+  "schema": "decision-gate-policy.v1",
+  "_comment": "Copy to ~/.config/decision-gate/policy.json (chmod 600) and edit. Not loaded from git -- this file is an example only. See docs/decision-gate.md for the full field reference and the hard allow_external rule.",
+  "default": {
+    "backend": "ollama",
+    "allow_external": false,
+    "allowed_sensitivity": ["private", "internal", "public"],
+    "min_p": 0.8,
+    "cache_ttl_s": 86400,
+    "daily_call_cap": 200
+  },
+  "purposes": {
+    "example-document-kind": {
+      "backend": "jev",
+      "allow_external": false,
+      "allowed_sensitivity": ["internal", "public"],
+      "min_p": 0.85,
+      "cache_ttl_s": 86400,
+      "daily_call_cap": 500
+    },
+    "example-private-triage": {
+      "backend": "ollama",
+      "allow_external": false,
+      "allowed_sensitivity": ["private", "internal"],
+      "min_p": 0.9,
+      "cache_ttl_s": 3600,
+      "daily_call_cap": 300
+    }
+  }
+}

@@ -1,0 +1,5 @@
+#!/bin/bash
+# CLI client for the decision-gate service. See docs/decision-gate.md.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+exec python3 "$ROOT/scripts/decide_cli.py" "$@"
