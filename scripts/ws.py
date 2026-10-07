@@ -476,7 +476,13 @@ def bus_unreachable(result):
     if result.returncode == 0:
         return False
     stderr = result.stderr or ""
-    return "Failed to connect to bus" in stderr
+    # systemd's actual wording varies by failure mode: "Failed to connect to
+    # bus: No such file or directory" with no XDG_RUNTIME_DIR at all, but
+    # "Failed to connect to user scope bus via local transport: ... not
+    # defined" when neither XDG_RUNTIME_DIR nor DBUS_SESSION_BUS_ADDRESS is
+    # set (the env -i case this retry exists for). Matching only the first
+    # left every stripped-env ws check reporting real units as "not enabled".
+    return "Failed to connect to" in stderr and "bus" in stderr
 
 
 def runtime_bus_env():
