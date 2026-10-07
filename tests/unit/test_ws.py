@@ -85,6 +85,61 @@ class RouteResolutionTest(unittest.TestCase):
         self.assertIsNone(ws.resolve_route(self.doc, "does-not-exist"))
 
 
+PROJECT_SESSION_FIXTURE = """
+env:
+  SYNC: /home/example/sync
+  NOTES: /home/example/sync/Vault
+  DOTFILES: /home/example/sync/src/dotfiles
+  SRC: /home/example/sync/src
+  WORKTREES: /mnt/example/scratch/tmp
+areas:
+  - name: dotfiles
+    session: Dotfiles
+    cwd: /home/example/sync/src/dotfiles
+    runs: /home/example/sync/Vault/Dotfiles/agent-runs
+projects:
+  - name: fleet-state
+    area: dotfiles
+    session: Fleet-State
+    cwd: /home/example/sync/src/fleet-state
+"""
+
+
+class DeclaredSessionsTest(unittest.TestCase):
+    def test_project_session_overriding_its_area_is_declared(self):
+        doc = ws_yaml.load(PROJECT_SESSION_FIXTURE)
+        declared = ws.declared_sessions_with_cwd(doc)
+        self.assertEqual(declared, {
+            "Dotfiles": "/home/example/sync/src/dotfiles",
+            "Fleet-State": "/home/example/sync/src/fleet-state",
+        })
+
+    def test_project_without_its_own_session_does_not_duplicate_its_area(self):
+        doc = ws_yaml.load(FIXTURE)
+        declared = ws.declared_sessions_with_cwd(doc)
+        self.assertEqual(declared, {
+            "Dotfiles": "/home/example/sync/src/dotfiles",
+            "Widgetco": "/home/example/sync/src/widgetco/app",
+        })
+
+
+class CmdUpCreatesProjectSessionTest(unittest.TestCase):
+    def test_creates_session_for_project_override_with_its_own_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace.yaml"
+            workspace.write_text(PROJECT_SESSION_FIXTURE)
+            args = argparse.Namespace(workspace=str(workspace), dry_run=False, non_interactive=True)
+            with mock.patch.object(ws, "tmux_sessions", return_value=["Dotfiles"]), \
+                 mock.patch.object(ws, "tmux") as tmux_mock, \
+                 mock.patch.object(ws, "tmux_windows", return_value=[]), \
+                 mock.patch.object(ws, "open_lanes", return_value=[]):
+                tmux_mock.return_value = subprocess.CompletedProcess([], 0, "", "")
+                ws.cmd_up(args)
+            tmux_mock.assert_any_call(
+                ["new-session", "-d", "-s", "Fleet-State", "-c", "/home/example/sync/src/fleet-state"]
+            )
+
+
 class RouteCliTest(unittest.TestCase):
     def test_route_subcommand_prints_four_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
