@@ -1,0 +1,10 @@
+[Unit]
+Description=Check host pressure (/tmp, /, swap) every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=host-pressure-alert.service
+
+[Install]
+WantedBy=timers.target

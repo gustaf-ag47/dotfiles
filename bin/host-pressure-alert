@@ -1,0 +1,38 @@
+#!/bin/bash
+set -euo pipefail
+
+tmp_pct=$(df --output=pcent /tmp | tail -1 | tr -dc '0-9')
+root_pct=$(df --output=pcent / | tail -1 | tr -dc '0-9')
+swap_total=$(awk '/SwapTotal/{print $2}' /proc/meminfo)
+swap_free=$(awk '/SwapFree/{print $2}' /proc/meminfo)
+swap_pct=0
+if [[ "$swap_total" -gt 0 ]]; then
+    swap_pct=$(( (swap_total - swap_free) * 100 / swap_total ))
+fi
+
+tmp_threshold="${HOST_PRESSURE_TMP_THRESHOLD:-80}"
+root_threshold="${HOST_PRESSURE_ROOT_THRESHOLD:-90}"
+swap_threshold="${HOST_PRESSURE_SWAP_THRESHOLD:-80}"
+
+state=normal
+reasons=()
+[[ "$tmp_pct" -ge "$tmp_threshold" ]] && { state=warning; reasons+=("/tmp at ${tmp_pct}% (>= ${tmp_threshold}%)"); }
+[[ "$root_pct" -ge "$root_threshold" ]] && { state=warning; reasons+=("/ at ${root_pct}% (>= ${root_threshold}%)"); }
+[[ "$swap_pct" -ge "$swap_threshold" ]] && { state=warning; reasons+=("swap at ${swap_pct}% (>= ${swap_threshold}%)"); }
+
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/host-pressure-alert"
+mkdir -p "$cache"
+chmod 700 "$cache"
+old=$(cat "$cache/state" 2>/dev/null || true)
+
+reason="${reasons[*]:-}"
+if [[ "$state" != "$old" && "$state" != normal ]]; then
+    notify-send -u critical "Host pressure: $state" "$reason"
+fi
+if [[ "$state" == normal && "$old" != normal && -n "$old" ]]; then
+    notify-send "Host pressure: back to normal" "/tmp ${tmp_pct}%, / ${root_pct}%, swap ${swap_pct}%"
+fi
+printf '%s\n' "$state" > "$cache/state"
+
+printf 'tmp=%s%% root=%s%% swap=%s%% state=%s reason=%s\n' \
+    "$tmp_pct" "$root_pct" "$swap_pct" "$state" "$reason"

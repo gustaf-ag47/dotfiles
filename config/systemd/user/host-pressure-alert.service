@@ -1,0 +1,6 @@
+[Unit]
+Description=Warn when /tmp, / or swap cross a pressure threshold
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/host-pressure-alert
