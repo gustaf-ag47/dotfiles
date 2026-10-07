@@ -1,7 +1,4 @@
 # role: desktop -- AUR packages, built with paru as the invoking user.
 pyprland
-warpd
-coppwr
 yubico-authenticator-bin
 yubikey-manager-qt
-typiskt
