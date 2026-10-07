@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import json
 import os
 import subprocess
@@ -201,6 +202,284 @@ def open_lanes(doc):
     return lanes
 
 
+def area_for_session(doc, session):
+    for area in doc["areas"]:
+        if area.get("session") == session:
+            return area
+    return None
+
+
+def runs_dir_for_session(doc, session):
+    area = area_for_session(doc, session)
+    if area and area.get("runs"):
+        return area["runs"]
+    route = resolve_route(doc, session.lower()) if session else None
+    if route and route.get("runs"):
+        return route["runs"]
+    notes = doc["env"].get("NOTES") or os.environ.get("NOTES", "")
+    if notes:
+        return str(Path(notes) / ".unrouted-lanes")
+    return ".unrouted-lanes"
+
+
+AGENT_PANE_SKIP_WINDOWS = {"orchestrator", "hermes"}
+
+
+def tmux_agent_panes():
+    result = tmux(
+        [
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{window_name}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
+        ]
+    )
+    if result.returncode != 0:
+        return []
+    panes = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 5:
+            continue
+        session, window, pane_pid, command, cwd = parts
+        panes.append(
+            {
+                "session": session,
+                "window": window,
+                "pane_pid": pane_pid,
+                "command": command,
+                "cwd": cwd,
+            }
+        )
+    return panes
+
+
+def unmatched_agent_panes(doc, session_filter=None, panes=None, lanes=None):
+    lanes = open_lanes(doc) if lanes is None else lanes
+    lane_windows = {f"{lane.get('session')}:{lane.get('window')}" for lane in lanes}
+    panes = tmux_agent_panes() if panes is None else panes
+    result = []
+    for pane in panes:
+        if pane["command"] != "pi":
+            continue
+        if pane["window"].lower() in AGENT_PANE_SKIP_WINDOWS:
+            continue
+        if session_filter and pane["session"] != session_filter:
+            continue
+        key = f"{pane['session']}:{pane['window']}"
+        if key in lane_windows:
+            continue
+        result.append(pane)
+    return result
+
+
+def git_branch_for(cwd):
+    result = subprocess.run(
+        ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    return branch or None
+
+
+def pi_session_file_for_cwd(cwd, sessions_root=None):
+    root = Path(sessions_root) if sessions_root else Path.home() / ".pi/agent/sessions"
+    normalized = str(cwd).rstrip("/").lstrip("/")
+    session_dir = root / f"--{normalized.replace('/', '-')}--"
+    if not session_dir.is_dir():
+        return None
+    files = sorted(session_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(files[0]) if files else None
+
+
+def find_pi_pid(pane_pid, ps_text=None):
+    if ps_text is None:
+        result = subprocess.run(["ps", "-eo", "pid,ppid,comm"], capture_output=True, text=True)
+        if result.returncode != 0:
+            return None
+        ps_text = result.stdout
+    children = {}
+    comms = {}
+    for line in ps_text.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid, ppid, comm = parts
+        children.setdefault(ppid, []).append(pid)
+        comms[pid] = comm
+    stack = [str(pane_pid)]
+    seen = set()
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if comms.get(current) == "pi":
+            return current
+        stack.extend(children.get(current, []))
+    return None
+
+
+def find_pi_env_var(pid, var, proc_root="/proc"):
+    if not pid:
+        return None
+    path = Path(proc_root) / str(pid) / "environ"
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    prefix = f"{var}=".encode()
+    for item in data.split(b"\x00"):
+        if item.startswith(prefix):
+            return item[len(prefix):].decode(errors="replace")
+    return None
+
+
+def build_adopt_manifest(doc, pane, proc_root="/proc", sessions_root=None, ps_text=None):
+    pi_pid = find_pi_pid(pane["pane_pid"], ps_text=ps_text)
+    parent = find_pi_env_var(pi_pid, "PI_DELEGATE_PARENT", proc_root=proc_root)
+    run_id = (
+        "adopted-"
+        + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        + f"-{pane['pane_pid']}"
+    )
+    runs = runs_dir_for_session(doc, pane["session"])
+    manifest = {
+        "run_id": run_id,
+        "session": pane["session"],
+        "window": pane["window"],
+        "cwd": pane["cwd"],
+        "branch": git_branch_for(pane["cwd"]),
+        "pi_session": pi_session_file_for_cwd(pane["cwd"], sessions_root=sessions_root),
+        "parent": parent,
+        "resume": "confirm",
+        "status": "open",
+        "adopted": True,
+        "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    return runs, run_id, manifest
+
+
+def cmd_adopt(args):
+    doc = load_workspace(Path(args.workspace))
+    panes = unmatched_agent_panes(doc, session_filter=args.session)
+    plan = [build_adopt_manifest(doc, pane) for pane in panes]
+    if not plan:
+        print("ws adopt: nothing to adopt")
+        return 0
+    for runs, run_id, manifest in plan:
+        lane_path = Path(runs) / ".lanes" / f"{run_id}.json"
+        if args.dry_run:
+            print(f"would adopt {manifest['session']}:{manifest['window']} -> {lane_path}")
+            continue
+        lane_path.parent.mkdir(parents=True, exist_ok=True)
+        lane_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        print(f"adopted {manifest['session']}:{manifest['window']} -> {lane_path}")
+    return 0
+
+
+def looks_like_raw_tmux_target(session):
+    return bool(session) and session[0] == "$" and session[1:].isdigit()
+
+
+def resolve_tmux_session_name(raw_target):
+    result = tmux(["display-message", "-p", "-t", f"{raw_target}:", "#{session_name}"])
+    if result.returncode != 0:
+        return None
+    name = result.stdout.strip()
+    return name or None
+
+
+def cmd_lane_fix(args):
+    doc = load_workspace(Path(args.workspace))
+    dirs = lane_manifest_dirs(doc)
+    notes = doc["env"].get("NOTES") or os.environ.get("NOTES", "")
+    if notes:
+        dirs.append(Path(notes) / ".unrouted-lanes" / ".lanes")
+    windows = set(tmux_windows())
+    actions = []
+    seen_dirs = set()
+    for lane_dir in dirs:
+        if str(lane_dir) in seen_dirs or not lane_dir.exists():
+            continue
+        seen_dirs.add(str(lane_dir))
+        for manifest_path in sorted(lane_dir.glob("*.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if manifest.get("status") == "closed":
+                continue
+            session = manifest.get("session", "")
+            if not looks_like_raw_tmux_target(session):
+                continue
+            resolved = resolve_tmux_session_name(session)
+            if resolved is None:
+                continue
+            manifest["session"] = resolved
+            window_key = f"{resolved}:{manifest.get('window')}"
+            if window_key in windows:
+                target_runs = runs_dir_for_session(doc, resolved)
+                target_path = Path(target_runs) / ".lanes" / manifest_path.name
+                actions.append(f"fix: {manifest_path} -> session={resolved}, move to {target_path}")
+                if not args.dry_run:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_text(json.dumps(manifest, indent=2) + "\n")
+                    if target_path != manifest_path:
+                        manifest_path.unlink()
+            else:
+                manifest["status"] = "closed"
+                actions.append(f"fix: {manifest_path} -> session={resolved}, window gone, closing")
+                if not args.dry_run:
+                    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    if not actions:
+        print("ws lane fix: nothing to fix")
+    else:
+        print("\n".join(actions))
+    return 0
+
+
+def bus_unreachable(result):
+    if result.returncode == 0:
+        return False
+    stderr = result.stderr or ""
+    return "Failed to connect to bus" in stderr
+
+
+def runtime_bus_env():
+    env = dict(os.environ)
+    uid = os.getuid()
+    env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    env["DBUS_SESSION_BUS_ADDRESS"] = env.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path=/run/user/{uid}/bus"
+    return env
+
+
+def check_declared_units(declared_units):
+    missing = []
+    bus_env = None
+    unreachable = False
+    for unit in sorted(declared_units):
+        result = subprocess.run(["systemctl", "--user", "is-enabled", unit], capture_output=True, text=True)
+        if bus_unreachable(result):
+            if bus_env is None:
+                bus_env = runtime_bus_env()
+            result = subprocess.run(
+                ["systemctl", "--user", "is-enabled", unit], capture_output=True, text=True, env=bus_env
+            )
+            if bus_unreachable(result):
+                unreachable = True
+                continue
+        if result.returncode != 0 and "enabled" not in result.stdout:
+            missing.append(unit)
+    if unreachable:
+        return "unknown", missing
+    if missing:
+        return "not_enabled", missing
+    return "ok", missing
+
+
 def cmd_check(args):
     doc = load_workspace(Path(args.workspace))
     lines = []
@@ -261,15 +540,10 @@ def cmd_check(args):
         lines.append("pane ids in cron prompts: none found")
 
     declared_units = {u["name"] for u in doc["units"] if u.get("name")}
-    missing_units = []
-    for unit in declared_units:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-enabled", unit],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0 and "enabled" not in result.stdout:
-            missing_units.append(unit)
-    if missing_units:
+    unit_status, missing_units = check_declared_units(declared_units)
+    if unit_status == "unknown":
+        lines.append("units: unknown (no user systemd bus)")
+    elif unit_status == "not_enabled":
         lines.append(f"units: not enabled {', '.join(sorted(missing_units))}")
     else:
         lines.append(f"units: all {len(declared_units)} declared units enabled")
@@ -282,6 +556,9 @@ def cmd_check(args):
         lines.append(f"open lanes with no matching window: {', '.join(lanes_without_window)}")
     else:
         lines.append(f"open lanes: {len(lanes)}, all have a matching window")
+
+    unadopted = unmatched_agent_panes(doc, lanes=lanes)
+    lines.append(f"agent panes without a lane manifest: {len(unadopted)}")
 
     homelab_root = Path(doc["env"].get("SRC", "")) / "homelab"
     homelab_validators = [
@@ -393,6 +670,17 @@ def main():
     up_parser.add_argument("--dry-run", action="store_true")
     up_parser.add_argument("--non-interactive", action="store_true")
     up_parser.set_defaults(func=cmd_up)
+
+    adopt_parser = sub.add_parser("adopt")
+    adopt_parser.add_argument("--dry-run", action="store_true")
+    adopt_parser.add_argument("--session")
+    adopt_parser.set_defaults(func=cmd_adopt)
+
+    lane_parser = sub.add_parser("lane")
+    lane_sub = lane_parser.add_subparsers(dest="lane_command", required=True)
+    lane_fix_parser = lane_sub.add_parser("fix")
+    lane_fix_parser.add_argument("--dry-run", action="store_true")
+    lane_fix_parser.set_defaults(func=cmd_lane_fix)
 
     args = parser.parse_args()
     return args.func(args)
