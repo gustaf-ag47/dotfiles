@@ -18,6 +18,24 @@ def write_fake_pi(commands_dir):
     (commands_dir / "pi").chmod(0o755)
 
 
+def write_fake_git(commands_dir, repo_root):
+    # Only the subset delegate.sh's --worktree path calls in dry run: resolve
+    # the repo root and a base ref. Real git's behavior here (shallow clone,
+    # detached HEAD, safe.directory) is CI-runner-specific and not what this
+    # test is about; stub it out so the guard test is deterministic everywhere.
+    (commands_dir / "git").write_text(
+        "#!/bin/bash\n"
+        "case \" $* \" in\n"
+        "*' --show-toplevel '*) printf '%s\\n' " + repr(str(repo_root)) + " ;;\n"
+        "*' --abbrev-ref '*) printf 'main\\n' ;;\n"
+        "*' symbolic-ref '*) exit 1 ;;\n"
+        "*' show-ref '*) exit 1 ;;\n"
+        "*) exit 0 ;;\n"
+        "esac\n"
+    )
+    (commands_dir / "git").chmod(0o755)
+
+
 def write_fake_tmux(commands_dir, session_window):
     (commands_dir / "tmux").write_text(
         "#!/bin/bash\n"
@@ -40,8 +58,11 @@ class WorktreeGuardTest(unittest.TestCase):
             root = Path(tmp)
             commands = root / "bin"
             commands.mkdir()
+            fake_repo = root / "fake-repo"
+            fake_repo.mkdir()
             write_fake_tmux(commands, "demo:caller-window")
             write_fake_pi(commands)
+            write_fake_git(commands, fake_repo)
             env = os.environ | {
                 "PATH": str(commands) + os.pathsep + os.environ["PATH"],
                 "HOME": tmp,
@@ -74,11 +95,30 @@ class WorktreeGuardTest(unittest.TestCase):
 
     def test_persistent_worktrees_passes_guard(self):
         # dir=str(ROOT): the guard rejects /tmp, and on a CI runner without a
-        # TMPDIR override $TMPDIR/tempfile.TemporaryDirectory() IS /tmp.
-        with tempfile.TemporaryDirectory(prefix="worktrees-", dir=str(ROOT)) as persistent:
-            run = self.run_delegate(
-                ["--worktree", "some-branch", "--cwd", str(ROOT)],
-                {"WORKTREES": persistent},
+        # TMPDIR override tempfile.TemporaryDirectory() defaults INTO /tmp.
+        with tempfile.TemporaryDirectory(prefix="delegate-guard-wt-", dir=str(ROOT)) as tmp:
+            root = Path(tmp)
+            commands = root / "bin"
+            commands.mkdir()
+            fake_repo = root / "fake-repo"
+            fake_repo.mkdir()
+            persistent = root / "worktrees"
+            persistent.mkdir()
+            write_fake_tmux(commands, "demo:caller-window")
+            write_fake_pi(commands)
+            write_fake_git(commands, fake_repo)
+            env = os.environ | {
+                "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                "HOME": tmp,
+                "TMUX": "fake-server",
+                "TMUX_PANE": "%1",
+                "WORKTREES": str(persistent),
+            }
+            run = subprocess.run(
+                [str(DELEGATE), "--task", "guard-test", "--session", "Demo",
+                 "--model", "fixture/model", "--dry-run",
+                 "--worktree", "some-branch", "--cwd", str(fake_repo)],
+                env=env, text=True, capture_output=True, timeout=20,
             )
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn(f"{persistent}/wt-some-branch", run.stdout)

@@ -174,13 +174,18 @@ if [ -n "$WORKTREE" ]; then
 	mkdir -p "$WORKTREES"
 	# Do not assume origin/main: this repo may use master (or anything else).
 	# Ask the remote what its HEAD is, and fall back to the local branch.
-	base_ref="$(git -C "$repo_root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+	# A plain `var=$(cmd)` assignment propagates cmd's own exit status under
+	# set -e: a repo with no origin/HEAD symbolic ref (shallow/CI checkouts
+	# routinely have none) killed the whole script here before this had a
+	# chance to fall through to the origin/main / origin/master candidates.
+	base_ref="$(git -C "$repo_root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)" || true
 	if [ -z "$base_ref" ]; then
 		for cand in origin/main origin/master; do
 			git -C "$repo_root" show-ref -q --verify "refs/remotes/$cand" && { base_ref="$cand"; break; }
 		done
 	fi
-	[ -n "$base_ref" ] || base_ref="$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)"
+	[ -n "$base_ref" ] || base_ref="$(git -C "$repo_root" rev-parse --abbrev-ref HEAD 2>/dev/null)" || true
+	[ -n "$base_ref" ] || die "could not resolve a base ref for --worktree $WORKTREE"
 	if [ "$DRY" = "1" ]; then
 		echo "would: git -C $repo_root worktree add $wt_dir -b $WORKTREE $base_ref"
 	elif [ -d "$wt_dir" ]; then
