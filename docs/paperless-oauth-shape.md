@@ -35,6 +35,14 @@ run a safe existing test document. The current deployed proxy was deliberately
 not copied or restarted because doing so would target the operator's main
 checkout and interrupt active agents.
 
-`ai-pipeline.py` contains bounded delayed retries via `ai-retry-wait`; LiteLLM
-has `num_retries: 0`. This should prevent request retry amplification, though a
-live 429/503 exercise remains outstanding.
+`ai-pipeline.py` contains bounded delayed retries via `ai-retry-wait` (default
+three retries, 180 minutes apart); LiteLLM has `num_retries: 0`. Logs for the
+running paperless-gpt container showed no 429/503 test, so live error handling
+was not exercised. Operator direction explicitly says not to copy into the live
+proxy for this test; deployment + request smoke are therefore an operator-owned
+follow-up, not authorization to alter the main checkout.
+
+CI verification: PR #30 all required checks passed at head
+`c29fa7dcadb1dce73c8d20b07a7b12113b6efb1a`. Target `master` latest run
+`37458990418` (head `e9991c4`) completed successfully. PR remains OPEN and
+MERGEABLE, with no review decision; no merge authorization was given.
