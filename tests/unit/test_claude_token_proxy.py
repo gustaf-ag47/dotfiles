@@ -370,6 +370,21 @@ class PickPolicyTests(ProxyIsolationMixin, TestCase):
         self.assertEqual(out["messages"][0]["content"], "long app instructions")
         self.assertEqual(out["messages"][1]["content"][0], payload["messages"][0]["content"][0])
 
+        text_payload = {"system": "S" * 5001, "messages": [{"role": "user", "content": "document"}]}
+        out = json.loads(proxy.ensure_claude_code_identity(json.dumps(text_payload).encode(), reshape=True))
+        self.assertEqual(out["system"], [{"type": "text", "text": ident}])
+        self.assertTrue(out["messages"][0]["content"].startswith("S" * 5001 + "\n\n"))
+
+        mixed_payload = {"system": [{"type": "text", "text": "Instructions"}], "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "receipt"},
+                {"type": "image", "source": {"type": "base64", "data": "xyz"}},
+            ]}
+        ]}
+        out = json.loads(proxy.ensure_claude_code_identity(json.dumps(mixed_payload).encode(), reshape=True))
+        self.assertTrue(out["messages"][0]["content"][0]["text"].startswith("Instructions"))
+        self.assertEqual(out["messages"][0]["content"][1], mixed_payload["messages"][0]["content"][1])
+
     def test_error_message_extracts_type_and_message(self):
         raw = b'{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}'
         self.assertEqual(proxy.error_message(raw), "rate_limit_error: slow down")
