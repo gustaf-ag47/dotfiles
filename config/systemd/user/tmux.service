@@ -5,6 +5,11 @@ Documentation=man:tmux(1)
 [Service]
 Type=forking
 Environment=DISPLAY=:0
+# A tmux server started outside this unit (an attached terminal, agents) must
+# never be adopted: `new-session -d` would exit at once, systemd would see the
+# service as dead and run ExecStop, i.e. kill-server, taking every session down
+# (happened when `make install` ran `enable --now` with a live server).
+ExecCondition=/bin/sh -c '! /usr/bin/tmux has-session 2>/dev/null'
 ExecStart=/usr/bin/tmux new-session -d
 ExecStop=%h/sync/src/dotfiles/bin/tmux-safe-save
 ExecStop=/usr/bin/tmux kill-server
