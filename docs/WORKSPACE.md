@@ -76,8 +76,8 @@ which live sessions aren't declared, dirty/ahead/behind repos, worktrees
 under `/tmp` (forbidden — see `delegate.sh`'s `WORKTREES` guard), pane ids
 (`%NNNN`) found in `~/.hermes/cron/jobs.json`, declared units that aren't
 enabled, open lane manifests with no matching tmux window, and — best effort,
-only if present on this host — `$SRC/rissne`'s own hardware/boot-order
-validators for the host layer. Exits non-zero only on hard failures (missing
+only if present on this host — `$SRC/homelab`'s own hardware/boot-order and
+live-drift validators for the host layer. Exits non-zero only on hard failures (missing
 env, a `/tmp` worktree); everything else is reported but not fatal.
 
 ```
