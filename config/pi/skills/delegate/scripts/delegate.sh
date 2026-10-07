@@ -117,6 +117,13 @@ fi
 [ -n "$SESSION" ] || die "no tmux session found; pass --session"
 tmux has-session -t "$SESSION" 2>/dev/null || die "no such tmux session: $SESSION"
 
+# tmux accepts a session by name or by its numeric id ($0, $1, ...); both are
+# "valid" per has-session above. A raw id stored verbatim in the lane manifest
+# cannot be resolved later (the id changes across server restarts and ws route
+# only knows names), so normalize to the current session NAME once, here.
+normalized_session="$(tmux display-message -p -t "$SESSION:" '#{session_name}' 2>/dev/null)" || true
+[ -n "$normalized_session" ] && SESSION="$normalized_session"
+
 # Resolve the parent from THIS pane, not from the session's active window:
 # `tmux display-message -p '#S:#W'` reports whichever window the client is
 # looking at, so an orchestrator spawning from a background pane told every
@@ -150,6 +157,36 @@ resolve_parent_window() {
 	printf 'unknown'
 }
 PARENT_WINDOW="$(resolve_parent_window)"
+# $TMUX_PANE pins the exact pane regardless of window name collisions; kept as
+# a fallback field on the manifest for when PARENT_WINDOW's window name turns
+# out not to be a reliable address (see check below).
+PARENT_PANE="${TMUX_PANE:-unknown}"
+
+# session:window-name only survives a tmux restart if the name is unique in
+# its session and not a generic shell name nobody meant to make addressable.
+# Warn loudly rather than fail: a stale/ambiguous parent means a completion
+# report could land on the wrong pane, not that delegation should be blocked.
+check_parent_window_name() {
+	case "$PARENT_WINDOW" in
+	*:*) ;;
+	*) return ;;
+	esac
+	local parent_session="${PARENT_WINDOW%%:*}" parent_window_name="${PARENT_WINDOW#*:}" matches
+	case "$parent_window_name" in
+	zsh | bash | pi)
+		echo "delegate: warning: parent window '$PARENT_WINDOW' has a generic name ('$parent_window_name'); rename it (tmux rename-window) so completion reports land reliably. Recording parent_pane=$PARENT_PANE as a fallback." >&2
+		return
+		;;
+	esac
+	# grep -c returns 1 (no matches) as often as 0 (matches found); a bare
+	# `var=$(... | grep -c ...)` assignment propagates THAT exit status under
+	# set -e, killing the whole script on the common zero-match case.
+	matches="$(tmux list-windows -t "$parent_session" -F '#{window_name}' 2>/dev/null | grep -cx "$parent_window_name")" || true
+	if [ "${matches:-0}" -gt 1 ] 2>/dev/null; then
+		echo "delegate: warning: parent window name '$parent_window_name' is not unique in session '$parent_session' ($matches matches); rename it (tmux rename-window) so completion reports land reliably. Recording parent_pane=$PARENT_PANE as a fallback." >&2
+	fi
+}
+check_parent_window_name
 
 # ── worktree isolation (children that write code must not share a checkout) ──
 # Fail closed: WORKTREES must be set to a persistent mount, never /tmp (tmpfs
@@ -246,7 +283,7 @@ would delegate:
   cwd     : $CWD
   model   : $MODEL ($PROVIDER via $AGENT)
   brief   : ${BRIEF:-<none>}
-  parent  : $PARENT_WINDOW (pid $PPID)
+  parent  : $PARENT_WINDOW (pid $PPID, parent_pane $PARENT_PANE)
   run id  : $RUN_ID
 EOF
 	exit 0
@@ -346,9 +383,9 @@ LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
 if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	# <<- strips only LEADING TABS, and strips every one of them from every
 	# line, so python's own indentation below is built from spaces, not tabs.
-	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" <<-'PY'
+	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" <<-'PY'
 	import json, sys, datetime
-	(path, session, window, cwd, branch, model, brief, parent, resume, run_id) = sys.argv[1:11]
+	(path, session, window, cwd, branch, model, brief, parent, resume, run_id, parent_pane) = sys.argv[1:12]
 	manifest = {
 	    "run_id": run_id,
 	    "session": session,
@@ -359,6 +396,7 @@ if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	    "brief": brief,
 	    "pi_session": None,
 	    "parent": parent,
+	    "parent_pane": parent_pane,
 	    "resume": resume,
 	    "status": "open",
 	    "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

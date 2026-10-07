@@ -29,7 +29,14 @@ class JevDelegateTests(unittest.TestCase):
 printf '%s\\n' "$*" >> "$TEST_ROOT/tmux-calls"
 case "$1" in
   capture-pane) printf '1.0%%/256K\\n' ;;
-  display-message) printf '%s\\n' '$7' ;;
+  display-message)
+    target="$4"
+    fmt="$5"
+    case "$fmt" in
+      '#{session_name}') printf '%s\\n' "${target%:}" ;;
+      *) printf '%s\\n' '$7' ;;
+    esac
+    ;;
 esac
 exit 0
 ''')
