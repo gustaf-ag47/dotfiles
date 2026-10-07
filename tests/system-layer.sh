@@ -136,8 +136,10 @@ done
 
 if [ "${SYSTEM_LAYER_RESOLVE:-0}" = 1 ]; then
 	echo "-- every declared package exists in today's Arch repos"
+	declare -A REPO=()
+	while read -r name; do REPO[$name]=1; done < <(pacman -Slq 2>/dev/null)
 	while IFS= read -r pkg; do
-		if pacman -Si "$pkg" >/dev/null 2>&1; then ok "$pkg"; else no "$pkg not in the repos"; fi
+		if [ -n "${REPO[$pkg]+x}" ]; then ok "$pkg"; else no "$pkg not in the repos"; fi
 	done < <(cat system/*/packages system/*/*/packages 2>/dev/null |
 		sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' | sort -u)
 
@@ -153,7 +155,7 @@ if [ "${SYSTEM_LAYER_RESOLVE:-0}" = 1 ]; then
 			aurpk=()
 		fi
 		for pkg in "${aurpk[@]}"; do
-			if pacman -Si "$pkg" >/dev/null 2>&1; then
+			if [ -n "${REPO[$pkg]+x}" ]; then
 				no "$pkg is in the official repos: move it to packages"
 			elif printf '%s\n' "$found" | grep -qx "$pkg"; then
 				ok "aur: $pkg"

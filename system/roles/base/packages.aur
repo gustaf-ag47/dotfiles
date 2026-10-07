@@ -1,4 +1,3 @@
 # role: base -- AUR packages, built with paru as the invoking user.
 pam-gnupg
 paru
-urlview

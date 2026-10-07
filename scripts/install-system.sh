@@ -120,7 +120,13 @@ list_entries() { # strip comments and blank lines
 	sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' "$1"
 }
 
-is_installed() { command -v pacman >/dev/null 2>&1 && pacman -Q "$1" >/dev/null 2>&1; }
+# One pacman query, then lookups: a pacman process per package made --list
+# and --undeclared take minutes.
+declare -A INSTALLED=()
+if command -v pacman >/dev/null 2>&1; then
+	while read -r name; do INSTALLED[$name]=1; done < <(pacman -Qq 2>/dev/null)
+fi
+is_installed() { [ -n "${INSTALLED[$1]+x}" ]; }
 
 # --- review modes (read-only, no root) ----------------------------------------
 if [ "$MODE" = list ]; then
@@ -153,8 +159,10 @@ if [ "$MODE" = undeclared ]; then
 	if [ ${#extra[@]} -eq 0 ]; then
 		echo "  (none)"
 	else
+		declare -A FOREIGN=()
+		while read -r name; do FOREIGN[$name]=1; done < <(pacman -Qmq 2>/dev/null)
 		for p in "${extra[@]}"; do
-			if pacman -Qmq "$p" >/dev/null 2>&1; then echo "  $p (AUR/foreign)"; else echo "  $p"; fi
+			if [ -n "${FOREIGN[$p]+x}" ]; then echo "  $p (AUR/foreign)"; else echo "  $p"; fi
 		done
 		echo
 		echo "${#extra[@]} package(s). Add each to a role or host, or remove it (pacman -Rns)."
@@ -193,7 +201,7 @@ if [ ${#packages[@]} -gt 0 ]; then
 	missing=()
 	if command -v pacman >/dev/null 2>&1 && [ "$LIVE" -eq 1 ]; then
 		for p in "${packages[@]}"; do
-			pacman -Q "$p" >/dev/null 2>&1 || missing+=("$p")
+			is_installed "$p" || missing+=("$p")
 		done
 	else
 		missing=("${packages[@]}") # cannot query a fake root: report all
