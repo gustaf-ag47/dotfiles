@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -110,16 +111,59 @@ class RouteCliTest(unittest.TestCase):
 
 
 class TmpWorktreeGuardTest(unittest.TestCase):
-    def test_tmp_worktrees_are_reported_as_drift(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fake_tmp = Path(tmp) / "tmp-root"
-            fake_tmp.mkdir()
-            (fake_tmp / "wt-stale-lane").mkdir()
-            found = []
-            for entry in fake_tmp.glob("wt-*"):
-                found.append(str(entry))
-            self.assertEqual(len(found), 1)
-            self.assertTrue(found[0].endswith("wt-stale-lane"))
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        root = Path(self.tmpdir.name)
+        self.repo = root / "repo"
+        self.repo.mkdir()
+        self.fake_tmp = root / "tmp-root"
+        self.fake_tmp.mkdir()
+
+        def git(*args):
+            subprocess.run(
+                ["git", "-C", str(self.repo), *args],
+                check=True, capture_output=True, text=True,
+                env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+            )
+
+        git("init", "-q", "-b", "main")
+        (self.repo / "README").write_text("hi\n")
+        git("add", "README")
+        git("commit", "-q", "-m", "init")
+
+        # A real worktree, under the fake /tmp.
+        self.real_worktree = self.fake_tmp / "wt-real-lane"
+        git("worktree", "add", str(self.real_worktree), "-b", "real-lane")
+
+        # A plain file matching the naming convention: not a worktree.
+        (self.fake_tmp / "wt-skipped.txt").write_text("not a worktree\n")
+
+        # A directory git has never heard of: also not a worktree, but
+        # still worth surfacing separately so it doesn't vanish silently.
+        (self.fake_tmp / "wt-stale-lane").mkdir()
+
+    def test_real_worktree_is_the_only_hard_failure(self):
+        found = ws.git_worktrees_under([str(self.repo)], tmp_root=str(self.fake_tmp))
+        self.assertEqual(found, [str(self.real_worktree)])
+
+    def test_log_file_and_stray_dir_are_not_reported_as_worktrees(self):
+        found = ws.git_worktrees_under([str(self.repo)], tmp_root=str(self.fake_tmp))
+        joined = " ".join(found)
+        self.assertNotIn("wt-skipped.txt", joined)
+        self.assertNotIn("wt-stale-lane", joined)
+
+    def test_stray_dir_is_listed_separately_not_as_a_failure(self):
+        found = ws.git_worktrees_under([str(self.repo)], tmp_root=str(self.fake_tmp))
+        stray = ws.stray_tmp_dirs(found, tmp_root=str(self.fake_tmp))
+        self.assertEqual(stray, [str(self.fake_tmp / "wt-stale-lane")])
+        self.assertNotIn(str(self.real_worktree), stray)
+
+    def test_log_file_never_appears_in_stray_dirs(self):
+        found = ws.git_worktrees_under([str(self.repo)], tmp_root=str(self.fake_tmp))
+        stray = ws.stray_tmp_dirs(found, tmp_root=str(self.fake_tmp))
+        self.assertTrue(all(not s.endswith(".txt") for s in stray))
 
 
 class LaneManifestTest(unittest.TestCase):
