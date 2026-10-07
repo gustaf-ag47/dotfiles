@@ -1,5 +1,6 @@
 """Exercise the watcher against a fake tmux; never send keys to a real pane."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -85,6 +86,83 @@ class DelegateContractTest(unittest.TestCase):
             with self.subTest(line=line):
                 _, keys = self.run_watcher(line)
                 self.assertIn("/goal", keys)
+
+
+class LaneManifestResultFieldsTest(unittest.TestCase):
+    def run_watcher_with_manifest(self, child_line, has_session=True):
+        with tempfile.TemporaryDirectory(prefix="delegate-contract-manifest-") as tmp:
+            root = Path(tmp)
+            commands = root / "bin"
+            commands.mkdir()
+            has_session_rc = "0" if has_session else "1"
+            (commands / "tmux").write_text(
+                "#!/bin/bash\n"
+                "case \"$1\" in\n"
+                "capture-pane) printf '%s\\n' '2.0%/1.0M' \"$CHILD_LINE\" ;;\n"
+                f"has-session) exit {has_session_rc} ;;\n"
+                "list-windows) echo child ;;\n"
+                "list-panes) exit 0 ;;\n"
+                "send-keys) printf '%s\\n' \"$*\" >> \"$KEY_LOG\" ;;\n"
+                "esac\n"
+            )
+            (commands / "sleep").write_text("#!/bin/bash\nexit 0\n")
+            for name in ("tmux", "sleep"):
+                (commands / name).chmod(0o755)
+            manifest_path = root / "lane.json"
+            manifest_path.write_text(json.dumps({
+                "run_id": "run-id", "session": "demo", "window": "child", "status": "open",
+            }))
+            env = os.environ | {
+                "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                "HOME": tmp,
+                "CHILD_LINE": child_line,
+                "KEY_LOG": str(root / "keys"),
+                "PI_DELEGATE_MAILBOX": str(root / "mailbox"),
+                "PI_DELEGATE_POLL_SECS": "0",
+                "PI_DELEGATE_IDLE_STREAK": "1",
+                "PI_DELEGATE_MIN_GRACE_SECS": "0",
+            }
+            run = subprocess.run(
+                [str(WATCHER), "demo:child", "unknown", "run-id", tmp, "example", str(manifest_path)],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            return json.loads(manifest_path.read_text())
+
+    def test_done_line_fills_result_fields(self):
+        manifest = self.run_watcher_with_manifest("example: DONE abcdef1234567 - docs/report.md")
+        self.assertEqual(manifest["status"], "closed")
+        self.assertEqual(manifest["result"], "example: DONE abcdef1234567 - docs/report.md")
+        self.assertEqual(manifest["result_status"], "DONE")
+        self.assertEqual(manifest["result_sha"], "abcdef1234567")
+        self.assertEqual(manifest["result_path"], "docs/report.md")
+        self.assertIn("finished_at", manifest)
+        self.assertIn("mailbox_record", manifest)
+        self.assertTrue(manifest["mailbox_record"])
+
+    def test_blocker_line_fills_result_fields(self):
+        manifest = self.run_watcher_with_manifest("example: BLOCKER none - docs/blocker.md")
+        self.assertEqual(manifest["status"], "closed")
+        self.assertEqual(manifest["result_status"], "BLOCKER")
+        self.assertEqual(manifest["result_sha"], "none")
+        self.assertEqual(manifest["result_path"], "docs/blocker.md")
+
+    def test_no_result_line_records_verdict_as_status(self):
+        manifest = self.run_watcher_with_manifest("nothing resembling a result line here")
+        self.assertEqual(manifest["status"], "closed")
+        self.assertIsNone(manifest["result"])
+        self.assertEqual(manifest["result_status"], "idle")
+        self.assertIsNone(manifest["result_sha"])
+        self.assertIsNone(manifest["result_path"])
+
+    def test_window_gone_records_that_verdict(self):
+        manifest = self.run_watcher_with_manifest("", has_session=False)
+        self.assertEqual(manifest["status"], "closed")
+        self.assertIsNone(manifest["result"])
+        self.assertEqual(manifest["result_status"], "window-gone")
 
 
 if __name__ == "__main__":

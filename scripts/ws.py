@@ -2,8 +2,10 @@ import argparse
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -539,6 +541,54 @@ def find_manifest_path(doc, target):
     return None
 
 
+# Matches watch-child.sh's terminal result line (the contract delegate.sh's
+# brief template and child_reported_result both key off):
+#   <task>: PASS|BLOCKER|DONE|FAILED <sha|none> - <path>
+# The task name may itself contain a colon, so the fields are lifted off the
+# end of the line rather than split on the first ": ".
+RESULT_LINE_RE = re.compile(
+    r"^(?P<task>[^\s<>][^<>]*): (?P<status>PASS|BLOCKER|DONE|FAILED) "
+    r"(?P<sha>[0-9a-fA-F]{7,40}|none) - (?P<path>\S+)\s*$"
+)
+
+
+def parse_result_line(line):
+    if not line:
+        return None
+    stripped = line.strip()
+    match = RESULT_LINE_RE.match(stripped)
+    if not match:
+        return None
+    return {
+        "result": stripped,
+        "result_status": match.group("status"),
+        "result_sha": match.group("sha"),
+        "result_path": match.group("path"),
+    }
+
+
+def utc_now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_manifest_atomic(path, manifest):
+    # Same hazard as watch-child.sh's close_lane_manifest: a reader (ws up,
+    # ws lanes) racing a partial write must never see a half-written file.
+    directory = path.parent
+    fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=".manifest-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def cmd_lane_set(args):
     doc = load_workspace(Path(args.workspace))
     manifest_path = find_manifest_path(doc, args.target)
@@ -559,6 +609,20 @@ def cmd_lane_set(args):
             )
             return 1
         updates[key] = parse_lane_set_value(raw_value)
+    if getattr(args, "result", None):
+        parsed = parse_result_line(args.result)
+        if parsed is None:
+            print(
+                f"ws lane set: --result does not match '<task>: PASS|BLOCKER|DONE|FAILED "
+                f"<sha|none> - <path>': {args.result!r}",
+                file=sys.stderr,
+            )
+            return 1
+        updates.update(parsed)
+        updates["finished_at"] = utc_now_iso()
+    if not updates:
+        print("ws lane set: nothing to set (no assignments, no --result)", file=sys.stderr)
+        return 1
     try:
         manifest = json.loads(manifest_path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
@@ -569,8 +633,84 @@ def cmd_lane_set(args):
     if args.dry_run:
         print(f"would set {manifest_path}: {change_desc}")
         return 0
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    write_manifest_atomic(manifest_path, manifest)
     print(f"set {manifest_path}: {change_desc}")
+    return 0
+
+
+def cmd_lane_close(args):
+    doc = load_workspace(Path(args.workspace))
+    manifest_path = find_manifest_path(doc, args.target)
+    if manifest_path is None:
+        print(f"ws lane close: no manifest found for {args.target!r}", file=sys.stderr)
+        return 1
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"ws lane close: could not read {manifest_path}: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "result", None):
+        parsed = parse_result_line(args.result)
+        if parsed is None:
+            print(
+                f"ws lane close: --result does not match '<task>: PASS|BLOCKER|DONE|FAILED "
+                f"<sha|none> - <path>': {args.result!r}",
+                file=sys.stderr,
+            )
+            return 1
+        manifest.update(parsed)
+    manifest["status"] = "closed"
+    manifest["finished_at"] = utc_now_iso()
+    if args.dry_run:
+        print(f"would close {manifest_path}")
+        return 0
+    write_manifest_atomic(manifest_path, manifest)
+    print(f"closed {manifest_path}")
+    return 0
+
+
+def cmd_lanes(args):
+    doc = load_workspace(Path(args.workspace))
+    cutoff = args.finished_since
+    rows = []
+    seen_dirs = set()
+    for lane_dir in lane_manifest_dirs(doc):
+        if str(lane_dir) in seen_dirs or not lane_dir.exists():
+            continue
+        seen_dirs.add(str(lane_dir))
+        for manifest_path in sorted(lane_dir.glob("*.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            finished_at = manifest.get("finished_at")
+            if not finished_at or finished_at <= cutoff:
+                continue
+            rows.append({
+                "run_id": manifest.get("run_id"),
+                "session": manifest.get("session"),
+                "window": manifest.get("window"),
+                "brief": manifest.get("brief"),
+                "result": manifest.get("result"),
+                "result_status": manifest.get("result_status"),
+                "result_sha": manifest.get("result_sha"),
+                "result_path": manifest.get("result_path"),
+                "finished_at": finished_at,
+                "cost": manifest.get("cost"),
+                "mailbox_record": manifest.get("mailbox_record"),
+            })
+    rows.sort(key=lambda row: row["finished_at"])
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        print(f"ws lanes: no finished lanes since {cutoff}")
+        return 0
+    for row in rows:
+        print(
+            f"{row['finished_at']} {row['session']}:{row['window']} "
+            f"{row['result_status']} {row['run_id']} {row['mailbox_record'] or ''}"
+        )
     return 0
 
 
@@ -828,9 +968,21 @@ def main():
 
     lane_set_parser = lane_sub.add_parser("set")
     lane_set_parser.add_argument("target")
-    lane_set_parser.add_argument("assignments", nargs="+")
+    lane_set_parser.add_argument("assignments", nargs="*")
+    lane_set_parser.add_argument("--result")
     lane_set_parser.add_argument("--dry-run", action="store_true")
     lane_set_parser.set_defaults(func=cmd_lane_set)
+
+    lane_close_parser = lane_sub.add_parser("close")
+    lane_close_parser.add_argument("target")
+    lane_close_parser.add_argument("--result")
+    lane_close_parser.add_argument("--dry-run", action="store_true")
+    lane_close_parser.set_defaults(func=cmd_lane_close)
+
+    lanes_parser = sub.add_parser("lanes")
+    lanes_parser.add_argument("--finished-since", dest="finished_since", required=True)
+    lanes_parser.add_argument("--json", action="store_true")
+    lanes_parser.set_defaults(func=cmd_lanes)
 
     args = parser.parse_args()
     return args.func(args)
