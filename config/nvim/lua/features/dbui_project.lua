@@ -1,7 +1,7 @@
 -- Project-aware DBUI scope: switch g:db_ui_save_location based on cwd so the
 -- drawer only shows DBs relevant to the workspace/project you're currently in.
 --
--- Layout under $NOTES/db_ui/:
+-- Layout under DB_UI_ROOT (default $SYNC/src/db-ui):
 --
 --   connections.json                           ← global fallback (when no workspace matches)
 --   workspaces/
@@ -17,7 +17,7 @@
 --   1. Marker file `.dbui-workspace` in any ancestor dir → explicit override
 --   2. Configured path_patterns (e.g. '/sync/src/YourOrg/')
 --   3. Configured git_remote_patterns (e.g. 'github%.com[:/]YourOrg/')
---   4. Fall through to global $NOTES/db_ui/connections.json
+--   4. Fall through to global DB_UI_ROOT/connections.json
 --
 -- Within the chosen workspace, the active PROJECT is determined by walking up
 -- from cwd looking for a `.dbui-project` marker, OR by matching cwd against
@@ -34,7 +34,7 @@
 --   * sets g:db_ui_save_location to the workspace's dir
 --   * vim.g.dbs is left nil (the workspace's connections.json IS the source)
 --
--- On no match, falls back to $NOTES/db_ui/.
+-- On no match, falls back to DB_UI_ROOT.
 
 local M = {}
 
@@ -54,13 +54,7 @@ local current = {
   shared_path = nil,
 }
 
-local function notes_dir()
-  return vim.env.NOTES or ((vim.env.SYNC or vim.env.HOME) .. '/Vault')
-end
-
-local function db_ui_root()
-  return notes_dir() .. '/db_ui'
-end
+local db_ui_root = require 'features.dbui_root'
 
 local function read_json(path)
   if vim.fn.filereadable(path) == 0 then

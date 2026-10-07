@@ -52,11 +52,10 @@ return {
       end)
 
       -- Must be set before the plugin loads.
-      -- Default save_location is the global $NOTES/db_ui. The project module
+      -- Default save_location is DB_UI_ROOT (default $SYNC/src/db-ui). The project module
       -- (features.dbui_project) takes over on VimEnter/DirChanged and switches
       -- this to a workspace-/project-specific dir based on cwd.
-      local notes = os.getenv 'NOTES' or (os.getenv 'SYNC' or os.getenv 'HOME') .. '/Vault'
-      vim.g.db_ui_save_location = notes .. '/db_ui'
+      vim.g.db_ui_save_location = require 'features.dbui_root'()
 
       -- Project-aware scope switcher: drawer auto-switches based on cwd so
       -- you only see DBs relevant to the workspace/project you're in.

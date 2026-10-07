@@ -34,8 +34,7 @@ local DEFAULTS = {
   } or nil,
   -- Script to run AFTER SSO login succeeds, to mint a fresh IAM token.
   token_refresh_cmd = function()
-    local notes = vim.env.NOTES or ((vim.env.SYNC or vim.env.HOME) .. '/Vault')
-    return { 'bash', notes .. '/db_ui/prod-db-token.sh' }
+    return { 'bash', require 'features.dbui_root'() .. '/prod-db-token.sh' }
   end,
   -- Optional: command to kick the SSM tunnel service after token refresh.
   -- The tunnel is a separate systemd service that fails when SSO expires and
