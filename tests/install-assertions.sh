@@ -47,6 +47,8 @@ echo "-- machine overlays --"
 check "waybar overlay" test -e "$XDG_CONFIG_HOME/waybar-host.jsonc"
 # The old target sat inside the repo-symlinked waybar dir, i.e. in the working
 # tree; it got committed and fought over by Syncthing. It must never come back.
+check "local/ link is relative (the repo dir is shared by Syncthing)" \
+	bash -c "[ -L '$DOTFILES/local' ] && case \"\$(readlink '$DOTFILES/local')\" in /*) exit 1;; esac"
 check "no overlay link inside the repo" test ! -e "$DOTFILES/config/gui/Wayland/waybar/profile.jsonc"
 check "hypr gpu overlay" test -e "$XDG_CONFIG_HOME/hypr-gpu.conf"
 check "hypr host overlay" test -e "$XDG_CONFIG_HOME/hypr-host.conf"

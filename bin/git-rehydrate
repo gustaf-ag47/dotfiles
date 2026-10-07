@@ -1,0 +1,128 @@
+#!/bin/bash
+# git-rehydrate -- rebuild .git for working trees that arrived via Syncthing.
+#
+# Reads the manifest(s) that git-bundle-backup writes to
+# $GIT_BUNDLE_DIR/<host>/repos.tsv and, for each repository:
+#
+#   tree exists, no .git   git init + fetch the remote (and/or bundle), then
+#                          point the branch at the fetched commit with a MIXED
+#                          reset: the synced working files are never touched,
+#                          so uncommitted edits show up in `git status`
+#   tree missing           git clone from the remote (e.g. a company workspace
+#                          Syncthing ignores) -- only with --clone-missing
+#   .git already present   skipped
+#
+# Local-only branches and stashes come from <path>.local.bundle (restored as
+# branches and as refs/bundle-stash/N; `git stash store` re-creates the stash
+# list). Repos with no remote come entirely from <path>.full.bundle.
+#
+# Default is a dry run. Usage:
+#   git-rehydrate [--host <name>] [--apply] [--clone-missing] [path-prefix]
+set -uo pipefail
+
+SYNC="${SYNC:-$HOME/sync}"
+BASE="${GIT_BUNDLE_DIR:-$SYNC/archive/git-bundles}"
+HOST="" APPLY=0 CLONE=0 PREFIX=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--host) HOST="${2:?}"; shift ;;
+	--apply) APPLY=1 ;;
+	--clone-missing) CLONE=1 ;;
+	-h | --help) sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$0"; exit 0 ;;
+	*) PREFIX="$1" ;;
+	esac
+	shift
+done
+
+# Newest manifest wins for a path seen on several machines.
+if [ -n "$HOST" ]; then
+	manifests=("$BASE/$HOST/repos.tsv")
+else
+	mapfile -t manifests < <(ls -t "$BASE"/*/repos.tsv 2>/dev/null)
+fi
+if [ ${#manifests[@]} -eq 0 ] || [ ! -f "${manifests[0]}" ]; then
+	echo "no manifests under $BASE" >&2
+	exit 1
+fi
+
+say() { echo "$*"; }
+do_() { if [ "$APPLY" -eq 1 ]; then "$@"; else echo "    + $*"; fi; }
+
+declare -A seen=()
+fail=0
+for m in "${manifests[@]}"; do
+	src_host="$(basename "$(dirname "$m")")"
+	while IFS=$'\t' read -r rel url branch _head; do
+		case "$rel" in '#'* | '') continue ;; esac
+		[ -n "${seen[$rel]+x}" ] && continue
+		seen[$rel]=1
+		case "$rel" in "$PREFIX"*) ;; *) continue ;; esac
+		repo="$SYNC/$rel"
+		full="$BASE/$src_host/$rel.full.bundle"
+		local_b="$BASE/$src_host/$rel.local.bundle"
+
+		if [ -e "$repo/.git" ]; then
+			continue
+		fi
+		if [ ! -d "$repo" ]; then
+			if [ "$url" = - ] || [ "$CLONE" -eq 0 ]; then
+				say "missing  $rel ($( [ "$url" = - ] && echo 'no remote' || echo 'use --clone-missing'))"
+				continue
+			fi
+			say "clone    $rel <- $url"
+			do_ git clone -q "$url" "$repo" || { fail=1; continue; }
+			[ "$branch" != - ] && do_ git -C "$repo" checkout -q "$branch" 2>/dev/null
+			[ -f "$local_b" ] && do_ git -C "$repo" fetch -q "$local_b" 'refs/heads/*:refs/heads/*' 'refs/bundle-stash/*:refs/bundle-stash/*'
+			continue
+		fi
+
+		# Working tree exists (Syncthing) without .git.
+		if [ "$url" = - ] && [ ! -f "$full" ]; then
+			say "SKIP     $rel: no remote and no bundle"
+			fail=1
+			continue
+		fi
+		say "rehydrate $rel ($( [ "$url" != - ] && echo "remote" || echo "full bundle")$( [ -f "$local_b" ] && echo ' + local bundle'), branch $branch, from $src_host)"
+		[ "$APPLY" -eq 1 ] || continue
+		(
+			set -e
+			cd "$repo"
+			git init -q
+			if [ "$url" != - ]; then
+				git remote add origin "$url"
+				git fetch -q origin
+				[ -f "$local_b" ] && git fetch -q "$local_b" 'refs/heads/*:refs/heads/*' 'refs/bundle-stash/*:refs/bundle-stash/*'
+			else
+				git fetch -q "$full" '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*' '+refs/bundle-stash/*:refs/bundle-stash/*'
+			fi
+			target=""
+			if [ "$branch" != - ]; then
+				if git rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
+					target="refs/heads/$branch"
+				elif git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null; then
+					target="refs/remotes/origin/$branch"
+				fi
+			fi
+			if [ -z "$target" ]; then
+				for t in refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master; do
+					git rev-parse -q --verify "$t" >/dev/null && target="$t" && break
+				done
+			fi
+			[ -n "$target" ] || target="$(git for-each-ref --format='%(refname)' refs/heads refs/remotes | head -1)"
+			[ -n "$target" ] || { echo "no branch to check out" >&2; exit 1; }
+			sha="$(git rev-parse "$target")"
+			[ "$branch" != - ] && git update-ref "refs/heads/$branch" "$sha" && git symbolic-ref HEAD "refs/heads/$branch"
+			git reset -q "$sha" # mixed: index from the commit, working tree untouched
+			if [ "$url" != - ] && [ "$branch" != - ] && git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null; then
+				git branch -q -u "origin/$branch" "$branch"
+			fi
+			# Re-create the stash list, oldest first so stash@{0} stays newest.
+			for ref in $(git for-each-ref --format='%(refname)' refs/bundle-stash | sort -t/ -k3 -rn); do
+				git stash store -m "restored by git-rehydrate" "$(git rev-parse "$ref")"
+				git update-ref -d "$ref"
+			done
+		) || { echo "FAIL     $rel" >&2; fail=1; }
+	done <"$m"
+done
+[ "$APPLY" -eq 1 ] || echo "(dry run; --apply to do it)"
+exit "$fail"

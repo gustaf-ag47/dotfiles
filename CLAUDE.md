@@ -30,9 +30,16 @@ sudo scripts/install-system.sh --apply   # apply (install-arch does this on a fr
 make test
 ```
 
-Machines are described once in `profiles/<hostname>.env` (class, GPU, disk);
-see `profiles/README.md` (user-config overlays) and `system/README.md`
-(root-side layer).
+Machines are described once in `profiles/<hostname>.env` (class, GPU, roles,
+disk); see `profiles/README.md` (user-config overlays) and `system/README.md`
+(root-side layer, roles = apps per machine). Review a machine's apps with
+`scripts/install-system.sh --profile <host> --list`.
+
+Git history is machine-local (Syncthing ignores `.git`): `git-bundle-backup`
+(weekly timer) bundles unpushed branches, stashes and no-remote repos into
+`$SYNC/archive/git-bundles`; `git-rehydrate` rebuilds `.git` on a new machine.
+Open design questions (work/private split, sign-in, secrets):
+`docs/research/fleet-design.md`.
 
 ### Git Workflow (Trunk-Based Development)
 ```bash

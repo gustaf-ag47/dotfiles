@@ -1,0 +1,11 @@
+#!/bin/bash
+DISCORD_TOKEN=$(cat ~/.config/discord-bot-token)
+DISCORD_GUILD_ID=$(cat ~/.config/discord-guild-id 2>/dev/null || echo "")
+
+ARGS=("run" "--rm" "-i" "-e" "DISCORD_TOKEN=${DISCORD_TOKEN}")
+if [ -n "$DISCORD_GUILD_ID" ]; then
+    ARGS+=("-e" "DISCORD_GUILD_ID=${DISCORD_GUILD_ID}")
+fi
+ARGS+=("saseq/discord-mcp:latest")
+
+exec docker "${ARGS[@]}"

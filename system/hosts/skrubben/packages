@@ -1,3 +1,14 @@
 # skrubben runs the LTS kernel (ZFS dkms tracks it).
 linux-lts
 linux-lts-headers
+# Workstation/server extras (ZFS comes from the archzfs repo: zfs-dkms,
+# zfs-utils -- not declared here because that repo is configured by hand).
+smartmontools
+nvidia-container-toolkit
+chrony
+wayvnc
+tigervnc
+openbox
+xterm
+opensc
+virt-viewer

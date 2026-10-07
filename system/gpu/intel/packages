@@ -2,3 +2,6 @@
 mesa
 vulkan-intel
 intel-media-driver
+# GPU debugging/diagnostics
+libva-utils
+intel-gpu-tools

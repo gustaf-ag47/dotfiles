@@ -1,0 +1,12 @@
+# role: personal -- AUR packages, built with paru as the invoking user.
+lltag
+ledger-live-bin
+autorestic-bin
+stig
+vesktop-bin
+webcord
+discordo-git
+spotube-bin
+icloud-for-linux-git
+czkawka-git
+bleachbit-cli

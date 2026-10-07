@@ -1,0 +1,8 @@
+# role: work -- AUR packages, built with paru as the invoking user.
+aws-session-manager-plugin
+google-cloud-cli
+slack-desktop
+postman-bin
+phpstorm
+phpstorm-jre
+lens-bin

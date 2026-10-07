@@ -1,0 +1,9 @@
+[Unit]
+Description=Bundle machine-local git history (unpushed branches, stashes) into $SYNC
+Documentation=file://%h/sync/src/dotfiles/bin/git-bundle-backup
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=%h/.local/bin/git-bundle-backup

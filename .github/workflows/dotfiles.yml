@@ -63,6 +63,8 @@ jobs:
           node-version: "22"
       - run: make test-unit
       - run: make test-node
+      - name: git bundle round trip (git-bundle-backup + git-rehydrate)
+        run: bash tests/git-bundles.sh
 
   install:
     name: make install on archlinux (${{ matrix.image }})
@@ -108,7 +110,7 @@ jobs:
           docker run --rm --pull=always -v "$PWD:/src:ro" \
             archlinux:latest bash -c '
             set -e
-            pacman -Sy --noconfirm --needed diffutils >/dev/null
+            pacman -Sy --noconfirm --needed diffutils python >/dev/null
             cp -a /src /tmp/dotfiles
             cd /tmp/dotfiles
             SYSTEM_LAYER_RESOLVE=1 bash tests/system-layer.sh

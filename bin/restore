@@ -2,7 +2,13 @@
 # Restore a bin/backup archive. Round-trips backup's actual output: a
 # $BACKUP_DIR/<timestamp>.tar.gz containing the item folders listed below.
 #
-# Usage: restore [backup.tar.gz]   (default: newest *.tar.gz in $BACKUP_DIR)
+# Usage: restore [backup.tar.gz.age|backup.tar.gz]
+#        (default: newest archive in $BACKUP_DIR)
+#
+# Encrypted archives (.age, written since 2026-10-06) are decrypted with
+# BACKUP_IDENTITY, defaulting to the YubiKey identity stub in secrets/ -- the
+# same recipients as the bootstrap kit, so a YubiKey touch (or the paper key)
+# opens them.
 
 set -euo pipefail
 
@@ -10,14 +16,22 @@ if [ -n "${1:-}" ]; then
 	ARCHIVE="$1"
 else
 	: "${BACKUP_DIR:?Environment variable BACKUP_DIR is not set (or pass an archive path)}"
-	ARCHIVE="$(find "$BACKUP_DIR" -maxdepth 1 -name '*.tar.gz' | sort | tail -1)"
+	ARCHIVE="$(find "$BACKUP_DIR" -maxdepth 1 \( -name '*.tar.gz' -o -name '*.tar.gz.age' \) | sort | tail -1)"
 fi
 [ -f "$ARCHIVE" ] || { echo "restore: no backup archive found" >&2; exit 1; }
 
 echo "Restoring from $ARCHIVE"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-tar -xzf "$ARCHIVE" -C "$WORK"
+case "$ARCHIVE" in
+*.age)
+	DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
+	IDENTITY="${BACKUP_IDENTITY:-$DOTFILES/secrets/yubikey-identity.txt}"
+	echo "Decrypting with $IDENTITY (touch the YubiKey if it blinks)"
+	age -d -i "$IDENTITY" "$ARCHIVE" | tar -xz -C "$WORK"
+	;;
+*) tar -xzf "$ARCHIVE" -C "$WORK" ;;
+esac
 # The archive holds a single <timestamp>/ folder
 SRC="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -1)"
 [ -n "$SRC" ] || { echo "restore: archive layout not recognized" >&2; exit 1; }
@@ -70,6 +84,7 @@ restore_file zhistory "${ZDOTDIR:-$HOME}/.zhistory" 600
 # Encryption keys — unreadable data without these
 restore_dir age-keys "$HOME/.config/age" 600 700
 restore_dir age-keys-alt "$HOME/.age" 600 700
+restore_dir sops-age-keys "$HOME/.config/sops/age" 600 700
 restore_file atuin-key "$HOME/.local/share/atuin/key" 600
 restore_file syncthing-key "$HOME/.local/state/syncthing/key.pem" 600
 restore_dir pritunl-profiles "$HOME/.config/pritunl/profiles" 600 700

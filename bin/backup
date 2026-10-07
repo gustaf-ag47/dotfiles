@@ -4,7 +4,21 @@ set -euo pipefail
 
 : "${BACKUP_DIR:?Environment variable BACKUP_DIR is not set}"
 
-BACKUP_FOLDER="${BACKUP_DIR}/$(date +%Y-%m-%d_%H-%M-%S)"
+# The archive holds private keys (SSH, GnuPG, age), Wi-Fi passwords and the
+# Syncthing identity, and BACKUP_DIR lives inside the Syncthing folder. So it
+# is staged OUTSIDE $SYNC and written only as age ciphertext, encrypted to the
+# same recipients as the bootstrap kit (two YubiKeys + the paper key).
+# Before 2026-10-06 it was a plaintext .tar.gz, staged inside $SYNC.
+DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
+RECIPIENTS="${BACKUP_RECIPIENTS:-$DOTFILES/secrets/recipients.txt}"
+command -v age >/dev/null || { echo "age is required (pacman -S age)" >&2; exit 1; }
+[ -s "$RECIPIENTS" ] || { echo "no recipients file at $RECIPIENTS" >&2; exit 1; }
+mkdir -p "$BACKUP_DIR"
+
+STAGE="$(mktemp -d)"
+trap 'sudo rm -rf "$STAGE"' EXIT
+STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
+BACKUP_FOLDER="$STAGE/$STAMP"
 PERMISSION_LOG="${BACKUP_FOLDER}/permission_log.txt"
 
 mkdir -p "$BACKUP_FOLDER" || {
@@ -59,13 +73,16 @@ backup_item "$ZDOTDIR/.zhistory" "$BACKUP_FOLDER/zhistory" "600"
 # Encryption keys — unreadable data without these
 backup_item "$HOME/.config/age" "$BACKUP_FOLDER/age-keys" "600" "700"
 backup_item "$HOME/.age" "$BACKUP_FOLDER/age-keys-alt" "600" "700"
+backup_item "$HOME/.config/sops/age" "$BACKUP_FOLDER/sops-age-keys" "600" "700"
 backup_item "$HOME/.local/share/atuin/key" "$BACKUP_FOLDER/atuin-key" "600"
 backup_item "$HOME/.local/state/syncthing/key.pem" "$BACKUP_FOLDER/syncthing-key" "600"
 backup_item "$HOME/.config/pritunl/profiles" "$BACKUP_FOLDER/pritunl-profiles" "600" "700"
 
 backup_item "/etc/systemd/system" "$BACKUP_FOLDER/systemd-services" "644" "755"
 
-sudo tar -czf "${BACKUP_FOLDER}.tar.gz" -C "$BACKUP_DIR" "$(basename "$BACKUP_FOLDER")" && sudo rm -rf "$BACKUP_FOLDER"
+OUT="$BACKUP_DIR/$STAMP.tar.gz.age"
+sudo tar -czf - -C "$STAGE" "$STAMP" | age -R "$RECIPIENTS" -o "$OUT.partial"
+mv "$OUT.partial" "$OUT"
 
-echo "Backup completed successfully. Data saved in ${BACKUP_FOLDER}.tar.gz"
+echo "Backup completed successfully. Encrypted archive: $OUT"
 echo "Original permissions logged in $PERMISSION_LOG"

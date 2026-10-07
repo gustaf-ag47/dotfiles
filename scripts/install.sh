@@ -52,14 +52,25 @@ fi
 # Create symlink from dotfiles/local to $SYNC/dotfiles-local.
 # A REAL local/ directory holds user data (private configs, keys): back it up
 # next to itself, never rm -rf it (same non-destructive rule as link_config).
+#
+# The link is RELATIVE: it sits inside the repo working tree, which Syncthing
+# shares between machines, so an absolute target (/home/<user>/...) flipped to
+# whichever machine wrote it last and dangled on the other (users differ:
+# gustaf vs gud1). Both machines keep dotfiles-local at the same place relative
+# to the repo, so the relative link resolves everywhere.
+local_target="$(realpath -m --relative-to="$DOTFILES" "$SYNC/dotfiles-local")"
+if [ -L "$DOTFILES/local" ] && [ "$(readlink "$DOTFILES/local")" != "$local_target" ]; then
+	echo "Replacing local/ link ($(readlink "$DOTFILES/local")) with relative $local_target"
+	rm -f "$DOTFILES/local"
+fi
 if [ ! -L "$DOTFILES/local" ]; then
 	if [ -d "$DOTFILES/local" ]; then
 		backup="$DOTFILES/local.bak.$(date +%Y%m%d%H%M%S)"
 		echo "Backing up real local/ to $backup"
 		mv "$DOTFILES/local" "$backup"
 	fi
-	echo "Creating symlink: $DOTFILES/local → $SYNC/dotfiles-local"
-	ln -s "$SYNC/dotfiles-local" "$DOTFILES/local"
+	echo "Creating symlink: $DOTFILES/local → $local_target"
+	ln -s "$local_target" "$DOTFILES/local"
 	echo "✅ Local configurations will be stored in $SYNC/dotfiles-local"
 fi
 
@@ -142,16 +153,18 @@ link_config "$DOTFILES/config/claude-code/env.sh" "$XDG_CONFIG_HOME/claude-code/
 # units use %h/.local/bin ExecStart paths; the bin/* loop below provides those
 # links before any unit starts.
 mkdir -p "$XDG_CONFIG_HOME/systemd/user" "${XDG_CACHE_HOME:-$HOME/.cache}/cc-proxy"
-for unit in claude-token-proxy.service llm-alert.service llm-alert.timer \
-	llm-schedule.service llm-schedule.timer; do
-	link_config "$DOTFILES/config/systemd/user/$unit" \
-		"$XDG_CONFIG_HOME/systemd/user/$unit"
+# Link EVERY unit file -- public ones from this repo, private ones (company
+# infra, personal services) from the local/ overlay -- but enable only what the
+# machine's roles and host declare (system/{roles/<role>,hosts/<host>}/
+# user-services, after the profile is read below). A linked-but-not-enabled
+# unit is inert.
+for unit_dir in "$DOTFILES/config/systemd/user" "$DOTFILES/local/config/systemd/user"; do
+	[ -d "$unit_dir" ] || continue
+	for unit in "$unit_dir"/*.service "$unit_dir"/*.timer "$unit_dir"/*.path "$unit_dir"/*.socket; do
+		[ -f "$unit" ] || continue
+		link_config "$unit" "$XDG_CONFIG_HOME/systemd/user/$(basename "$unit")"
+	done
 done
-if command -v systemctl >/dev/null 2>&1; then
-	systemctl --user daemon-reload 2>/dev/null || true
-	systemctl --user enable --now claude-token-proxy.service 2>/dev/null || true
-	systemctl --user enable --now llm-alert.timer llm-schedule.timer 2>/dev/null || true
-fi
 
 # mkdir -p, not rm -rf + mkdir: transmission keeps its runtime state (stats,
 # resume files, torrent list) in this directory and wiping it every install
@@ -198,6 +211,32 @@ fi
 . "$PROFILE_FILE"
 echo "Profile: $PROFILE (class=${PROFILE_CLASS:-unknown} battery=${PROFILE_HAS_BATTERY:-unknown})"
 
+# systemd --user units this machine runs: declared per role and host, in the
+# same system/ layers that hold its packages (see system/README.md).
+if command -v systemctl >/dev/null 2>&1; then
+	systemctl --user daemon-reload 2>/dev/null || true
+	unit_lists=()
+	for role in ${PROFILE_ROLES:-}; do
+		unit_lists+=("$DOTFILES/system/roles/$role/user-services")
+	done
+	unit_lists+=("$DOTFILES/system/hosts/$PROFILE/user-services")
+	for list in "${unit_lists[@]}"; do
+		[ -f "$list" ] || continue
+		while read -r action unit; do
+			case "$action" in
+			enable)
+				if systemctl --user enable --now "$unit" 2>/dev/null; then
+					echo "  user unit: $unit"
+				else
+					echo "  warning: could not enable user unit $unit"
+				fi
+				;;
+			disable) systemctl --user disable --now "$unit" 2>/dev/null || true ;;
+			esac
+		done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$list")
+	done
+fi
+
 # Machine facts at a fixed runtime path, so shells and scripts can read the
 # profile without re-deriving it (e.g. .zshrc selects the class overlay).
 cat > "$XDG_CONFIG_HOME/dotfiles-profile.env" <<EOF
@@ -206,6 +245,7 @@ export PROFILE="$PROFILE"
 export PROFILE_CLASS="${PROFILE_CLASS:-laptop}"
 export PROFILE_GPU="${PROFILE_GPU:-}"
 export PROFILE_HAS_BATTERY="${PROFILE_HAS_BATTERY:-}"
+export PROFILE_ROLES="${PROFILE_ROLES:-}"
 EOF
 
 # Unified overlay resolution: hosts/<hostname>.<ext> wins, else

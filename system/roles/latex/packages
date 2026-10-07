@@ -1,0 +1,22 @@
+# role: latex -- TeX Live for document work. Large (~2 GB); opt in per machine.
+# Official repos, one per line. AUR packages go in packages.aur.
+texlive-basic
+texlive-latex
+texlive-latexextra
+texlive-binextra
+texlive-bibtexextra
+texlive-context
+texlive-fontsextra
+texlive-fontsrecommended
+texlive-fontutils
+texlive-formatsextra
+texlive-games
+texlive-humanities
+texlive-luatex
+texlive-mathscience
+texlive-metapost
+texlive-music
+texlive-plaingeneric
+texlive-pstricks
+texlive-publishers
+texlive-xetex

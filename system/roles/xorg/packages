@@ -1,0 +1,22 @@
+# role: xorg -- i3/X11 fallback session (config/gui/Xorg). Skip on machines that only run Hyprland.
+# Official repos, one per line. AUR packages go in packages.aur.
+i3-wm
+i3lock
+polybar
+rofi
+picom
+arandr
+autorandr
+xclip
+xsel
+xorg-server
+xorg-xinit
+xorg-xrandr
+xorg-xrdb
+xorg-xsetroot
+xorg-xmodmap
+xorg-xev
+xorg-xkill
+xorg-xdpyinfo
+xorg-xhost
+xf86-input-synaptics
