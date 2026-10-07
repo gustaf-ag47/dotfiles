@@ -18,7 +18,6 @@ This document contains ALL keybindings for your development environment across a
 | `Super + Shift + T` | btop scratchpad (pyprland) |
 | `Super + Shift + G` | lazygit scratchpad (pyprland) |
 | `Super + Shift + Y` | yazi scratchpad (pyprland) |
-| `Super + M` | Keyboard mouse mode (warpd) |
 | `Super + F` | Fullscreen (keep bar) |
 | `Super + Shift + F` | Fullscreen (no bar) |
 
