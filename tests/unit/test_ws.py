@@ -242,6 +242,24 @@ class UnitsBusRetryTest(unittest.TestCase):
         self.assertEqual(status, "ok")
         self.assertEqual(missing, [])
 
+    def test_retries_against_real_systemd_env_i_wording_and_recovers(self):
+        # systemd's actual message under `env -i` (no XDG_RUNTIME_DIR AND no
+        # DBUS_SESSION_BUS_ADDRESS) is worded differently from the generic
+        # "Failed to connect to bus" used above; a ws check run this way
+        # reported every genuinely-enabled unit as "not enabled" until this
+        # wording was also recognized as a bus failure, not a real answer.
+        status, missing = self.run_with_fake_systemctl(
+            "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then\n"
+            "  echo 'Failed to connect to user scope bus via local transport: "
+            "$DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "echo enabled\n"
+            "exit 0\n"
+        )
+        self.assertEqual(status, "ok")
+        self.assertEqual(missing, [])
+
     def test_reports_unknown_when_bus_stays_unreachable(self):
         status, missing = self.run_with_fake_systemctl(
             "echo 'Failed to connect to bus: No such file or directory' >&2\n" "exit 1\n"
