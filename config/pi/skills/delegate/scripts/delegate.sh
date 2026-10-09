@@ -101,6 +101,16 @@ if [ -n "$PROJECT" ]; then
 	[ "$CWD_EXPLICIT" = "1" ] || CWD="$project_cwd"
 fi
 
+# Refuse new agents before any window/worktree is created. Override is explicit
+# for recovery work; scheduled lanes must still respect their own dispatch guard.
+if [ "${DELEGATE_IGNORE_MEM:-0}" != 1 ]; then
+	read -r total available < <(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {available=$2} END {print total, available}' /proc/meminfo)
+	[ "${total:-0}" -gt 0 ] || die "cannot read MemAvailable from /proc/meminfo (set DELEGATE_IGNORE_MEM=1 to override)"
+	if [ "$((available * 100))" -lt "$((total * 15))" ]; then
+		die "MemAvailable below 15% ($available / $total KiB); refusing to boot agent. Set DELEGATE_IGNORE_MEM=1 to override"
+	fi
+fi
+
 # ── the current tmux session ────────────────────────────────────────────────
 if [ -z "$SESSION" ]; then
 	if [ -n "${TMUX:-}" ]; then
