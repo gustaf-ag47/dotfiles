@@ -1,22 +1,13 @@
 #!/bin/bash
 
-iDIR="$HOME/.config/mako/icons"
-
 get_backlight() {
 	LIGHT="$(cat /sys/class/leds/*::kbd_backlight/brightness)"
 	echo "${LIGHT}"
 }
 
+# Icon-theme lookup replaces the missing local mako PNGs.
 get_icon() {
-	current="$(cat /sys/class/leds/*::kbd_backlight/brightness)"
-
-	if [[ ("$current" -ge "0") && ("$current" -le "1") ]]; then
-		icon="$iDIR/brightness-20.png"
-	elif [[ ("$current" -ge "1") && ("$current" -le "2") ]]; then
-		icon="$iDIR/brightness-60.png"
-	elif [[ ("$current" -ge "2") && ("$current" -le "3") ]]; then
-		icon="$iDIR/brightness-100.png"
-	fi
+	icon=keyboard-brightness-symbolic
 }
 
 notify_user() {

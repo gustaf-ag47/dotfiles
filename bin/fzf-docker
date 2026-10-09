@@ -2,7 +2,7 @@
 
 # Docker FZF Manager
 # Interactive Docker management using fzf
-# Add to your dotfiles and run with: docker-fzf or alias it to 'dz'
+# Run as fzf-docker.
 
 set -e
 
@@ -236,7 +236,8 @@ show_stats() {
 # Cleanup operations
 cleanup_menu() {
     local action
-    action=$(cat <<EOF | fzf --prompt="Cleanup action: " --height=50% --border --header="⚠️  Destructive operations"prune-containers    - Remove all stopped containers
+    action=$(cat <<EOF | fzf --prompt="Cleanup action: " --height=50% --border --header="⚠️  Destructive operations"
+prune-containers    - Remove all stopped containers
 prune-images        - Remove unused images
 prune-volumes       - Remove unused volumes
 prune-networks      - Remove unused networks
