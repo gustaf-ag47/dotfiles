@@ -310,8 +310,8 @@ chmod +x config/git/hooks/pre-commit
 `nvim.yml`:
 - `luac -p` (Lua 5.1), `luacheck`, **StyLua format check**, headless config load
 
-Reproduce locally: `make lint` (shellcheck/luacheck/yamllint, plus StyLua when
-installed), **`make lint-stylua`** (install StyLua first), `make test-unit`,
+Reproduce locally: `make lint` (shellcheck/luacheck/yamllint/StyLua; fails if
+native StyLua is unavailable), **`make lint-stylua`**, `make test-unit`,
 `make test-node`, `make test-install` (Docker), and `make test-bootstrap` (age).
 `make lint-shell`, `make lint-lua`, `make lint-yaml` run individual checks;
 `make lint-build` rebuilds the image. `make test` is not the CI suite.

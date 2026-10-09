@@ -206,7 +206,9 @@ case $ACTION in
         echo ""
         $0 --yamllint
         echo ""
-        command -v stylua &>/dev/null && { $0 --stylua; echo ""; }
+        # StyLua gates nvim CI. Never report all linters green when it is absent.
+        $0 --stylua
+        echo ""
         echo -e "${GREEN}✅ All linters complete${NC}"
         ;;
     "")
