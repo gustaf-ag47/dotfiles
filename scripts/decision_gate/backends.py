@@ -7,6 +7,7 @@ ledger logic lives here -- this module only knows how to talk to one upstream.
 """
 from __future__ import annotations
 
+import os
 import json
 import time
 import urllib.error
@@ -19,7 +20,10 @@ JEV_MODEL = "jev-1.13.0"
 JEV_COST_PER_MTOK_INPUT_USD = 0.042
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-OLLAMA_MODEL = "qwen2.5vl:7b"
+# Text-only usage (state is folded into the prompt); must match a model that is
+# actually installed. qwen3-14b-gpu is the pinned single model on the 2080 Ti --
+# installing any other model there would evict it (VRAM holds exactly one).
+OLLAMA_MODEL = os.environ.get("DECISION_GATE_OLLAMA_MODEL", "qwen3-14b-gpu")
 OLLAMA_KEEP_ALIVE = "30s"
 
 
