@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# bw-cards2hermes-vault: copy Bitwarden card items (type 3) into the Hermes vault as payment items.
+# Prints metadata only (label, brand, origin). Card values go from bw to VaultStore over a pipe;
+# they are never written to disk and never printed.
+# Usage: bw-cards2hermes-vault [--dry-run] [--match LABEL_REGEX] [--origin https://site]...
+set -euo pipefail
+umask 077
+DRY=0 MATCH="." ORIGINS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --match) MATCH="${2:?}"; shift ;;
+    --origin) ORIGINS+=("${2:?}"); shift ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac; shift
+done
+HERMES_SRC="${HERMES_SRC:-$HOME/.hermes/hermes-agent}"
+PYBIN="$(find "$HOME"/.hermes/tools -maxdepth 3 -path "*/python-3*/bin/python3" 2>/dev/null | sort | tail -1)"
+if [ -z "${BW_SESSION:-}" ]; then
+  BW_SESSION="$(bw unlock --raw)" || { echo "unlock failed" >&2; exit 1; }
+  export BW_SESSION
+  trap 'bw lock >/dev/null 2>&1 || true; unset BW_SESSION' EXIT
+fi
+bw sync >/dev/null 2>&1 || true
+read -r -d '' PY <<'EOF' || true
+import json, os, re, sys
+sys.path.insert(0, os.environ["HERMES_SRC"])
+import hermes_bootstrap  # noqa: F401
+from agent.vault_store import VaultStore
+dry = os.environ["DRY"] == "1"
+match = re.compile(os.environ["MATCH"], re.I)
+origins = [o for o in os.environ.get("ORIGINS", "").split() if o]
+store = VaultStore()
+have = {(m.label, m.origin) for m in store.list_items() if m.kind == "payment"}
+items = [i for i in json.load(sys.stdin) if i.get("type") == 3]
+for it in items:
+    c = it.get("card") or {}
+    label = (it.get("name") or "card").strip()
+    brand = c.get("brand") or "?"
+    if not match.search(label + " " + brand):
+        print(f"  skip  {label} [{brand}]"); continue
+    yy = str(c.get("expYear") or "")
+    secret = {"card_number": (c.get("number") or "").replace(" ", ""), "cardholder_name": c.get("cardholderName") or "",
+              "exp_month": str(c.get("expMonth") or "").zfill(2), "exp_year": yy, "cvc": c.get("code") or ""}
+    complete = all(secret[k] for k in ("card_number", "exp_month", "exp_year", "cvc"))
+    print(f"  card  {label} [{brand}] complete={complete}")
+    if dry or not complete:
+        continue
+    for o in origins:
+        if (label, o.rstrip("/")) in have:
+            print(f"    exists @ {o}"); continue
+        try:
+            m = store.add_item(kind="payment", label=label, secret=secret, origin=o)
+            print(f"    added {m.id} @ {o}")
+        except Exception as e:
+            print(f"    ! {type(e).__name__} @ {o}")
+EOF
+bw list items | DRY="$DRY" MATCH="$MATCH" ORIGINS="${ORIGINS[*]:-}" HERMES_SRC="$HERMES_SRC" "$PYBIN" -I -c "$PY"

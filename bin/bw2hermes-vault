@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# bw2hermes-vault — copy Bitwarden website logins into the Hermes vault.
+#
+# Secrets never touch disk, argv, the terminal or the agent:
+#   - the master password goes only to `bw unlock`'s own hidden prompt,
+#   - the session token lives only in this process's environment (BW_SESSION),
+#   - `bw list items` JSON is piped straight into Hermes' VaultStore.add_item
+#     (Fernet-encrypted, ~/.hermes/vault/, 0600); only labels/origins are printed.
+#   - Bitwarden is locked again on exit.
+#
+# Usage: bw2hermes-vault [--dry-run] [--search TERM]
+#   Re-runnable: (origin, identifier) pairs already in the Hermes vault are skipped.
+set -euo pipefail
+umask 077
+
+DRY=0 SEARCH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --search) SEARCH="${2:?--search needs a term}"; shift ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+HERMES_SRC="${HERMES_SRC:-$HOME/.hermes/hermes-agent}"
+PYBIN="$(find "$HOME"/.hermes/tools -maxdepth 3 -path "*/python-3*/bin/python3" 2>/dev/null | sort | tail -1)"
+[ -x "$PYBIN" ] || { echo "Hermes python not found" >&2; exit 1; }
+command -v bw >/dev/null || { echo "bw CLI not installed" >&2; exit 1; }
+
+if [ -z "${BW_SESSION:-}" ]; then
+  if bw status 2>/dev/null | grep -q '"unauthenticated"'; then
+    echo "Run 'bw login' first." >&2; exit 1
+  fi
+  BW_SESSION="$(bw unlock --raw)" || { echo "unlock failed" >&2; exit 1; }
+  export BW_SESSION
+  trap 'bw lock >/dev/null 2>&1 || true; unset BW_SESSION' EXIT
+fi
+bw sync >/dev/null 2>&1 || echo "(bw sync failed; using local cache)" >&2
+
+read -r -d '' PY <<'EOF' || true
+import json, os, re, sys
+sys.path.insert(0, os.environ["HERMES_SRC"])
+import hermes_bootstrap  # noqa: F401  (puts Hermes' own site-packages on sys.path)
+from agent.vault_store import VaultStore, VaultError, normalize_origin, normalize_otp_secret
+
+dry = os.environ.get("BW2HV_DRY") == "1"
+store = VaultStore(base_dir=os.environ.get("BW2HV_VAULT_DIR") or None)
+have = {(m.origin, (m.identifier or "").lower())
+        for m in store.list_items() if m.kind == "login"}
+
+def origins(uris):
+    out = []
+    for u in uris or []:
+        u = (u.get("uri") or "").strip()
+        if not u:
+            continue
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", u):
+            if not re.match(r"^[\w.-]+\.[a-zA-Z]{2,}(:\d+)?(/.*)?$", u):
+                continue
+            u = "https://" + u
+        if not u.lower().startswith(("http://", "https://")):
+            continue          # androidapp://, iosapp://, etc.
+        try:
+            o = normalize_origin(u)
+        except VaultError:
+            continue
+        if o not in out:
+            out.append(o)
+    return out
+
+def id_type(ident):
+    if "@" in ident:
+        return "email"
+    if re.fullmatch(r"\+?[\d\s()-]{6,}", ident):
+        return "phone"
+    return "username"
+
+stats = dict(added=0, exists=0, no_password=0, no_username=0, no_web_uri=0, otp_dropped=0, errors=0)
+items = json.load(sys.stdin)
+for it in items:
+    if it.get("type") != 1:
+        continue
+    login = it.get("login") or {}
+    name = (it.get("name") or "").strip() or "unnamed"
+    ident = (login.get("username") or "").strip()
+    if not login.get("password"):
+        stats["no_password"] += 1; continue
+    if not ident:
+        stats["no_username"] += 1; print(f"  ! {name}: no username, skipped"); continue
+    os_ = origins(login.get("uris"))
+    if not os_:
+        stats["no_web_uri"] += 1; print(f"  ! {name}: no website URI, skipped"); continue
+    otp = ""
+    if login.get("totp"):
+        try:
+            otp = normalize_otp_secret(login["totp"])
+        except VaultError:
+            stats["otp_dropped"] += 1
+            print(f"  ! {name}: 2FA key format unsupported (e.g. steam://), imported without it")
+    for o in os_:
+        if (o, ident.lower()) in have:
+            stats["exists"] += 1; continue
+        secret = {"identifier_type": id_type(ident), "identifier": ident,
+                  "password": login["password"], **({"otp_secret": otp} if otp else {})}
+        try:
+            if not dry:
+                store.add_item(kind="login", label=name, secret=secret, origin=o)
+            have.add((o, ident.lower()))
+            stats["added"] += 1
+            print(f"  {'~' if dry else '+'} {name:<40.40} {o}{'  [2FA auto]' if otp else ''}")
+        except Exception as e:  # never echo values; the type is enough
+            stats["errors"] += 1
+            print(f"  ! {name} @ {o}: {type(e).__name__}")
+        finally:
+            secret = None
+items = None
+print(("DRY RUN — nothing written. " if dry else "") +
+      ", ".join(f"{k}={v}" for k, v in stats.items()))
+EOF
+
+export HERMES_SRC BW2HV_DRY="$DRY"
+if [ -n "$SEARCH" ]; then
+  bw list items --search "$SEARCH" 2>/dev/null | "$PYBIN" -I -c "$PY"
+else
+  bw list items 2>/dev/null | "$PYBIN" -I -c "$PY"
+fi
