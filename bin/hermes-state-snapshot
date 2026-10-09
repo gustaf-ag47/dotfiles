@@ -27,7 +27,8 @@ DBS=(
 )
 FILES=(cron/jobs.json channel_directory.json discord_threads.json gateway_state.json)
 DIRS=(cron/prompts)
-SECRETS=(.env auth.json google_token.json google_client_secret.json)
+# vault/: the credential vault (encrypted store + its key); restic is the only offsite copy.
+SECRETS=(.env auth.json google_token.json google_client_secret.json vault/vault.json.enc vault/vault.key)
 
 umask 077
 mkdir -p "$OUT/db" "$OUT/files/cron" "$SECRETS_OUT"
@@ -56,7 +57,9 @@ for rel in "${DIRS[@]}"; do
 	rsync -a --delete "$HERMES_HOME/$rel/" "$OUT/files/$rel/"
 done
 for rel in "${SECRETS[@]}"; do
-	[ -f "$HERMES_HOME/$rel" ] && cp -p "$HERMES_HOME/$rel" "$SECRETS_OUT/$rel"
+	[ -f "$HERMES_HOME/$rel" ] || continue
+	mkdir -p "$(dirname "$SECRETS_OUT/$rel")"
+	cp -p "$HERMES_HOME/$rel" "$SECRETS_OUT/$rel"
 done
 
 date -Is >"$OUT/LAST_SNAPSHOT"
