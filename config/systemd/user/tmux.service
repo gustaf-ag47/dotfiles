@@ -7,14 +7,25 @@ Type=forking
 Environment=DISPLAY=:0
 # A tmux server started outside this unit (an attached terminal, agents) must
 # never be adopted: `new-session -d` would exit at once, systemd would see the
-# service as dead and run ExecStop, i.e. kill-server, taking every session down
-# (happened when `make install` ran `enable --now` with a live server).
+# service as dead and run ExecStop, taking every session down (happened when
+# `make install` ran `enable --now` with a live server).
+#
+# 2026-10-07 incident: the ExecCondition guard below is NOT sufficient — during
+# a daemon-reload storm the unit was started against a live server anyway, the
+# forking service was deemed dead, and `ExecStop=tmux kill-server` destroyed a
+# 91-pane server. This unit must NEVER be able to kill a server it did not
+# start, so:
+#   - no `kill-server` in ExecStop (stopping the unit leaves the server alone;
+#     kill it manually with `tmux kill-server` if you really mean it)
+#   - KillMode=none so cgroup teardown on stop/restart cannot SIGTERM a server
 ExecCondition=/bin/sh -c '! /usr/bin/tmux has-session 2>/dev/null'
 ExecStart=/usr/bin/tmux new-session -d
 ExecStop=%h/sync/src/dotfiles/bin/tmux-safe-save
-ExecStop=/usr/bin/tmux kill-server
-KillMode=control-group
+KillMode=none
 RestartSec=2
+# Agent fleets (builds, test suites) live in tmux; keep the desktop responsive.
+CPUWeight=15
+IOWeight=15
 
 [Install]
 WantedBy=default.target
