@@ -9,7 +9,7 @@ The shim wraps each request in the Code Assist envelope
 the `{"response": ...}` envelope from every reply/SSE event. This mirrors the
 Claude setup: the real API with the real credential, not a second agent.
 
-Credentials (see docs/google-code-assist-proxy.md):
+Credentials (see $NOTES/Homelab/dotfiles/google-code-assist-proxy.md):
 - Reads ~/.gemini/antigravity-cli/antigravity-oauth-token (owned by `agy`) and
   never writes it. When the access token is expired the shim refreshes it IN
   MEMORY with the stored refresh token and agy's own OAuth client (client id

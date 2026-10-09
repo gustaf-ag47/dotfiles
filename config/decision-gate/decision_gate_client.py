@@ -4,7 +4,7 @@
 Copy this file into any project (or `import` it if decision-gate's repo path
 is on sys.path already) -- it has no dependency on the rest of decision-gate.
 
-Contract: see docs/decision-gate.md in the dotfiles repo. Summary:
+Contract: see $NOTES/Homelab/dotfiles/decision-gate.md in the dotfiles repo. Summary:
 
     POST /v1/decide   {"purpose", "sensitivity", "state", "questions": [...]}
                       -> {"decision_id", "backend", "latency_ms", "cached", "answers"}

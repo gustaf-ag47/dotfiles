@@ -137,7 +137,7 @@ python3 scripts/scan_keybindings.py --format json | jq '.grouped.by_leader'
 ### Automation
 ```bash
 # Add to your dotfiles update script
-python3 scripts/scan_keybindings.py --output /tmp/keybindings-scan.md  # review before merging into docs/KEYBINDINGS.md
+python3 scripts/scan_keybindings.py --output /tmp/keybindings-scan.md  # review before merging into $NOTES/Homelab/dotfiles/KEYBINDINGS.md
 
 # Generate for multiple configs
 python3 scripts/scan_keybindings.py ~/.config/nvim --output /tmp/nvim-keybindings.md

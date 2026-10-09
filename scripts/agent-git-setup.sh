@@ -2,7 +2,7 @@
 # Build nix/agent-git's `agent-git`/`agent-gh` and point config/pi/bin's
 # `git`/`gh` dispatchers at the built store paths. Agents-only: this does not
 # touch Gustaf's interactive shells (their PATH never includes
-# ~/.pi/agent/bin). See docs/agent-git.md.
+# ~/.pi/agent/bin). See $NOTES/Homelab/dotfiles/agent-git.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 FLAKE_DIR="$ROOT/nix/agent-git"

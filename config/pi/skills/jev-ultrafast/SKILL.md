@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Wraps [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast), pinned at commit
 `1231850a0bf1a0c0341fe408ef1668dbbfdfac46` (MIT, Browser Use). This is a **different** Jev integration
-from `docs/jev-pi.md` / `config/pi/lib/jev.mjs` — that helper classifies a short delegated task string
+from `$NOTES/Homelab/dotfiles/jev-pi.md` / `config/pi/lib/jev.mjs` — that helper classifies a short delegated task string
 into `interactive|build|research|mechanical` and never touches a browser. This skill drives an actual
 page with TypeSafe's indexed operation/target picker. Do not conflate the two or feed this skill's
 browser-page text into `classifyTask()`, or vice versa.

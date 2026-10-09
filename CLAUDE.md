@@ -79,7 +79,7 @@ git clean-branches          # Interactive branch cleanup (clean is the git built
 # - Shell script syntax validation (bash -n)
 # - **Secret detection** (AWS keys, GitHub tokens, private keys, etc.)
 
-# Test and lint targets (CI parity; see docs/LINTING.md)
+# Test and lint targets (CI parity; see $NOTES/Homelab/dotfiles/LINTING.md)
 make test-unit               # Python unit tests (tests/unit/*.py)
 make test-node               # Node unit tests (tests/unit/*.mjs)
 make test-install            # Real installer + assertions in Docker
@@ -104,26 +104,26 @@ git-setup-hooks             # Symlink hooks from config/git/hooks/ into .git/hoo
 #    - Scans for high-entropy strings (base64 secrets)
 #    - Blocks sensitive filenames
 
-# 3. Best practices documentation (@docs/SECURITY.md)
+# 3. Best practices documentation ($NOTES/Homelab/dotfiles/SECURITY.md)
 
 # Test secret detection
 echo 'API_KEY="AKIAIOSFODNN7EXAMPLE"' > test.sh
 git add test.sh && git commit -m "test"  # Should be blocked!
 rm test.sh
 
-# See @docs/SECURITY.md for complete guide
+# See $NOTES/Homelab/dotfiles/SECURITY.md for complete guide
 ```
 
 ### Documentation
-- @docs/GIT_WORKFLOW.md - Complete Git workflow documentation
-- @docs/KEYBINDINGS.md - Complete keybinding reference
-- @docs/README.md - Repository overview and setup guide
-- @docs/SECURITY.md - **Security guide for preventing secret leaks**
-- @docs/LINTING.md - Lint gates and how to reproduce CI locally
-- @docs/BACKUP.md - Backup/restore of system state outside the repo
-- @docs/LOCAL_CONFIG.md - Private config overlay ($SYNC/state/dotfiles-local)
-- @docs/pi-resources.md - Pi agent resources installed from config/pi/
-- @docs/pi-delegate-contract.md - Delegation coordination contract
+- $NOTES/Homelab/dotfiles/GIT_WORKFLOW.md - Complete Git workflow documentation
+- $NOTES/Homelab/dotfiles/KEYBINDINGS.md - Complete keybinding reference
+- $NOTES/Homelab/dotfiles/README.md - Repository overview and setup guide
+- $NOTES/Homelab/dotfiles/SECURITY.md - **Security guide for preventing secret leaks**
+- $NOTES/Homelab/dotfiles/LINTING.md - Lint gates and how to reproduce CI locally
+- $NOTES/Homelab/dotfiles/BACKUP.md - Backup/restore of system state outside the repo
+- $NOTES/Homelab/dotfiles/LOCAL_CONFIG.md - Private config overlay ($SYNC/state/dotfiles-local)
+- $NOTES/Homelab/dotfiles/pi-resources.md - Pi agent resources installed from config/pi/
+- $NOTES/Homelab/dotfiles/pi-delegate-contract.md - Delegation coordination contract
 
 ### Common Development Tasks
 ```bash
@@ -445,8 +445,8 @@ Key files to understand when making changes:
 - `config/tmux/tmux.conf` - Terminal multiplexer setup
 - `scripts/install.sh` - Installation logic and symlinking
 - `config/git/hooks/` - Git hook templates (installed via `git-setup-hooks`)
-- @docs/KEYBINDINGS.md - Complete reference of all shortcuts
-- @docs/GIT_WORKFLOW.md - Git workflow and branching strategy
-- @docs/README.md - Setup and feature overview
+- $NOTES/Homelab/dotfiles/KEYBINDINGS.md - Complete reference of all shortcuts
+- $NOTES/Homelab/dotfiles/GIT_WORKFLOW.md - Git workflow and branching strategy
+- $NOTES/Homelab/dotfiles/README.md - Setup and feature overview
 
 This dotfiles system provides a complete, integrated development environment optimized for keyboard-driven productivity with modern tooling and visual consistency.

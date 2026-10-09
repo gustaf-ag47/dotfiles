@@ -1,5 +1,5 @@
 #!/bin/bash
-# decision-gate HTTP service entrypoint. See docs/decision-gate.md.
+# decision-gate HTTP service entrypoint. See $NOTES/Homelab/dotfiles/decision-gate.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 cd "$ROOT"

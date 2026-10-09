@@ -1,6 +1,6 @@
 {
   "schema": "decision-gate-policy.v1",
-  "_comment": "Copy to ~/.config/decision-gate/policy.json (chmod 600) and edit. Not loaded from git -- this file is an example only. See docs/decision-gate.md for the full field reference and the hard allow_external rule.",
+  "_comment": "Copy to ~/.config/decision-gate/policy.json (chmod 600) and edit. Not loaded from git -- this file is an example only. See $NOTES/Homelab/dotfiles/decision-gate.md for the full field reference and the hard allow_external rule.",
   "default": {
     "backend": "ollama",
     "allow_external": false,

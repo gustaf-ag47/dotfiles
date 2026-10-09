@@ -722,7 +722,7 @@ def jev_classifier_lines(activity):
 # Same spirit as the Jev section above (local-only, metadata-only, never
 # reads credentials or makes a network call) but reads decision-gate's own
 # ledger (schema decision-gate-event.v1, one JSON object per decide/outcome
-# call) instead of Jev's. See docs/decision-gate.md for the ledger schema.
+# call) instead of Jev's. See $NOTES/Homelab/dotfiles/decision-gate.md for the ledger schema.
 
 DG_EVENT_SCHEMA = 'decision-gate-event.v1'
 DG_VALID_KINDS = {'decide', 'outcome'}

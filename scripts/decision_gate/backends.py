@@ -112,7 +112,7 @@ def jev_run(questions: List[dict], state, api_key: str, timeout_s: float, model:
             # Verified live 2026-10-07: TypeSafe's actual wire response for a
             # `noul` question is `{"type": "noul", "noul": <p_true>}`, not
             # the `{"probability": ...}` shape docs.typesafe.ai/api.md implied
-            # when this was written from docs alone (see docs/decision-gate.md).
+            # when this was written from docs alone (see $NOTES/Homelab/dotfiles/decision-gate.md).
             p_true = wa.get("noul", wa.get("probability"))
             if isinstance(p_true, (int, float)):
                 answers[qid] = {"probs": {"true": float(p_true), "false": 1.0 - float(p_true)}}
