@@ -1,299 +1,59 @@
-# Backup & Restore Guide
+# Backup and restore
 
-This document describes the backup and restore system for your dotfiles and system configuration.
+`bin/backup` creates an encrypted snapshot of selected machine state; it is **not** a backup of the entire home directory. Set `BACKUP_DIR` (normally exported by `config/zsh/.zshenv` to `$ARCHIVE/backups/backup`) and ensure `age`, `sudo` and `pacman` are available. `bin/backup-borg` separately archives the whole `$SYNC` directory to an external drive.
 
-## Encryption (since 2026-10-06)
-
-Archives are written as **`<timestamp>.tar.gz.age`**, encrypted to the same
-recipients as the bootstrap kit (`secrets/recipients.txt`: two YubiKeys and the
-offline paper key), and staged in a temp dir outside `$SYNC`. Before that the
-script wrote a plaintext `.tar.gz` of SSH/GPG/age keys and Wi-Fi passwords into
-the synced folder. `restore` decrypts `.age` archives with
-`BACKUP_IDENTITY` (default: the YubiKey identity stub in `secrets/`); older
-plaintext `.tar.gz` archives still restore. Examples below that show
-`.tar.gz` apply to those old archives.
-
-## Overview
-
-The backup system creates timestamped, comprehensive backups of critical system and user data to `$SYNC/backup/`. All backups are stored as compressed tarballs with preserved permissions.
-
-## Location
-
-- **Backup Scripts**: `$DOTFILES/bin/backup` and `$DOTFILES/bin/backup-borg`
-- **Restore Script**: `$DOTFILES/bin/restore`
-- **Backup Storage**: `$BACKUP_DIR` (defaults to `$SYNC/archive/backups/backup/`)
-- **Environment**: `BACKUP_DIR` must be set (automatically configured in dotfiles)
-
-## Quick Start
-
-### Create Backup
+## Create a snapshot
 
 ```bash
-# Ensure BACKUP_DIR is set
-export BACKUP_DIR="$SYNC/backup"
-
-# Run backup (creates timestamped archive)
 backup
+ls -lh "$BACKUP_DIR"/*.tar.gz.age
 ```
 
-### Restore from Backup
+The script stages outside the synced tree and writes `<timestamp>.tar.gz.age` encrypted to `BACKUP_RECIPIENTS` (default: `$DOTFILES/secrets/recipients.txt`). **Keep the recipient identities available independently of the backup.** A failed run can leave a `.partial` file; only a completed `.age` file is a backup. Older plaintext `.tar.gz` archives may contain credentials and should be treated as sensitive.
+
+Each archive contains a single `<timestamp>/` directory with these entries (missing optional sources are skipped):
+
+| Archive entry | Source |
+| --- | --- |
+| `bluetooth`, `network-connections` | `/var/lib/bluetooth`, `/etc/NetworkManager/system-connections` |
+| `ssh-keys`, `gnupg` | `~/.ssh`, `~/.gnupg` |
+| `firefox-data`, `thunderbird-data` | `~/.mozilla/firefox`, `~/.thunderbird` |
+| `tmuxp-sessions`, `zhistory` | `$XDG_CONFIG_HOME/tmuxp`, `$ZDOTDIR/.zhistory` |
+| `age-keys`, `age-keys-alt`, `sops-age-keys` | `~/.config/age`, `~/.age`, `~/.config/sops/age` |
+| `atuin-key`, `syncthing-key`, `pritunl-profiles` | Atuin key, Syncthing identity key, Pritunl profiles |
+| `fstab`, `hostname`, `hosts`, `systemd-services` | Selected `/etc` files and `/etc/systemd/system` |
+| `crontab`, `pkglist.txt`, `aurlist.txt`, `permission_log.txt` | User crontab, pacman lists, saved archive permissions |
+
+This does **not** include cloud CLI credentials, container credentials, password stores, the dotfiles `local/` overlay or arbitrary development directories. Verify each critical source is backed up separately.
+
+## Restore
 
 ```bash
-# List available backups
-ls -lh $SYNC/backup/*.tar.gz
-
-# Restore the newest archive in $BACKUP_DIR (extracts internally, no manual tar)
+# Newest .tar.gz or .tar.gz.age in BACKUP_DIR
 restore
-
-# Or restore a specific archive
-restore $SYNC/backup/2024-11-08_09-56-50.tar.gz
+# Explicit archive (BACKUP_DIR is not needed for this form)
+restore "$BACKUP_DIR/2026-10-06_09-56-50.tar.gz.age"
 ```
 
-### Borg Backup (External Drive)
+`restore` extracts the timestamped directory into a temporary directory, then copies supported items to their destinations. For encrypted archives it uses `BACKUP_IDENTITY` (default: `$DOTFILES/secrets/yubikey-identity.txt`); a hardware key may require a touch. Old plaintext `.tar.gz` archives are also accepted. The command uses `sudo` for Bluetooth and NetworkManager and may overwrite existing credentials. Inspect the archive and back up the destination first; run only on a trusted machine.
+
+Restore covers the user entries above and the two system directories, plus a nonempty crontab. **It does not automatically restore** `fstab` (UUIDs may differ), `hostname`, `hosts`, `systemd-services`, package lists or `permission_log.txt`; review these by hand. It writes `zhistory` to `${ZDOTDIR:-$HOME}/.zhistory`. Re-login or reboot where required.
+
+For a selective restore, extract to a private temporary directory and use the archive's actual timestamped path, not a `backup/` prefix:
 
 ```bash
-# Backup entire $SYNC to external drive
-backup-borg
+work=$(mktemp -d)
+chmod 700 "$work"
+# For encrypted archives (set BACKUP_IDENTITY to your own identity if necessary):
+age -d -i "${BACKUP_IDENTITY:-$DOTFILES/secrets/yubikey-identity.txt}" \
+  "$BACKUP_DIR/2026-10-06_09-56-50.tar.gz.age" | tar -xz -C "$work"
+# Inspect first, then copy a selected item from "$work/<timestamp>/".
+# For old plaintext archives instead: tar -xzf archive.tar.gz -C "$work"
+# When finished, remove the temporary decrypted copy securely per local policy.
 ```
 
-## What Gets Backed Up
+## Borg (separate full sync backup)
 
-### System Configuration
-- `/var/lib/bluetooth` - Bluetooth pairings
-- `/etc/NetworkManager/system-connections` - Network connections
-- `/etc/systemd/system` - Systemd service units
-- `/etc/fstab`, `/etc/hostname`, `/etc/hosts` - System files
+`bin/backup-borg` backs up `$SYNC` to `$BORG_BACKUP_DRIVE/borg-repo` (default drive: `/run/media/$USER/backup-drive`). Set `BORG_BACKUP_DEVICE` if the drive must be mounted; the script mounts it at `$BORG_BACKUP_DRIVE` and initializes a repokey-encrypted repo there if absent. Keep the Borg passphrase and recovery key separately. Check available archives with `borg list "$BORG_BACKUP_DRIVE/borg-repo"`. This is independent of the encrypted snapshots above.
 
-### User Credentials & Secrets (600/700 permissions)
-- `~/.ssh/` - SSH keys and configuration
-- `~/.gnupg/` - GPG keys
-- `~/.aws/` - AWS credentials and configuration
-- `~/.kube/` - Kubernetes cluster configurations
-- `~/.password-store/` - Pass password manager store
-- `~/.claude/` - Claude Code credentials
-- `~/.claude.json` - Claude Code configuration
-- `~/.docker/` - Docker credentials
-- `~/.pulumi/` - Pulumi state and credentials
-- `~/.env` - Environment variables file
-
-### Development Tools
-- `~/.cargo/` - Rust/Cargo configuration
-- `~/.terraform.d/` - Terraform plugins and configuration
-
-### Application Data
-- `~/.mozilla/firefox/` - Firefox profiles and data
-- `~/.thunderbird/` - Thunderbird email data
-- `$XDG_CONFIG_HOME/tmuxp/` - Tmux session templates
-- `$ZDOTDIR/.zhistory` - Zsh command history
-
-### Package Lists
-- Installed packages (`pacman -Qqe`)
-- AUR packages (`pacman -Qqm`)
-- User crontab
-
-## Backup Structure
-
-Each backup creates a timestamped directory:
-
-```
-$BACKUP_DIR/
-├── 2024-11-08_09-56-50/
-│   ├── aws/                    # AWS credentials
-│   ├── bluetooth/              # Bluetooth pairings
-│   ├── cargo/                  # Cargo config
-│   ├── claude/                 # Claude settings
-│   ├── claude.json             # Claude config file
-│   ├── docker/                 # Docker credentials
-│   ├── env                     # Environment variables
-│   ├── firefox-data/           # Firefox profiles
-│   ├── gnupg/                  # GPG keys
-│   ├── kube/                   # Kubernetes configs
-│   ├── network-connections/    # NetworkManager
-│   ├── password-store/         # Pass passwords
-│   ├── pulumi/                 # Pulumi state
-│   ├── ssh-keys/               # SSH keys
-│   ├── systemd-services/       # Systemd units
-│   ├── terraform.d/            # Terraform plugins
-│   ├── thunderbird-data/       # Thunderbird data
-│   ├── tmuxp-sessions/         # Tmux sessions
-│   ├── zhistory                # Shell history
-│   ├── aurlist.txt             # AUR packages
-│   ├── crontab                 # User crontab
-│   ├── fstab                   # Filesystem table
-│   ├── hostname                # System hostname
-│   ├── hosts                   # Hosts file
-│   ├── permission_log.txt      # Original permissions
-│   └── pkglist.txt             # Installed packages
-└── 2024-11-08_09-56-50.tar.gz  # Compressed archive
-```
-
-## Permission Management
-
-The backup script:
-1. **Logs** original permissions to `permission_log.txt`
-2. **Sets** secure permissions during backup:
-   - Sensitive files/dirs: `600`/`700` (owner only)
-   - Config files: `644`/`755` (standard)
-3. **Restores** using `restore` script
-
-## Automation
-
-### Systemd Timer (Example)
-
-A systemd timer is set up for automatic Bluetooth backups. You can extend this pattern:
-
-```bash
-# View timer status
-systemctl --user list-timers | grep backup
-
-# Example timer (bluetooth-auto-backup.timer)
-[Unit]
-Description=Backup Timer
-Requires=backup.service
-
-[Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-## Backup Strategies
-
-### Local Backup (Default)
-```bash
-# Manual backup
-export BACKUP_DIR="$SYNC/backup"
-backup
-```
-
-### Borg Backup (Recommended for External Storage)
-```bash
-# Initialize repository (first time)
-borg init --encryption=repokey /path/to/repo
-
-# Backup entire $SYNC
-backup-borg
-
-# List backups
-borg list /path/to/repo
-
-# Restore specific backup
-borg extract /path/to/repo::backup-2024-11-08
-```
-
-### Cloud Sync
-Since backups are stored in `$SYNC/backup/`, they can be synced to cloud storage:
-- Syncthing (recommended for continuous sync)
-- Restic (for encrypted cloud backups)
-- rclone (for various cloud providers)
-
-## Restore Procedure
-
-### Full Restore
-
-```bash
-# 1. Run the restore script (newest archive, or pass a path)
-restore [archive.tar.gz]
-
-# 2. Reboot or re-login for changes to take effect
-```
-
-Notes:
-- `/etc/fstab` is deliberately NOT auto-restored (UUIDs differ per machine);
-  the script tells you to merge it by hand.
-- Package lists (`pkglist.txt`/`aurlist.txt`) and `systemd-services` are
-  informational; reinstall via pacman manually.
-
-### Selective Restore
-
-```bash
-# Restore specific directory
-tar -xzf $SYNC/backup/backup.tar.gz -C $HOME backup/ssh-keys
-cp -r $SYNC/backup/backup/ssh-keys/* $HOME/.ssh/
-
-# Restore specific file
-tar -xzf $SYNC/backup/backup.tar.gz -C /tmp backup/claude.json
-cp /tmp/backup/claude.json $HOME/.claude.json
-```
-
-## Best Practices
-
-1. **Regular Backups**: Run `backup` before major system changes
-2. **Test Restores**: Periodically verify backups can be restored
-3. **Multiple Locations**: Keep backups in multiple locations (local + external/cloud)
-4. **Encryption**: Use Borg or encrypted cloud storage for sensitive data
-5. **Version Control**: Keep multiple backup versions (automated with Borg)
-6. **Documentation**: Update this file when adding new backup items
-
-## Security Considerations
-
-- Backup files contain **sensitive credentials** (SSH keys, AWS creds, passwords)
-- Ensure `$SYNC/backup/` has appropriate permissions (`700` recommended)
-- Use encrypted storage for backups (Borg with encryption, encrypted drives)
-- Do not commit backup archives to version control
-- Regularly rotate and test backup encryption keys
-
-## Troubleshooting
-
-### Backup Fails
-```bash
-# Check BACKUP_DIR is set
-echo $BACKUP_DIR
-
-# Verify write permissions
-mkdir -p $BACKUP_DIR/test && rmdir $BACKUP_DIR/test
-
-# Check disk space
-df -h $SYNC
-```
-
-### Restore Issues
-```bash
-# Check backup integrity
-tar -tzf $SYNC/backup/backup.tar.gz | head
-
-# View original permissions
-tar -xzf backup.tar.gz backup/permission_log.txt -O | less
-
-# Restore with verbose output
-bash -x $(which restore)
-```
-
-### Missing Files
-If a file/directory doesn't exist, backup script skips it with a warning:
-```
-Warning: /path/to/file does not exist and was skipped
-```
-
-## Adding New Backup Items
-
-To add new files/directories to backup:
-
-1. Edit `$DOTFILES/bin/backup`:
-```bash
-# Add to backup script (around line 43-60)
-backup_item "$HOME/.new-config" "$BACKUP_FOLDER/new-config" "644" "755"
-```
-
-2. Edit `$DOTFILES/bin/restore`:
-```bash
-# Add to restore script (around line 43-64)
-restore_dir "$BACKUP_DIR/new-config" "$HOME/.new-config"
-```
-
-3. Update this documentation
-
-## Related Scripts
-
-- `backup` - Main backup script (`$DOTFILES/bin/backup:2371`)
-- `restore` - Restoration script (`$DOTFILES/bin/restore:1108`)
-- `backup-borg` - Borg backup script (`$DOTFILES/bin/backup-borg:599`)
-
-## See Also
-
-- [Borg Backup Documentation](https://borgbackup.readthedocs.io/)
-- [Restic Documentation](https://restic.readthedocs.io/)
-- [Syncthing Documentation](https://docs.syncthing.net/)
+No backup timer is tracked here; schedule and test backups explicitly. Test a restore in a disposable environment before depending on it. Never commit archives or decrypted extracts.

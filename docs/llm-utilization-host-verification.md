@@ -24,21 +24,3 @@ result in a host-local scratch file if a longer-lived record is needed.
 Each host must have its own installation, credentials, cache, proxy state, and
 report timestamps. This procedure does not use `scp`, shared cache directories, or
 copied authentication/browser state.
-
-## BUILD verification record (2026-09-30)
-
-The local host (`arch`) passed the report, news, unit, Node, Pi, and JSON checks;
-its proxy endpoint checks failed because no local proxy was running. Cache metadata
-reported `/home/gustaf/.cache/llm-usage` mode `0700`.
-
-On `gud1@skrubben`, checks were run in the independently installed
-`/home/gud1/sync/src/dotfiles` tree without changing it. `make test-unit`, Node,
-usage JSON, and both proxy JSON checks passed. The combined Python provider test
-failed because the installed tree does not contain the current news test module;
-the news command is also not installed. The pre-existing remote working-tree
-changes remained unchanged. No credentials, cookies, raw responses, or account
-mutations were used.
-
-The final verification task remains open until both hosts run the same current
-smoke suite from complete installations and the proxy/news checks pass or are
-explicitly recovered and rerun.

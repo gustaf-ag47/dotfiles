@@ -1,97 +1,13 @@
-# 🚀 Dotfiles - Development Environment
+# Dotfiles
 
-A clean and efficient development environment optimized for productivity on Arch Linux with Hyprland (Wayland) and i3 (X11) support.
+A keyboard-driven Arch Linux development environment with Hyprland (Wayland), i3 (X11), Zsh, Neovim, tmux and Pi.
 
-## ✨ Features
+Start with the [setup and feature guide](docs/README.md). For root-owned machine setup, see [system/README.md](system/README.md) and [profiles/README.md](profiles/README.md).
 
-- **Hyprland** (Wayland) with Tokyo Night theme
-- **i3** (X11) fallback support
-- **Zsh** with modern CLI tools
-- **Neovim** with comprehensive plugin setup
-- **Tmux** with vim-style keybindings
-- **Modern CLI tools** integration
+## References
 
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-# Clone the repository
-git clone <your-repo-url> ~/.dotfiles
-cd ~/.dotfiles
-
-# Run the installation script
-make install
-```
-
-### Post-Installation
-
-1. **Set Zsh as default shell:**
-   ```bash
-   chsh -s $(which zsh)
-   ```
-
-2. **Install modern CLI tools:**
-   ```bash
-   # Arch Linux
-   sudo pacman -S bat eza fd ripgrep dust duf procs
-
-   # The aliases will automatically activate when tools are installed
-   ```
-
-## 🔧 Modern CLI Tools
-
-Enhanced aliases that activate when tools are installed:
-
-- `bat` → better `cat` with syntax highlighting
-- `eza` → better `ls` with colors and icons
-- `fd` → better `find`
-- `dust` → better `du`
-- `duf` → better `df`
-- `procs` → better `ps`
-- `ripgrep` → better `grep`
-
-## 📋 Key Features
-
-### Shell Enhancements
-- Modern CLI tool aliases (conditional loading)
-- Vim-style command line editing
-- Enhanced completion and autosuggestions
-- Git integration and shortcuts
-
-### Editor Configuration
-- Neovim with LSP support
-- 25+ plugins for development
-- Language support for Python, JavaScript, Rust, Go, etc.
-- Custom keybindings and snippets
-
-### Window Management
-- Hyprland with Tokyo Night theme
-- Vim-style navigation keybindings
-- Workspace organization
-- Custom window rules
-
-## 🛠️ Customization
-
-All configurations are organized in the `config/` directory:
-- `config/zsh/` - Shell configuration
-- `config/nvim/` - Editor configuration
-- `config/gui/` - Desktop environment configs
-- `config/tmux/` - Terminal multiplexer
-- `config/pi/` - pi agent; `extensions/llm-failover.ts` switches provider or, when nothing is routable,
-  waits for the earliest OAuth cooldown reset and resumes the turn (`PI_FAILOVER_WAIT=0` disables,
-  `PI_FAILOVER_MAX_WAIT_HOURS` caps the wait, default 6; `PI_FAILOVER_POLL_SECONDS`, default 60)
-
-## 📖 Documentation
-
-- Complete keybinding reference: [KEYBINDINGS.md](docs/KEYBINDINGS.md)
-- [Grok CLI OAuth in Pi and LLM usage](docs/grok-pi.md)
-- [Understanding unknown quota readings](docs/llm-usage-unknown.md)
-- [Jev observation-only classification and accounting](docs/jev-pi.md)
-- [Context-efficient reads and opt-in Jev file scouting](docs/jev-context.md)
-- [Opt-in Jev Ultrafast browser skill](docs/jev-ultrafast.md)
-- Installation troubleshooting in individual config directories
-
----
-
-**🚀 A clean, efficient development environment that grows with your needs!**
+- [Keybindings](docs/KEYBINDINGS.md)
+- [Git workflow](docs/GIT_WORKFLOW.md)
+- [Backup and restore](docs/BACKUP.md)
+- [Linting and tests](docs/LINTING.md)
+- [Security](docs/SECURITY.md)

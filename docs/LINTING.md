@@ -1,18 +1,14 @@
 # Linting - Platform-Independent Code Quality
 
-This repository uses Docker-based linting for platform independence, with automatic fallback to local tools when Docker is unavailable.
+`bin/lint` uses Docker with a local-tool fallback. GitHub Actions has separate gates; run the CI-equivalent checks listed below before pushing.
 
 ## 🐳 Docker-First Approach
 
-All linters run in a consistent Docker environment, ensuring the same results across:
-- Linux (Arch, Ubuntu, etc.)
-- macOS
-- Windows (WSL)
-- CI/CD pipelines
+The Docker image packages ShellCheck, shfmt, luacheck and yamllint for local use on Linux, macOS and Windows (WSL). CI runs its own tools and does not invoke this image.
 
 **Benefits:**
 - ✅ No need to install linters locally
-- ✅ Consistent results across all platforms
+- ✅ Shared local toolchain (CI still needs separate verification)
 - ✅ Automatic setup on first use
 - ✅ Isolated from system dependencies
 - ✅ Easy to update linter versions
@@ -45,6 +41,7 @@ bin/lint --shellcheck bin/backup   # Check specific file
 bin/lint --luacheck                # Check Lua files
 bin/lint --shfmt                   # Check shell formatting
 bin/lint --yamllint                # Check YAML files
+bin/lint --stylua                  # CI format gate (native stylua required)
 ```
 
 ## 🔧 Available Linters
@@ -70,7 +67,7 @@ bin/lint --luacheck config/nvim/
 ### shfmt
 **Purpose**: Shell script formatting
 **Files**: `*.sh`, `*.bash`, `bin/*`
-**Style**: 2-space indentation, POSIX-compatible
+**Style**: `shfmt -d` defaults (no repository-wide shfmt config); not part of `--all` or CI
 
 ```bash
 bin/lint --shfmt bin/*
@@ -78,7 +75,7 @@ bin/lint --shfmt bin/*
 
 ### yamllint
 **Purpose**: YAML syntax and style validation
-**Files**: `*.yml`, `*.yaml`
+**Files**: `*.yml`, `*.yaml`, including `.github/workflows/`
 
 ```bash
 bin/lint --yamllint
@@ -89,12 +86,10 @@ bin/lint --yamllint
 ### Components
 
 1. **Dockerfile.linters**
-   - Alpine Linux base for minimal size (~50MB)
-   - Contains all linter tools
+   - Alpine Linux base; contains ShellCheck, shfmt, Lua 5.1, luacheck and yamllint
    - Built automatically on first use
 
-
-3. **bin/lint**
+2. **bin/lint**
    - User-friendly CLI interface
    - Automatic Docker/local detection
    - Handles image building
@@ -230,14 +225,7 @@ bin/lint --shellcheck bin/*
 ## ⚙️ Configuration Files
 
 ### .luacheckrc
-```lua
-std = "luajit"
-globals = { "vim" }
-ignore = {
-    "212",  -- Unused argument
-    "213",  -- Unused loop variable
-}
-```
+See the root `.luacheckrc` for the actual globals and ignored diagnostics; do not copy a partial excerpt into new configs.
 
 ### ShellCheck
 Use inline directives or `.shellcheckrc`:
@@ -322,9 +310,12 @@ chmod +x config/git/hooks/pre-commit
 `nvim.yml`:
 - `luac -p` (Lua 5.1), `luacheck`, **StyLua format check**, headless config load
 
-Reproduce locally: `make lint` (shellcheck/luacheck/yamllint, + stylua when
-installed) and the `make test-*` targets. The linter Docker image pins Lua 5.1
-to match CI.
+Reproduce locally: `make lint` (shellcheck/luacheck/yamllint, plus StyLua when
+installed), **`make lint-stylua`** (install StyLua first), `make test-unit`,
+`make test-node`, `make test-install` (Docker), and `make test-bootstrap` (age).
+`make lint-shell`, `make lint-lua`, `make lint-yaml` run individual checks;
+`make lint-build` rebuilds the image. `make test` is not the CI suite.
+The linter Docker image pins Lua 5.1, but CI uses its own toolchain.
 
 ## 📈 Best Practices
 

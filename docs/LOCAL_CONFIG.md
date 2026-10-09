@@ -6,10 +6,11 @@ This guide explains how to manage personal, company-specific, or sensitive confi
 
 ### 1. Create Your Personal Files
 
-The `local/` directory is already set up and gitignored. Create your personal configurations:
+The installer links `local/` to a private synced directory when available; it is gitignored by this repository. Create your personal configurations there (create subdirectories first if needed):
 
 ```bash
-cd $DOTFILES/local
+cd "$DOTFILES/local"
+mkdir -p env applications config/zsh bin
 
 # Create personal environment variables
 cat > env/.env << 'EOF'
@@ -67,11 +68,8 @@ source ~/.config/zsh/.zshrc
 
 ```
 local/
-├── README.md                      # Documentation (tracked in git)
-├── .gitkeep                       # Keeps structure (tracked in git)
 ├── applications/                  # Personal .desktop files
-│   ├── example-work-tool.desktop.example  # Template (tracked)
-│   └── work-slack.desktop        # Your file (gitignored)
+│   └── work-slack.desktop        # Your file (not tracked in this repo)
 ├── bin/                          # Personal scripts
 │   └── company-deploy            # Your script (gitignored)
 ├── config/                       # Config overrides
@@ -80,8 +78,7 @@ local/
 │   └── git/                     # Personal git config
 │       └── config               # Your config (gitignored)
 └── env/                         # Environment variables
-    ├── .env.example             # Template (tracked)
-    └── .env                     # Your file (gitignored)
+    └── .env                     # Your file (not tracked in this repo)
 ```
 
 ## Common Use Cases
