@@ -114,8 +114,7 @@ on this branch:
 - `git diff --check` clean on every commit.
 
 Live, network-authorized, on this host (second commit on this branch — see
-[`docs/research/jev-ultrafast-implementation.md`](research/jev-ultrafast-implementation.md) for the full
-write-up): `scripts/setup.sh` ran for real — cloned the actual upstream repo at the pinned commit and
+operator notes: jev-ultrafast-implementation.md for the full write-up): `scripts/setup.sh` ran for real — cloned the actual upstream repo at the pinned commit and
 ran `uv sync` cleanly. `doctor.py` correctly reported readiness and found the pre-existing shared
 TypeSafe key without printing it. `run.py --inspect` surfaced a clean upstream error tracing to Chrome's
 `chrome://inspect` remote-debugging **consent toggle never having been enabled** on this host's regular

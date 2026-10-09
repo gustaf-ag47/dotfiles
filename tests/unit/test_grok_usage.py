@@ -126,7 +126,7 @@ class GrokBuildAdapterTests(unittest.TestCase):
 
     def test_live_observed_billing_schema_without_monthly_fields_is_unknown_not_zero(self):
         """Redacted/sanitized shape of a real GET /v1/user and /v1/billing response
-        (2026-10-02, docs/research/grok-usage-implementation.md): this account's
+        (2026-10-02, operator notes: grok-usage-implementation.md): this account's
         billing config has no monthlyLimit/used/creditUsagePercent at all -- only
         currentPeriod, onDemandCap/onDemandUsed/prepaidBalance (each 0). The demi
         community adapter's fields were not present; the adapter must not invent
@@ -223,7 +223,7 @@ class GrokCliBridgeIntegrationTests(unittest.TestCase):
     signature.
 
     The throwaway script re-implements the sibling's documented, narrow
-    contract (scripts/grok_oauth.py / docs/research/grok-pi-auth-implementation.md
+    contract (scripts/grok_oauth.py / operator notes: grok-pi-auth-implementation.md
     in the feat/grok-pi-auth worktree: fixed entry key, auth_mode == "oidc",
     expires_at skew, print bare token or exit non-zero) because that real
     script is owned by a sibling change not yet merged into this branch; it

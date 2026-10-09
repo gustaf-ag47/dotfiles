@@ -90,7 +90,6 @@ All configurations are organized in the `config/` directory:
 - [Jev observation-only classification and accounting](docs/jev-pi.md)
 - [Context-efficient reads and opt-in Jev file scouting](docs/jev-context.md)
 - [Opt-in Jev Ultrafast browser skill](docs/jev-ultrafast.md)
-- [Consolidated Jev use-case decisions and evidence](docs/research/jev-use-cases-summary.md)
 - Installation troubleshooting in individual config directories
 
 ---

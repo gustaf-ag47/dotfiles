@@ -27,6 +27,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+      - name: Keep operator notes out of the repo
+        run: |
+          if git ls-files | grep -Eq '^docs/(research|handover)/'; then
+            echo 'Research and briefs belong in operator notes' >&2
+            exit 1
+          fi
       - name: bash -n on every shell script
         run: |
           rc=0

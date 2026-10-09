@@ -39,7 +39,10 @@ Git history is machine-local (Syncthing ignores `.git`): `git-bundle-backup`
 (weekly timer) bundles unpushed branches, stashes and no-remote repos into
 `$SYNC/archive/git-bundles`; `git-rehydrate` rebuilds `.git` on a new machine.
 Open design questions (work/private split, sign-in, secrets):
-`docs/research/fleet-design.md`.
+operator notes: fleet-design.md.
+
+Research reports, audits and agent briefs never go in this repo. Write them to
+operator notes (the runs folder from `ws route dotfiles`).
 
 ### Git Workflow (Trunk-Based Development)
 ```bash

@@ -59,7 +59,7 @@ def jev_run(questions: List[dict], state, api_key: str, timeout_s: float, model:
     """One POST to api.typesafe.ai/v1/systemone covering every question in `questions`.
 
     Wire protocol per TypeSafe's own docs (docs.typesafe.ai/api.md, fetched
-    2026-10-02, see docs/research/jev-pi-routing.md section 5a): question
+    2026-10-02, see operator notes: jev-pi-routing.md section 5a): question
     types are `noul` (bool) and `choice`; request body is
     `{state, model, questions}`; response is
     `{model, answers, usage: {input_tokens, output_tokens}}`.

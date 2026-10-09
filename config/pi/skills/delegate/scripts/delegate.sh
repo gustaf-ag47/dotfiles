@@ -236,7 +236,7 @@ if [ -n "$WORKTREE" ]; then
 	# A --worktree child gets a FRESH checkout of origin/main, so a brief that is
 	# untracked in the parent checkout simply does not exist for it: the child is
 	# told to read a path that is not there and invents a task instead. Copy the
-	# brief in, preserving its repo-relative path so the child can commit it.
+	# brief in temporarily; external briefs use DELEGATE_BRIEF.md. Do not commit it.
 	if [ -n "$BRIEF" ] && [ "$DRY" != "1" ]; then
 		brief_abs="$(realpath "$BRIEF")"
 		brief_in_repo="$(realpath --relative-to="$repo_root" "$brief_abs" 2>/dev/null || true)"

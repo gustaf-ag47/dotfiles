@@ -30,7 +30,7 @@ Choose an available model from the installed catalog. Current examples:
 pi --model deepseek/deepseek-v4-flash
 pi --model deepseek/deepseek-v4-pro -p 'your task'
 ~/.pi/agent/skills/delegate/scripts/delegate.sh \
-  --model deepseek/deepseek-v4-pro --brief docs/handover/my-task.md
+  --model deepseek/deepseek-v4-pro --brief "$(ws route dotfiles | awk '{print $4}')/my-task.md"
 ```
 
 Use Flash for inexpensive bulk work, Pro for harder tasks; for delegated cheap work

@@ -3,7 +3,7 @@
 // 2026-10-02: GET https://cli-chat-proxy.grok.com/v1/models returned HTTP 200
 // for an OAuth bearer carrying X-XAI-Token-Auth: xai-grok-cli with model
 // grok-4.7 (api_backend=responses, 256000 context, 500000 optional). See
-// docs/research/grok-pi-auth-implementation.md.
+// operator notes: grok-pi-auth-implementation.md.
 //
 // Pi's bundled @earendil-works/pi-ai already ships a native "xai" provider
 // (providers/xai.ts) whose OAuth flow uses the *same* client_id
@@ -50,7 +50,7 @@ export const GROK_BUILD_HEADERS: ProviderHeaders = {
 };
 
 // Static baseline so the provider lists a model offline/pre-refresh, matching
-// the live /models response recorded in docs/research/grok-pi-auth-implementation.md.
+// the live /models response recorded in operator notes: grok-pi-auth-implementation.md.
 // No cost fields: this is a subscription-gated CLI backend, not metered
 // api.x.ai billing, and we must not imply a price that doesn't apply here.
 export const GROK_4_7_MODEL: Model<"openai-responses"> = {

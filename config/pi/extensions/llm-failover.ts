@@ -1,6 +1,6 @@
 // llm-failover: notify-only cross-provider switch driven by the local proxy's
 // route oracle (`GET /_route?model=`). Decisions 2 and 3 in
-// docs/research/generic-llm-proxy.md: switch away when the Anthropic pool cannot
+// operator notes: generic-llm-proxy.md: switch away when the Anthropic pool cannot
 // serve, switch back when it recovers, print one line each time, never ask.
 //
 // Hooks (pi 0.87.1): `turn_end` carries the failed assistant message; the SDK
