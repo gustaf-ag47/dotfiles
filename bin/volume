@@ -1,6 +1,6 @@
 #!/bin/bash
 
-iDIR="$HOME/.config/mako/icons"
+# Use standard icon-theme names; no mako icon directory is installed.
 
 get_volume() {
 	volume=$(pulsemixer --get-volume | awk '{print $1}')
@@ -10,13 +10,13 @@ get_volume() {
 get_icon() {
 	current=$(get_volume)
 	if [[ "$current" -eq "0" ]]; then
-		echo "$iDIR/volume-mute.png"
+		echo audio-volume-muted
 	elif [[ ("$current" -ge "0") && ("$current" -le "30") ]]; then
-		echo "$iDIR/volume-low.png"
+		echo audio-volume-low
 	elif [[ ("$current" -ge "30") && ("$current" -le "60") ]]; then
-		echo "$iDIR/volume-mid.png"
+		echo audio-volume-medium
 	elif [[ ("$current" -ge "60") && ("$current" -le "100") ]]; then
-		echo "$iDIR/volume-high.png"
+		echo audio-volume-high
 	fi
 }
 
@@ -34,7 +34,7 @@ dec_volume() {
 
 toggle_mute() {
 	if [ "$(pulsemixer --get-mute)" == "0" ]; then
-		pulsemixer --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/volume-mute.png" "Volume Switched OFF"
+		pulsemixer --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i audio-volume-muted "Volume Switched OFF"
 	elif [ "$(pulsemixer --get-mute)" == "1" ]; then
 		pulsemixer --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$(get_icon)" "Volume Switched ON"
 	fi
@@ -42,14 +42,14 @@ toggle_mute() {
 
 toggle_mic() {
 	if [ "$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-mute)" == "0" ]; then
-		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/microphone-mute.png" "Microphone Switched OFF"
+		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i microphone-sensitivity-muted "Microphone Switched OFF"
 	elif [ "$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-mute)" == "1" ]; then
-		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i "$iDIR/microphone.png" "Microphone Switched ON"
+		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i audio-input-microphone "Microphone Switched ON"
 	fi
 }
 
 get_mic_icon() {
-	echo "$iDIR/microphone.png"
+	echo audio-input-microphone
 }
 
 notify_mic_user() {
