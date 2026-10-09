@@ -30,10 +30,40 @@ if [ "$session_count" -eq 1 ]; then
     fi
 fi
 
+# Remember the previous "last" snapshot so we can detect a catastrophic shrink
+# (e.g. the server died and automation recreated a near-empty skeleton \u2014 the
+# 2026-10-07 incident: a 91-pane save was superseded by a 1-pane save, so the
+# subsequent restore resurrected empty windows).
+resurrect_dir="$(tmux show-option -gqv @resurrect-dir 2>/dev/null)"
+resurrect_dir="${resurrect_dir:-$HOME/.tmux/resurrect}"
+resurrect_dir="$(eval echo "$resurrect_dir")"  # expand $HOME in the option value
+prev_file=""
+prev_panes=0
+if [ -L "$resurrect_dir/last" ]; then
+    prev_file="$(readlink -f "$resurrect_dir/last")"
+    prev_panes=$(grep -c '^pane' "$prev_file" 2>/dev/null || echo 0)
+fi
+
 # Run the actual save script
 if [ -x "$RESURRECT_SCRIPT" ]; then
     "$RESURRECT_SCRIPT"
 else
     echo "Error: tmux-resurrect save script not found at $RESURRECT_SCRIPT"
     exit 1
+fi
+
+# Shrink guard: if the new snapshot has fewer than half the panes of the
+# previous one (and the previous one was non-trivial), keep the new file on
+# disk but point "last" back at the previous good snapshot so a restore never
+# resurrects a post-crash skeleton.
+if [ -n "$prev_file" ] && [ "$prev_panes" -ge 10 ] && [ -L "$resurrect_dir/last" ]; then
+    new_file="$(readlink -f "$resurrect_dir/last")"
+    if [ "$new_file" != "$prev_file" ]; then
+        new_panes=$(grep -c '^pane' "$new_file" 2>/dev/null || echo 0)
+        if [ "$new_panes" -lt "$((prev_panes / 2))" ]; then
+            ln -sf "$(basename "$prev_file")" "$resurrect_dir/last"
+            echo "WARNING: new save has $new_panes panes vs previous $prev_panes;" \
+                 "kept 'last' -> $(basename "$prev_file") (new save retained as $(basename "$new_file"))"
+        fi
+    fi
 fi
