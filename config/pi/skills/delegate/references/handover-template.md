@@ -48,10 +48,11 @@ will find a better route than a step list written by someone not looking at the 
 
 ## Where to record findings
 
-Write decisions and durable findings to `<in-repo path>`; keep raw reports at
-`<report path>` (an operator Vault report is not a git artifact). Commit and push
-repo changes only when the task calls for them. Include what changed, gates run,
-limits and evidenced out-of-scope findings. Never commit or push the operator Vault.
+Write briefs, research, audits and raw reports to operator notes (the runs
+folder, fourth field of `ws route <project>`). Name the report's absolute path
+here. Commit and push only code and project documentation when the task calls
+for them. Include what changed, gates run, limits and evidenced out-of-scope
+findings. Never commit or push operator notes.
 
 Send the parent **one results-or-blocker line only**:
 `<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.

@@ -10,7 +10,7 @@
 // client, scoped to file-relevance triage only.
 //
 // Hard constraints enforced here, not just documented (per
-// docs/research/jev-context-scout-implementation.md):
+// operator notes: jev-context-scout-implementation.md):
 //   - `enabled: true` must be passed explicitly before this module touches
 //     any file, credential, or network resource.
 //   - The shared PI_JEV_MODE=off global kill switch (and an invalid/missing
@@ -30,7 +30,7 @@
 //   - A fixed denylist of sensitive path patterns and a best-effort content
 //     scan for obvious secret literals both run before any network
 //     transmission. Both are intentionally conservative, best-effort
-//     heuristics -- see docs/research/jev-context-scout-implementation.md
+//     heuristics -- see operator notes: jev-context-scout-implementation.md
 //     for the residual-risk writeup. No claim is made to detect every
 //     secret.
 //   - Only `goal` text and a candidate's own file content are ever sent to
@@ -217,8 +217,8 @@ function runGit(args, cwd, timeoutMs, { literalPathspecs = true } = {}) {
   // gets it so a candidate path containing pathspec-magic characters
   // (`*`, `?`, `[`, `:(...)`) is always treated as a literal filename, never
   // as a glob/magic pathspec. This is the one git invocation in this module
-  // without that guarantee; see docs/research/jev-context-scout-
-  // implementation.md for the residual-risk note.
+  // without that guarantee; see operator notes:
+  // jev-context-scout-implementation.md for the residual-risk note.
   const prefix = literalPathspecs ? ["--literal-pathspecs"] : [];
   return spawnSync("git", [...prefix, ...args], {
     cwd,

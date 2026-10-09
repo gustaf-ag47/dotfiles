@@ -10,15 +10,17 @@ hands it a written brief, and tells it who its parent is. The child keeps workin
 after you move on; you monitor it with `tmux capture-pane`.
 
 ```bash
-~/.pi/agent/skills/delegate/scripts/delegate.sh --brief docs/handover/my-task.md \
+~/.pi/agent/skills/delegate/scripts/delegate.sh --brief "$(ws route dotfiles | awk '{print $4}')/my-task.md" \
   --task "fix the flaky daemon shell suite"
 ```
 
 ## The rule that makes delegation work: write the brief first
 
 A delegated agent has **no memory of your conversation**. Everything it needs must be
-in the brief — and the brief belongs in the repo, not only in the prompt, so the work
-survives the session (state lives in git, not in a context window).
+in the brief. Store it in operator notes: the runs folder from `ws route <project>`
+(fourth field). Keep briefs and raw reports out of the repo; commit only code or
+project documentation. A `--worktree` launch may copy the brief into the child
+checkout temporarily; do not stage that copy.
 
 Write the brief to a file, then pass `--brief`. Use
 [references/handover-template.md](references/handover-template.md) as the skeleton.
@@ -31,7 +33,8 @@ Minimum contents:
 - **Scope fence** — files/dirs it owns, and explicitly what it must not touch
   (critical when siblings run in parallel).
 - **Constraints** — repo conventions (AGENTS.md), verification gates it must run.
-- **Where to record findings** — an in-repo path it commits.
+- **Where to record findings** — the operator-notes runs folder for reports; name
+  any code or project documentation changes separately.
 - **Cost guidance** — and what to do when blocked instead of burning budget.
 
 ## Coordination contract
@@ -221,11 +224,10 @@ If you spawn several in a loop, verify each one before reporting that work start
   settles 8s more, because a rendered status bar means the bar is painted, *not* that
   the input loop accepts keys. Do not key readiness off the model name: it can be
   missing while a long skills/extensions banner renders.
-- **A `--worktree` child cannot see an untracked brief.** The worktree is a fresh
-  checkout of `origin/main`, so a brief you just wrote in the parent checkout does not
-  exist there — the child is pointed at a missing file and confidently invents a task.
-  The script now copies the brief into the worktree at its repo-relative path, so the
-  child can also commit it.
+- **A `--worktree` child cannot see a brief outside its checkout by default.**
+  The script copies a brief into the child worktree temporarily. For an external
+  operator-notes brief, this is `DELEGATE_BRIEF.md`; leave it untracked and never
+  commit it.
 - **Prompts are sent with `send-keys -l`**, then submitted separately. Without `-l`,
   tmux parses words like `Enter` or `Space` inside your prompt as key names.
 - **Parent attribution** comes from `$TMUX_PANE`, not `display-message -p '#S:#W'` —

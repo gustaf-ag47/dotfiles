@@ -57,7 +57,7 @@ def text(value):
     return value if isinstance(value, str) and value else None
 
 
-# Hard-coded; neither endpoint returns its top-up page (see docs/research/openai-deepseek-account-introspection.md).
+# Hard-coded; neither endpoint returns its top-up page (see operator notes: openai-deepseek-account-introspection.md).
 CODEX_TOPUP_URL = 'https://chatgpt.com/codex/settings/usage'
 DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'
 
@@ -245,8 +245,8 @@ def deepseek(auth):
 
 
 # cli-chat-proxy.grok.com is the Grok Build CLI's own backend, not the documented
-# xAI Inference API; see docs/research/grok-oauth-pi-community.md and
-# docs/research/grok-usage-implementation.md. This adapter mirrors the community
+# xAI Inference API; see operator notes: grok-oauth-pi-community.md and
+# operator notes: grok-usage-implementation.md. This adapter mirrors the community
 # adapter's reverse-engineered quota probe (GET /v1/user, GET /v1/billing) but
 # never calls it for inference. Two read-only token sources, tried in order:
 # (1) Pi's own grok-build OAuth credential in auth.json (sibling work); (2) if
@@ -430,7 +430,7 @@ REPORT_SOURCES = {
 # --- Jev local classifier activity (shadow-only observation, not a provider) ---
 #
 # This section reads a LOCAL ledger of Jev classifier calls written by the
-# delegate/Pi helper (see docs/research/jev-accounting-implementation.md).
+# delegate/Pi helper (see operator notes: jev-accounting-implementation.md).
 # It is intentionally kept separate from ADAPTERS/REPORT_SOURCES above: Jev
 # is not a routable provider here, has no known account balance or quota,
 # and "applied" must always observationally be false unless the ledger says

@@ -3,7 +3,7 @@
 // Used by bin/jev-classify (CLI, invoked by the delegate shell wrapper) and
 // config/pi/extensions/jev.ts (Pi extension, /jev command, manual use only).
 // One implementation behind both callers, per the implementation brief
-// (docs/research/jev-helper-implementation.md).
+// (operator notes: jev-helper-implementation.md).
 //
 // Hard constraints enforced here, not just documented:
 //   - Never applies a classification result to anything (`applied` is always
@@ -61,7 +61,7 @@
 // $0.042 per million input tokens, output free. This module always computes
 // estimated_cost_usd from the official published rate, never from Pi's
 // catalog, and labels it cost_source: "published-rate" (see
-// docs/research/jev-helper-implementation.md for the discrepancy writeup).
+// operator notes: jev-helper-implementation.md for the discrepancy writeup).
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -351,7 +351,7 @@ function rotateLedgerIfLarge(file, fsImpl) {
 
 /**
  * Appends one ledger event. Schema is fixed by the implementation contract
- * (docs/research/jev-helper-implementation.md): never put task text, prompts,
+ * (operator notes: jev-helper-implementation.md): never put task text, prompts,
  * file paths, auth, or raw error text in `event`.
  */
 export function appendLedgerEvent(event, { stateDir = defaultStateDir(), fsImpl = fs } = {}) {

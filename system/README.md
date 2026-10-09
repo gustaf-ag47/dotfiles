@@ -143,7 +143,7 @@ workstation.
 ### xps14: Dell XPS 14 (2026, DA14260), Panther Lake, Intel-only
 
 Prepared **before delivery** from published research
-(`docs/research/machine-profiles-and-xps14.md`). Verify every item on the
+(`operator notes: machine-profiles-and-xps14.md`). Verify every item on the
 real machine and drop what turns out to be unnecessary.
 
 - Audio: `sof-firmware`, `alsa-ucm-conf`.

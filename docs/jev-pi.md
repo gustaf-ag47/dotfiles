@@ -126,5 +126,4 @@ change this task-classification pilot's routing policy.
   mode off, failures, and outer timeout. The combined local Python suite passed
   268 tests with one existing skip (including concurrent, separate freshness tests).
 
-Research: [Pi routing investigation](research/jev-pi-routing.md),
-[ten-levels-of-jev review](research/jev-ten-levels-review.md).
+Research in operator notes: jev-pi-routing.md and jev-ten-levels-review.md.

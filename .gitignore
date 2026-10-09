@@ -56,10 +56,10 @@ config/nvim/lua/dbui_private.lua
 !secrets/
 !secrets/**
 
-# Delegation briefs are ephemeral working artifacts (the delegate skill writes
-# them here and copies them into child worktrees). Keep them out of history;
-# durable outcomes belong in docs/research/ or the code itself.
-docs/handover/
+# Delegation briefs and research reports belong in operator notes (the runs
+# folder from `ws route dotfiles`), never in this repo. The delegate launcher
+# may copy an external brief to the worktree temporarily.
+DELEGATE_BRIEF.md
 
 # Machine overlay links are created OUTSIDE the repo by scripts/install.sh; the
 # old waybar target landed inside it. Never track it again.

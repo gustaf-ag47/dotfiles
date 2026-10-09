@@ -102,6 +102,6 @@ machines. Never hard-code `/home/<user>` in tracked files: use `$HOME`,
    `make install` and `sudo scripts/install-system.sh --apply`.
 
 For the full new-laptop runbook see
-`docs/research/machine-profiles-and-xps14.md`.
+`operator notes: machine-profiles-and-xps14.md`.
 
 Secrets never live here — this file is committed to a public repo.

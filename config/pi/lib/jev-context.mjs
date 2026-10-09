@@ -3,9 +3,8 @@
 // classifier calls -- only hashing, bookkeeping, and formatting so this module
 // is unit-testable without a running Pi session.
 //
-// Retention contract this module exists to enforce (see
-// docs/research/jev-context-extension-implementation.md and
-// docs/research/jev-context-extension-implementation.md for the full writeup):
+// Retention contract this module exists to enforce (full writeup in
+// operator notes: jev-context-extension-implementation.md):
 //
 //   - A cache entry is only eligible for a dedup hit once a `context` event
 //     has shown its owning toolCallId is still present in the model-visible
@@ -154,7 +153,7 @@ export function createCacheState() {
     // Canonical cwd that a granted "on" consent applies to; see consentValidForCwd below.
     consentCwd: undefined,
     stats: { fullReads: 0, dedupedReads: 0, charsAvoidedApprox: 0, cacheClears: 0 },
-    // Mirrors the sibling scoutFiles() stats contract (docs/research/jev-context-extension-implementation.md):
+    // Mirrors the sibling scoutFiles() stats contract (operator notes: jev-context-extension-implementation.md):
     // networkCalls/cacheHits/inputTokens/estimatedCostUsd/unknownCostCalls are the sibling's own
     // bounded counters, accumulated here across calls in this session. `usage`, when the sibling
     // returns one, is a native Pi Usage aggregate ({input, output, cacheRead, cacheWrite,

@@ -33,7 +33,7 @@ reshaped.
 The proxy refreshes the read-only `/api/oauth/usage` endpoint every five minutes;
 OAuth scope failures are reported per token and never invalidate inference.
 
-Cross-provider quota oracle (docs/research/generic-llm-proxy.md, option c): on the
+Cross-provider quota oracle (operator notes: generic-llm-proxy.md, option c): on the
 same five-minute cadence the proxy polls the ChatGPT/Codex `wham/usage` and
 DeepSeek `/user/balance` endpoints with the credentials pi already holds in
 `~/.pi/agent/auth.json` (read-only; OAuth is never refreshed, `!cmd` keys are never
@@ -64,7 +64,7 @@ conversation, which is why it is off by default.
 Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
 CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
 CC_PROXY_WATCH_INTERVAL (default 30s), CC_PROXY_REVALIDATE_INTERVAL (default 600s).
-Token selection (see docs/research/claude-token-rotation-oss.md): CC_PROXY_PICK
+Token selection (see operator notes: claude-token-rotation-oss.md): CC_PROXY_PICK
 (`pressure` default — spend perishable weekly quota first, model-aware bucket;
 `headroom` — legacy lowest-7d-utilization) and CC_PROXY_PICK_TOLERANCE (default
 1.5 — stickiness band that keeps the previous token, and its prompt cache,
@@ -117,7 +117,7 @@ PICK_MODE = os.environ.get("CC_PROXY_PICK", "pressure")  # pressure | headroom (
 PICK_TOLERANCE = float(os.environ.get("CC_PROXY_PICK_TOLERANCE", "1.5"))
 # Fable models are metered on their own weekly bucket (7d_oi =
 # seven_day_overage_included), separate from the shared 7d bucket — see
-# docs/research/anthropic-ratelimit-buckets.md.
+# operator notes: anthropic-ratelimit-buckets.md.
 FABLE_MODEL_RE = re.compile(r"claude-fable", re.IGNORECASE)
 SEED = os.environ.get("CC_PROXY_SEED", "1") != "0"
 MIN_VALID = int(os.environ.get("CC_PROXY_MIN_VALID", "2"))
@@ -126,7 +126,7 @@ REVALIDATE_INTERVAL = float(os.environ.get("CC_PROXY_REVALIDATE_INTERVAL", "600"
 USAGE_INTERVAL = float(os.environ.get("CC_PROXY_USAGE_INTERVAL", "300"))
 CONTROL_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-proxy"
 USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
-# Equivalence table (decision 5 in docs/research/generic-llm-proxy.md). Resolved
+# Equivalence table (decision 5 in operator notes: generic-llm-proxy.md). Resolved
 # through the symlink so the systemd unit and the checkout agree on the file.
 ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
@@ -157,8 +157,8 @@ OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-
 OAUTH_USER_AGENT = "claude-code/2.1.280"
 FAILOVER_STATUSES = {401, 403, 429, 529}
 # A 429 either means "this bucket is spent" (rotate) or "you are going too fast"
-# (wait). Only the former is worth a failover — see docs/research/
-# claude-token-rotation-oss.md and docs/research/anthropic-ratelimit-buckets.md §3.
+# (wait). Only the former is worth a failover — see operator notes:
+# claude-token-rotation-oss.md and anthropic-ratelimit-buckets.md §3.
 BURST_WAIT_MAX = float(os.environ.get("CC_PROXY_BURST_WAIT_MAX", "15"))
 UNIFIED_STATUS_RE = re.compile(r"^anthropic-ratelimit-unified-(?:[a-z0-9_]+-)?status$")
 # `representative-claim` names the bucket the account-level status refers to,
@@ -1109,7 +1109,7 @@ def deepseek(auth: dict) -> dict:
 
 
 # cli-chat-proxy.grok.com is the Grok Build CLI's own backend, not the documented
-# xAI Inference API (docs/research/grok-oauth-pi-community.md). This mirrors the
+# xAI Inference API (operator notes: grok-oauth-pi-community.md). This mirrors the
 # community adapter's reverse-engineered quota probe. Never used for inference
 # here. Two read-only token sources, tried in order: (1) Pi's own grok-build
 # OAuth credential in auth.json (sibling work); (2) if absent, the

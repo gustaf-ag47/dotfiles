@@ -2,9 +2,8 @@
  * Jev context-efficiency extension: file scouting + freshness-aware
  * duplicate-read suppression.
  *
- * See docs/research/jev-context-extension-implementation.md for the full brief and
- * docs/research/jev-context-extension-implementation.md for the implementation
- * writeup (API verification notes, retention design, known limitations).
+ * See operator notes: jev-context-extension-implementation.md for the full brief
+ * and writeup (API verification notes, retention design, known limitations).
  *
  * Default is OFF: no tool is declared to the model, no network call is ever
  * made, and nothing runs at startup beyond registering (inactive) tools and
@@ -169,7 +168,7 @@ export default function (
 
 	/** Resets any command-granted "on" consent without disturbing an explicit local mode. Used on
 	 * session switch/fork/reload so a file-upload consent granted in one repo/session never silently
-	 * carries into another (see docs/research/jev-context-extension-implementation.md, consent scope). */
+	 * carries into another (see operator notes: jev-context-extension-implementation.md, consent scope). */
 	function resetConsentOnLifecycleBoundary() {
 		abortScouting();
 		clearConsentCwd(cacheState);
@@ -423,7 +422,7 @@ export default function (
 					content: [{ type: "text" as const, text: lines.join("\n") }],
 					details: { items: result?.items, skipped: result?.skipped },
 					// Native Pi Usage aggregate from the sibling, passed through untouched -- never
-					// remapped or reconstructed here. See docs/research/.../usage contract note.
+					// remapped or reconstructed here. See operator notes: jev-context-extension-implementation.md (usage contract).
 					usage: result?.usage,
 				};
 			} catch {

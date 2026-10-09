@@ -119,7 +119,7 @@ nix build .#agent-gh -o /tmp/h && /tmp/h/bin/gh repo delete owner/repo --yes 2>&
 
 ## Server-side rulesets (report, not applied blind)
 
-See `docs/research/agent-git-ruleset-proposal.md` for which repos agents
+See operator notes: agent-git-ruleset-proposal.md for which repos agents
 push to and the proposed GitHub rulesets (block force-push + deletion on
 default/release branches). Only `gustaf-ag47/*` repos get rulesets applied
 directly; org repos owned by others are a proposal only.
