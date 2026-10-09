@@ -35,6 +35,10 @@ jobs:
             if bash -n "$f"; then echo "ok   $f"; else echo "FAIL $f"; rc=1; fi
           done < <(find bin scripts tests config/git/hooks -type f 2>/dev/null)
           exit $rc
+      - name: YAML lint (workflows)
+        run: |
+          python -m pip install 'yamllint==1.35.1'
+          LINT_USE_LOCAL=1 make lint-yaml
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
