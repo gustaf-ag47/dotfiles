@@ -1,6 +1,6 @@
 # Complete Keybinding Reference
 
-This document contains ALL keybindings for your development environment across all tools.
+Common keybindings; check the respective config files for the full, current set.
 
 ## 🪟 Hyprland (Window Manager)
 
@@ -9,7 +9,8 @@ This document contains ALL keybindings for your development environment across a
 |------------|--------|
 | `Super + Enter` | Open terminal |
 | `Super + Shift + Q` | Kill active window |
-| `Super + P` | Toggle floating/pseudo |
+| `Super + P` | Toggle floating |
+| `Super + Shift + P` | Pseudo-tile |
 | `Super + J` | Focus down (vim-style) |
 | `Super + T` | Toggle split direction |
 | `Super + Shift + A` | Anki note capture |
@@ -43,7 +44,6 @@ This document contains ALL keybindings for your development environment across a
 ### **NEW** Productivity Tools
 | Keybinding | Action |
 |------------|--------|
-| `Super + V` | Clipboard manager |
 | `Super + V` | Clipboard history (clipboardman) |
 | `Super + C` | **Floating terminal calculator** |
 

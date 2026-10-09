@@ -61,7 +61,7 @@ Enhanced aliases that activate when tools are installed:
 
 ### Editor Configuration
 - Neovim with LSP support
-- 25+ plugins for development
+- Modular plugins for development
 - Language support for Python, JavaScript, Rust, Go, etc.
 - Custom keybindings and snippets
 
@@ -85,9 +85,17 @@ All configurations are organized in the `config/` directory:
 ## 📖 Documentation
 
 - Complete keybinding reference: [KEYBINDINGS.md](KEYBINDINGS.md)
-- Git workflow and standards: [GIT_WORKFLOW.md](GIT_WORKFLOW.md)
-- Security and secret prevention: [SECURITY.md](SECURITY.md)
-- Linting and code quality: [LINTING.md](LINTING.md)
+- [Git workflow and standards](GIT_WORKFLOW.md)
+- [Security and secret prevention](SECURITY.md)
+- [Linting and tests](LINTING.md)
+- [Backup and restore](BACKUP.md)
+- [Private configuration overlay](LOCAL_CONFIG.md)
+- [Pi resources](pi-resources.md) and [delegation contract](pi-delegate-contract.md)
+- [Grok CLI OAuth in Pi and LLM usage](grok-pi.md)
+- [Understanding unknown quota readings](llm-usage-unknown.md)
+- [Jev classification and accounting](jev-pi.md)
+- [Context-efficient reads and file scouting](jev-context.md)
+- [Opt-in Jev Ultrafast browser skill](jev-ultrafast.md)
 - Installation troubleshooting in individual config directories
 
 ---
