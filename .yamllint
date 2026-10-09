@@ -1,0 +1,8 @@
+extends: default
+
+rules:
+  # Workflow `on` is a mapping key, not YAML 1.1's boolean.
+  truthy: disable
+  document-start: disable
+  # Workflow shell snippets and expressions are easier to read unwrapped.
+  line-length: disable
