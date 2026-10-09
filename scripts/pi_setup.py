@@ -27,6 +27,21 @@ def source_files(root):
 def pi_ai_path(binary):
     executable = Path(shutil.which(binary) or binary).resolve()
     for parent in executable.parents:
+        # The managed installer uses a shell launcher, not a symlink into
+        # node_modules. Follow its active-version marker instead of guessing
+        # the newest release or relying on the calling session's environment.
+        version_file = parent / 'install/current-version'
+        if version_file.is_file():
+            version = version_file.read_text().strip()
+            if not version or version in ('.', '..') or any(
+                c not in '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._+-'
+                for c in version
+            ):
+                raise ValueError(f'Invalid managed Pi version: {version_file}')
+            candidate = parent / 'install/releases' / version / 'node_modules/@earendil-works/pi-ai'
+            if not (candidate / 'package.json').is_file():
+                raise ValueError(f'Managed Pi dependency missing: {candidate}')
+            return candidate
         candidate = parent / 'node_modules/@earendil-works/pi-ai'
         if (candidate / 'package.json').is_file():
             return candidate
@@ -36,7 +51,8 @@ def pi_ai_path(binary):
 def plan(agent, private, binary):
     dependency = pi_ai_path(binary)
     operations = [('link', dependency, ROOT / 'config/pi/node_modules/@earendil-works/pi-ai'),
-                  ('link', dependency, agent / 'node_modules/@earendil-works/pi-ai')]
+                  ('link', dependency, agent / 'node_modules/@earendil-works/pi-ai'),
+                  ('link', ROOT / 'config/pi/APPEND_SYSTEM.md', agent / 'APPEND_SYSTEM.md')]
     for source, target in [(ROOT / 'config/pi/extensions', agent / 'extensions'),
                            (ROOT / 'config/pi/lib', agent / 'lib'),
                            (ROOT / 'config/pi/bin', agent / 'bin'),
@@ -182,7 +198,7 @@ def main():
     mode.add_argument('--fetch-upstreams', action='store_true', help='Clone missing pinned third-party skills; preserve existing checkouts')
     parser.add_argument('--agent-dir', type=Path, default=Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent')))
     parser.add_argument('--private-root', type=Path, default=Path(os.environ.get('LOCAL_CONFIG', Path.home() / 'sync/state/dotfiles-local')) / 'config/pi')
-    parser.add_argument('--pi-bin', default=os.environ.get('PI_CLAUDE_SUB_PI_BIN', 'pi'))
+    parser.add_argument('--pi-bin', default='pi', help='Pi installation to use (default: pi on PATH)')
     args = parser.parse_args()
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'pi-dotfiles'
     if args.fetch_upstreams:
