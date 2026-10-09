@@ -1,0 +1,36 @@
+# machine-handoff machine registry -- EXAMPLE.
+#
+# The real registry is private (hostnames, users, paths) and lives in the
+# local overlay, never in this public repo:
+#   $LOCAL_CONFIG/machine-handoff/machines.conf   ($SYNC/state/dotfiles-local)
+# Copy this file there and replace the placeholders. $MACHINE_HANDOFF_CONF
+# overrides the location.
+#
+# One section per machine, named by `uname -n` (hostname(1) may be missing on
+# some boxes). All machines must be ssh-reachable from each other (e.g. over
+# Tailscale). Paths are absolute because users differ per machine.
+#
+# Keys:
+#   user         login user on that machine
+#   ssh          ssh destination (user@host)
+#   sync_root    Syncthing root (working trees sync between machines; .git
+#                may NOT sync -- verify per repo, never assume)
+#   src_root     where synced git repos live (scanned by inventory.sh)
+#   handover_dir where handoff briefs and artefacts land on that machine
+#   hermes       tmux window name of the Hermes agent on that machine
+
+[laptop]
+user=alice
+ssh=alice@laptop
+sync_root=/home/alice/sync
+src_root=/home/alice/sync/src
+handover_dir=/home/alice/.hermes/handovers
+hermes=hermes
+
+[server]
+user=bob
+ssh=bob@server
+sync_root=/data/sync
+src_root=/data/sync/src
+handover_dir=/home/bob/.hermes/handovers
+hermes=hermes
