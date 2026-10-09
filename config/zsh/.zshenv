@@ -33,13 +33,6 @@ else
     export LOCAL_CONFIG="$SYNC/dotfiles-local"
 fi
 
-# Find latest Obsidian AppImage dynamically
-# `|| true`: with no AppImage present the glob/ls pipeline exits non-zero, which
-# would abort any `set -euo pipefail` context that sources this file (e.g. a
-# fresh `make install`). Keep it resilient so a clean machine installs cleanly.
-OBSIDIAN_PATH="$(ls -t "$HOME/.local/bin"/Obsidian-*.AppImage 2>/dev/null | head -1 || true)"
-export OBSIDIAN_PATH="${OBSIDIAN_PATH:-}"
-
 # XDG Base Directory Specification
 export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_CACHE_HOME="$HOME/.cache"
