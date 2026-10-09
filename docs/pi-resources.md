@@ -26,6 +26,21 @@ Excluded on purpose: `auth.json`, `settings.json`/`models.json` once they
 exist, sessions, locks, the delegate mailbox, `.venv`/`__pycache__`/`.bak`
 inside skills, and anything else that is runtime state.
 
+Dependency discovery follows `pi` on PATH, supporting both npm installations
+and the managed installer's `install/current-version` launcher. It deliberately
+ignores `PI_CLAUDE_SUB_PI_BIN` (a sub-agent override that may reference a retired
+installation); use `--pi-bin` to select a different install explicitly. Run
+`pi-setup --apply` after `pi update` or changing installations to relink both
+pi-ai dependency paths to the active release. Stale links are backed up and
+replaced, not left pointing at removed npm installs.
+
+Provider factories import `builtinProviders` from
+`@earendil-works/pi-ai/providers/all`, which Pi's extension loader aliases
+explicitly. Individual `providers/xai` or `providers/anthropic` imports can be
+shadowed by the loader's root-to-`compat.js` alias even with correct dependency
+links. `tests/unit/test_pi_provider_loading.mjs` exercises the actual installed
+Pi loader without reading credentials or making inference requests.
+
 `pi-setup` (no flags) is the drift check: prints pending changes and verifies
 the third-party skill clones. `--rollback <manifest>` undoes an apply.
 

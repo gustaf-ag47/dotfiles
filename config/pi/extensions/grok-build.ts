@@ -31,7 +31,9 @@
 // caching a copy, so a given token is still refreshed in only one place.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model, ProviderHeaders, RefreshModelsContext } from "@earendil-works/pi-ai";
-import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
+// Pi's extension loader aliases providers/all explicitly; individual provider
+// imports can be shadowed by its pi-ai root -> compat.js alias.
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -143,7 +145,8 @@ export async function fetchGrokModels(
 }
 
 export default function (pi: ExtensionAPI) {
-  const native = xaiProvider();
+  const native = builtinProviders().find((provider) => provider.id === "xai");
+  if (!native) throw new Error("Installed Pi does not include the xai provider");
   const bridgeScript = resolve(dirname(realpathSync(__filename)), "../../../bin/grok-oauth-token");
 
   let models: Model<"openai-responses">[] = [GROK_4_7_MODEL];

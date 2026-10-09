@@ -7,6 +7,56 @@ from tests.unit._helpers import load_script
 setup = load_script('pi_setup', Path(__file__).resolve().parents[2] / 'scripts/pi_setup.py')
 
 
+class DependencyDiscoveryTests(unittest.TestCase):
+    def test_managed_launcher_uses_active_release_and_repairs_stale_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / 'agent'
+            launcher = agent / 'bin/pi'
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text('#!/bin/sh\n')
+            install = agent / 'install'
+            dependency = install / 'releases/1.1.0/node_modules/@earendil-works/pi-ai'
+            dependency.mkdir(parents=True)
+            (dependency / 'package.json').write_text('{}')
+            (install / 'current-version').write_text('1.1.0\n')
+            # An inactive release must not override the launcher's selection.
+            newer = install / 'releases/9.0.0/node_modules/@earendil-works/pi-ai'
+            newer.mkdir(parents=True)
+            (newer / 'package.json').write_text('{}')
+            binary = root / 'pi'
+            binary.symlink_to(launcher)
+            target = agent / 'node_modules/@earendil-works/pi-ai'
+            target.parent.mkdir(parents=True)
+            target.symlink_to(root / 'removed-npm-install/pi-ai')
+            self.assertEqual(setup.pi_ai_path(str(binary)), dependency)
+            setup.apply([('link', setup.pi_ai_path(str(binary)), target)], root / 'state')
+            self.assertEqual(target.resolve(), dependency)
+            self.assertTrue((target / 'package.json').is_file())
+
+    def test_npm_install_is_still_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launcher = root / 'package/dist/cli.js'
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text('')
+            dependency = root / 'package/node_modules/@earendil-works/pi-ai'
+            dependency.mkdir(parents=True)
+            (dependency / 'package.json').write_text('{}')
+            self.assertEqual(setup.pi_ai_path(str(launcher)), dependency)
+
+    def test_managed_version_cannot_escape_release_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launcher = root / 'bin/pi'
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text('')
+            (root / 'install').mkdir()
+            (root / 'install/current-version').write_text('../outside')
+            with self.assertRaisesRegex(ValueError, 'Invalid managed Pi version'):
+                setup.pi_ai_path(str(launcher))
+
+
 class AdoptionTests(unittest.TestCase):
     def test_adoption_keeps_runtime_and_supports_rollback(self):
         with tempfile.TemporaryDirectory() as directory:

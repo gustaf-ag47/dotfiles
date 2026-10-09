@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+// Use the explicitly aliased entrypoint in Pi's extension loader.
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { PROXY_CREDENTIAL, proxyOptions, proxyUrl } from "./anthropic-route.mjs";
 
 // Provider FACTORY for SDK embedders (jev-ultrafast's _pi_text_worker), not a
@@ -8,7 +9,8 @@ import { PROXY_CREDENTIAL, proxyOptions, proxyUrl } from "./anthropic-route.mjs"
 // sessions. Living in lib/ keeps pi-setup from linking it into extensions/,
 // which double-registered the provider with load-order-dependent results.
 export default function (pi: ExtensionAPI) {
-  const native = anthropicProvider();
+  const native = builtinProviders().find((provider) => provider.id === "anthropic");
+  if (!native) throw new Error("Installed Pi does not include the anthropic provider");
   // Invalid config must fail on a request, not unload this extension and expose
   // the native direct route. Offline listing and unrelated providers still work.
   let endpoint = "http://127.0.0.1:9";
