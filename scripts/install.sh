@@ -220,6 +220,8 @@ link_config "$DOTFILES/config/gui/alacritty" "$XDG_CONFIG_HOME/alacritty"
 link_config "$DOTFILES/config/gui/zathura" "$XDG_CONFIG_HOME/zathura"
 link_config "$DOTFILES/config/gui/gtk-3.0" "$XDG_CONFIG_HOME/gtk-3.0"
 link_config "$DOTFILES/config/gui/gtk-2.0" "$XDG_CONFIG_HOME/gtk-2.0"
+# GTK2 reads ~/.gtkrc-2.0 by default, not ~/.config/gtk-2.0/gtkrc.
+link_config "$DOTFILES/config/gui/gtk-2.0/gtkrc" "$HOME/.gtkrc-2.0"
 link_config "$DOTFILES/config/gui/jetbrains/ideavim" "$XDG_CONFIG_HOME/ideavim"
 
 link_config "$DOTFILES/config/gui/Wayland/hypr" "$XDG_CONFIG_HOME/hypr"
