@@ -73,6 +73,10 @@ jobs:
           node-version: "22"
       - run: make test-unit
       - run: make test-node
+      - name: Python static checks (Pyflakes)
+        run: |
+          python -m pip install 'ruff==0.16.10'
+          make lint-python
       - name: git bundle round trip (git-bundle-backup + git-rehydrate)
         run: bash tests/git-bundles.sh
 

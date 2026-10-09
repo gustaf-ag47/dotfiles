@@ -77,7 +77,7 @@ class CrossProviderEDFTests(OracleFixture):
         self.assertIsNone(result["preferred"])
 
     def test_sticky_band_and_credit_exclusion(self):
-        tok = self.token(u7=.2)
+        self.token(u7=.2)
         state = codex_state(used=90)
         self.providers(state)
         result = proxy.route_payload("claude-opus-5-5", current="anthropic")

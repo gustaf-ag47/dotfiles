@@ -10,8 +10,6 @@ temp `GROK_HOME`, so the real subprocess/stdout/exit-code plumbing in
 `grok_cli_fallback_token` is genuinely exercised end to end -- isolation comes
 from the temp paths, not from stubbing the functionality away.
 """
-import base64
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,14 +20,13 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 
-SPEC = importlib.util.spec_from_file_location('llm_usage', Path(__file__).resolve().parents[2] / 'scripts/llm_usage.py')
-usage = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(usage)
+from tests.unit._helpers import fake_jwt as make_jwt, load_script
+
+usage = load_script('llm_usage', Path(__file__).resolve().parents[2] / 'scripts/llm_usage.py')
 
 
 def fake_jwt(payload, canary='GROKJWTCANARY'):
-    segment = lambda obj: base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b'=').decode()  # noqa: E731
-    return f"{segment({'alg': 'RS256', 'typ': 'JWT'})}.{segment(payload)}.{canary}"
+    return make_jwt(payload, canary)
 
 
 NOW = time.time()

@@ -37,12 +37,12 @@ jobs:
         uses: JohnnyMorganz/stylua-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: latest
+          version: v2.5.2
           args: --check config/nvim/
 
       - name: Lint Lua (luacheck)
         run: |
-          luarocks install luacheck
+          luarocks install luacheck 1.2.0-1
           luacheck config/nvim/lua --config .luacheckrc
 
   load-test:

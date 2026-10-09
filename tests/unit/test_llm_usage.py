@@ -1,5 +1,4 @@
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import unittest
@@ -7,14 +6,9 @@ from unittest.mock import patch
 import urllib.error
 import time
 
-SPEC = importlib.util.spec_from_file_location('llm_usage', Path(__file__).resolve().parents[2] / 'scripts/llm_usage.py')
-usage = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(usage)
+from tests.unit._helpers import fake_jwt, load_script
 
-
-def fake_jwt(payload):
-    segment = lambda obj: base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b'=').decode()  # noqa: E731
-    return f"{segment({'alg': 'RS256', 'typ': 'JWT'})}.{segment(payload)}.not-a-signature"
+usage = load_script('llm_usage', Path(__file__).resolve().parents[2] / 'scripts/llm_usage.py')
 
 
 JWT = fake_jwt({'https://api.openai.com/profile': {'email': 'a@b', 'name': 'A B'},

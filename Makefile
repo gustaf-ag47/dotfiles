@@ -1,4 +1,4 @@
-.PHONY: help install install-system test test-unit test-node test-bootstrap test-install test-system lint lint-shell lint-lua lint-yaml lint-stylua lint-build
+.PHONY: help install install-system test test-unit test-node test-bootstrap test-install test-system lint lint-shell lint-lua lint-yaml lint-stylua lint-python lint-build
 
 # Default target - show help
 help:
@@ -18,6 +18,7 @@ help:
 	@echo "  make lint-lua      - Run luacheck on Lua files"
 	@echo "  make lint-yaml     - Run yamllint on YAML files (incl. workflows)"
 	@echo "  make lint-stylua   - Run stylua --check on nvim Lua (CI gate)"
+	@echo "  make lint-python   - Run Ruff's Pyflakes rules on Python sources"
 	@echo "  make lint-build    - Build/rebuild Docker linter image"
 	@echo "  make help          - Show this help message"
 	@echo ""
@@ -76,6 +77,9 @@ lint-yaml:
 
 lint-stylua:
 	@bin/lint --stylua
+
+lint-python:
+	@ruff check --select F bin scripts tests/unit
 
 lint-build:
 	@bin/lint --build
