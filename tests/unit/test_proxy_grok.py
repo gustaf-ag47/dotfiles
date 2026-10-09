@@ -8,7 +8,6 @@ points `GROK_OAUTH_BRIDGE` at a throwaway script under a temp dir and sets a tem
 `GROK_HOME`, genuinely exercising the real subprocess path rather than mocking it
 away -- isolation there comes from the temp paths, not from stubbed functionality.
 """
-import base64
 import importlib.machinery
 import importlib.util
 import json
@@ -21,6 +20,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 
+from tests.unit._helpers import fake_jwt as make_jwt
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 PATH = Path(__file__).resolve().parents[2] / 'bin/claude-token-proxy'
@@ -33,8 +33,7 @@ NOW = time.time()
 
 
 def fake_jwt(payload, canary='GROKPROXYCANARY'):
-    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
-    return f"eyJhbGciOiJSUzI1NiJ9.{body}.{canary}"
+    return make_jwt(payload, canary, header={'alg': 'RS256'})
 
 
 GROK_JWT = fake_jwt({'email': 'proxy-grok@example.test', 'sub': 'user-PROXYSECRET'})

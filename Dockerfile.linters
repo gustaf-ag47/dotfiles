@@ -20,7 +20,7 @@ RUN apk add --no-cache \
     make
 
 # Install luacheck via luarocks
-RUN luarocks-5.1 install luacheck
+RUN luarocks-5.1 install luacheck 1.2.0-1
 
 # Create symlinks for lua/luac commands (pre-commit hook calls bare `luac -p`).
 # -f: alpine:3.19's lua5.1 package now ships /usr/bin/lua itself, so the bare

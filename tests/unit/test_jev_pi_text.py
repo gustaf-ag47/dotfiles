@@ -1,5 +1,4 @@
 """Offline Pi typing adapter checks. Fake credentials/SDK fixtures only."""
-import importlib.util
 import json
 import os
 from pathlib import Path

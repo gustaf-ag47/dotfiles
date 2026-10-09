@@ -8,11 +8,10 @@ ledger logic lives here -- this module only knows how to talk to one upstream.
 from __future__ import annotations
 
 import json
-import math
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"

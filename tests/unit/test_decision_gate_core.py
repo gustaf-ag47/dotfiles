@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/decision_gate/core.py: policy, cache key, scoring, store, report."""
-import math
 import tempfile
 import time
 import unittest

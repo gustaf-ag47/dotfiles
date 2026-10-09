@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Regression tests for the dependency-free Claude token proxy."""
 
-import base64
 import http.client
 import json
 import os
@@ -14,6 +13,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main, mock
+from tests.unit._helpers import fake_jwt as make_jwt
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
@@ -609,8 +609,7 @@ DEEPSEEK_CANARY = "sk-CANARYDEEPSEEKKEYVALUE"
 
 
 def fake_jwt(payload: dict, canary: str = CODEX_CANARY) -> str:
-    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-    return f"eyJhbGciOiJSUzI1NiJ9.{body}.{canary}"
+    return make_jwt(payload, canary, header={'alg': 'RS256'})
 
 
 def fake_auth(expires_ms=None) -> dict:

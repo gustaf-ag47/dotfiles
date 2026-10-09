@@ -9,7 +9,6 @@ same way a real consumer would, over loopback HTTP.
 import json
 import tempfile
 import threading
-import time
 import unittest
 import unittest.mock
 import urllib.error

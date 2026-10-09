@@ -799,7 +799,7 @@ def cmd_check(args):
             flags.append(f"behind {status['behind']}")
         if flags:
             repo_lines.append(f"  {repo['path']}: {', '.join(flags)}")
-    lines.append(f"repos: {len(doc['repos'])} declared" + (f"\n" + "\n".join(repo_lines) if repo_lines else ", all clean/in sync"))
+    lines.append(f"repos: {len(doc['repos'])} declared" + ("\n" + "\n".join(repo_lines) if repo_lines else ", all clean/in sync"))
 
     repo_paths = [repo["path"] for repo in doc["repos"] if repo.get("path")]
     tmp_worktrees = git_worktrees_under(repo_paths)

@@ -1,12 +1,10 @@
-import importlib.util
-import json
 from pathlib import Path
 import tempfile
 import unittest
 
-SPEC = importlib.util.spec_from_file_location('pi_setup', Path(__file__).resolve().parents[2] / 'scripts/pi_setup.py')
-setup = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(setup)
+from tests.unit._helpers import load_script
+
+setup = load_script('pi_setup', Path(__file__).resolve().parents[2] / 'scripts/pi_setup.py')
 
 
 class AdoptionTests(unittest.TestCase):
