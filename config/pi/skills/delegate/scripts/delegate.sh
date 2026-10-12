@@ -22,6 +22,7 @@
 #   --name  <name>     tmux window name (default: derived from --task).
 #   --cwd   <dir>      Working directory for the child (default: $PWD).
 #   --model <model>    Qualified model preferred; default: Pi's configured default.
+#   --min-context <tokens>  Require this context capacity before handing over work.
 #   --agent <bin>      Launcher binary (default: pi).
 #   --provider <name>  Optional provider; usually use --model provider/model.
 #   --worktree <branch>  Create a git worktree for <branch> off $WORKTREES and use it as --cwd.
@@ -41,7 +42,7 @@
 set -euo pipefail
 
 BRIEF="" TASK="" NAME="" CWD="$PWD" MODEL="${PI_DELEGATE_MODEL:-}" AGENT="pi"
-CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0
+CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0 MIN_CONTEXT=0
 PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
 PROJECT="" RESUME=confirm SESSION_EXPLICIT=0 CWD_EXPLICIT=0
 ORIGINAL_ARGS=("$@")
@@ -55,6 +56,7 @@ while [ $# -gt 0 ]; do
 	--name) NAME="${2:?}"; shift 2 ;;
 	--cwd) CWD="${2:?}"; CWD_EXPLICIT=1; shift 2 ;;
 	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
+	--min-context) MIN_CONTEXT="${2:?}"; shift 2 ;;
 	--class) CLASS="${2:?}"; shift 2 ;;
 	--when) WHEN="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
@@ -71,6 +73,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+[[ "$MIN_CONTEXT" =~ ^[0-9]+$ ]] || die "--min-context must be a non-negative integer"
 case "$WHEN" in now|reset|waste) ;; *) die "--when must be reset, waste or now" ;; esac
 case "$RESUME" in auto|confirm) ;; *) die "--resume must be auto or confirm" ;; esac
 [ -n "$BRIEF" ] || [ -n "$TASK" ] || die "need --brief and/or --task"
@@ -311,7 +314,7 @@ if [ "$PROBE" = "1" ] && command -v llm-wait >/dev/null 2>&1; then
       :
     else
       wait_status=$?
-      if [ "$wait_status" = "2" ] && [ "$wait_provider" = "codex" ]; then
+      if [ "$wait_status" = "2" ] && [ "$wait_provider" = "codex" ] && [ "$MODEL_EXPLICIT" = "0" ]; then
         echo "delegate: Codex quota wait timed out; falling back to Anthropic sonnet"
         MODEL="anthropic/claude-sonnet-5"
         PROVIDER=anthropic
@@ -440,6 +443,34 @@ done
 # accepts keys yet; that gap is where prompts vanish. Settle before typing.
 sleep 8
 
+# Verify the actual footer before giving the child any work. Conversation text
+# mentioning the requested model is not evidence. Retry the pin only once.
+verify_helper="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/verify-model.py"
+expected_model="$MODEL"
+if [[ "$expected_model" != */* ]] && [ -n "$PROVIDER" ]; then
+	expected_model="$PROVIDER/$expected_model"
+fi
+verify_child_model() {
+	tmux capture-pane -J -t "$SESSION:$NAME" -p | python3 "$verify_helper" "$expected_model" "$MIN_CONTEXT"
+}
+if ! verified_model="$(verify_child_model)"; then
+	for slash_command in '/failover off' "/model $expected_model"; do
+		tmux send-keys -t "$SESSION:$NAME" C-u
+		tmux send-keys -t "$SESSION:$NAME" -l -- "$slash_command"
+		tmux send-keys -t "$SESSION:$NAME" Enter
+		sleep 2
+		# The first Enter may accept an autocomplete entry rather than execute it.
+		tmux send-keys -t "$SESSION:$NAME" Enter
+		sleep 2
+	done
+	if ! verified_model="$(verify_child_model)"; then
+		echo "delegate: ERROR: model/context verification failed after one retry; child has NO task ($SESSION:$NAME)" >&2
+		exit 4
+	fi
+fi
+read -r VERIFIED_MODEL VERIFIED_CONTEXT <<<"$verified_model"
+echo "delegate: verified $VERIFIED_MODEL ($VERIFIED_CONTEXT tokens)"
+
 # ── the handover prompt: ONE line (send-keys submits at newlines) ────────────
 prompt="You are a delegated sub-agent with a fresh context window."
 if [ -n "$BRIEF" ]; then
@@ -533,7 +564,7 @@ fi
 
 cat <<EOF
 delegated -> $SESSION:$NAME
-  model  : $MODEL ($PROVIDER)
+  model  : $VERIFIED_MODEL (verified; $VERIFIED_CONTEXT tokens)
   cwd    : $CWD
   brief  : ${BRIEF:-<none>}
   run id : $RUN_ID

@@ -23,12 +23,13 @@ class JevDelegateTests(unittest.TestCase):
         self.script = self.root / 'dotfiles/config/pi/skills/delegate/scripts/delegate.sh'
         self.script.parent.mkdir(parents=True)
         shutil.copyfile(SCRIPT, self.script)
+        shutil.copyfile(SCRIPT.with_name('verify-model.py'), self.script.with_name('verify-model.py'))
         self.helper = self.root / 'dotfiles/bin/jev-classify'
         self.helper.parent.mkdir()
         self.write_exec(self.mock / 'tmux', '''#!/bin/bash
 printf '%s\\n' "$*" >> "$TEST_ROOT/tmux-calls"
 case "$1" in
-  capture-pane) printf '1.0%%/256K\\n' ;;
+  capture-pane) printf '1.0%%/256K (anthropic) fixed-model • high\\n' ;;
   display-message)
     target="$4"
     fmt="$5"
