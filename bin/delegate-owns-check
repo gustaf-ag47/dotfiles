@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Check staged paths against lane ownership; reserve/release launch claims internally."""
+import argparse
+import fcntl
+import fnmatch
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+
+def overlap(left, right):
+    """Conservative glob intersection: uncertain overlapping prefixes conflict."""
+    magic = re.compile(r"[*?[]")
+    a, b = magic.search(left), magic.search(right)
+    if not a:
+        return fnmatch.fnmatchcase(left, right)
+    if not b:
+        return fnmatch.fnmatchcase(right, left)
+    x, y = left[:a.start()], right[:b.start()]
+    return x.startswith(y) or y.startswith(x)
+
+
+def validate(pattern):
+    if not pattern or pattern.startswith("/") or ".." in pattern.split("/") or "\n" in pattern:
+        raise ValueError(f"ownership must be a repository-relative glob: {pattern!r}")
+
+
+def active(claim):
+    manifest = Path(claim["manifest"])
+    if manifest.exists():
+        return json.loads(manifest.read_text()).get("status") not in ("closed", "cancelled", "launch-failed")
+    try:
+        os.kill(claim["pid"], 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def save(path, value):
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".claim-")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(value, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, default=os.environ.get("PI_DELEGATE_LANE_MANIFEST"))
+    parser.add_argument("--reserve", action="store_true")
+    parser.add_argument("--release", action="store_true")
+    parser.add_argument("--run-id")
+    parser.add_argument("--owns", action="append", default=[])
+    parser.add_argument("--allow-overlap", action="store_true")
+    parser.add_argument("--cwd", default=os.getcwd())
+    args = parser.parse_args()
+    try:
+        if args.reserve or args.release:
+            if not args.run_id or not re.fullmatch(r"[\w.-]+", args.run_id):
+                parser.error("reservation requires a valid --run-id")
+            directory = Path(os.environ.get("PI_DELEGATE_OWNERS_DIR", Path.home() / ".pi/agent/delegate-owners"))
+            directory.mkdir(parents=True, exist_ok=True)
+            target = directory / f"{args.run_id}.json"
+            with (directory / ".lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if args.release:
+                    target.unlink(missing_ok=True)
+                    return
+                if not args.manifest or not args.owns:
+                    parser.error("reservation requires --manifest and --owns")
+                for pattern in args.owns:
+                    validate(pattern)
+                common = subprocess.check_output(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=args.cwd, text=True).strip()
+                for path in directory.glob("*.json"):
+                    claim = json.loads(path.read_text())
+                    if path == target or claim["repo"] != common or not active(claim):
+                        continue
+                    conflicts = [(a, b) for a in args.owns for b in claim["owns"] if overlap(a, b)]
+                    if conflicts:
+                        message = f"owner {claim['run_id']} ({claim['manifest']}) overlaps {conflicts}"
+                        if not args.allow_overlap:
+                            raise ValueError(message + "; use --allow-overlap only after coordination")
+                        print("WARNING: " + message)
+                save(target, dict(run_id=args.run_id, repo=common, owns=args.owns,
+                                  manifest=str(args.manifest.resolve()), pid=os.getppid()))
+        else:
+            if not args.manifest:
+                parser.error("need --manifest or PI_DELEGATE_LANE_MANIFEST")
+            lane = json.loads(args.manifest.read_text())
+            patterns = lane.get("owns", [])
+            if not patterns:
+                raise ValueError("lane has no declared ownership; cannot verify staged paths")
+            cwd = lane.get("cwd") or args.cwd
+            files = subprocess.check_output(["git", "diff", "--cached", "--name-only", "-z", "--no-renames"], cwd=cwd).decode().split("\0")
+            outside = [file for file in files if file and not any(fnmatch.fnmatchcase(file, p) for p in patterns)]
+            if outside:
+                print("Staged files outside lane ownership:")
+                print("\n".join(outside))
+                return 1
+            print("PASS: all staged files are within declared ownership")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"delegate-owns-check: {error}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
