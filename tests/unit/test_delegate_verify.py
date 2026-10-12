@@ -30,6 +30,11 @@ class VerifyTests(unittest.TestCase):
         self.comparison = "ahead"
         self.ci_sha = self.sha
         self.ci_pr = 12
+        self.ci_event = "pull_request"
+        self.pr_links = [{"link": "https://github.com/owner/repo/actions/runs/123/job/456"}]
+        mock = patch.object(module, "gh", side_effect=lambda *a: self.pr_links)
+        mock.start()
+        self.addCleanup(mock.stop)
         self.required = ["unit"]
         mock = patch.object(module, "api", side_effect=self.api)
         mock.start()
@@ -50,7 +55,7 @@ class VerifyTests(unittest.TestCase):
         if endpoint.startswith("compare/"):
             return {"status": self.comparison}
         if endpoint.startswith("actions/runs/"):
-            return {"head_sha": self.ci_sha, "status": "completed", "conclusion": "success", "html_url": "https://ci/123", "pull_requests": [{"number": self.ci_pr, "head": {"sha": self.ci_sha}}]}
+            return {"head_sha": self.ci_sha, "status": "completed", "conclusion": "success", "html_url": "https://ci/123", "event": self.ci_event, "pull_requests": [] if self.ci_pr is None else [{"number": self.ci_pr, "head": {"sha": self.ci_sha}}]}
         return {"sha": self.sha}
 
     def verify(self, suffix=""):
@@ -69,6 +74,32 @@ class VerifyTests(unittest.TestCase):
     def test_explicit_pr_rejects_ci_from_other_pr(self):
         self.ci_pr = 99
         with self.assertRaisesRegex(ValueError, "not associated with PR #12"):
+            self.verify(" ci:123 pr:12")
+
+    def test_merged_pr_with_empty_run_association_and_exact_check_link_passes(self):
+        self.ci_pr = None
+        self.assertIn("merged on base", self.verify(" ci:123 pr:12"))
+
+    def test_merged_fallback_rejects_missing_or_unrelated_links(self):
+        self.ci_pr = None
+        for link in [None, "https://github.com/other/repo/actions/runs/123/job/456",
+                     "https://github.com/owner/repo/actions/runs/1234/job/456",
+                     "https://github.com/owner/repo/actions/runs/123evil",
+                     "https://evil.test/owner/repo/actions/runs/123/job/456"]:
+            with self.subTest(link=link):
+                self.pr_links = [] if link is None else [{"link": link}]
+                with self.assertRaisesRegex(ValueError, "not associated"):
+                    self.verify(" ci:123 pr:12")
+
+    def test_empty_association_fallback_requires_merged_pr_and_pr_event(self):
+        self.ci_pr = None
+        self.ci_event = "push"
+        with self.assertRaisesRegex(ValueError, "not associated"):
+            self.verify(" ci:123 pr:12")
+        self.ci_event = "pull_request"
+        self.pr["merged_at"] = None
+        self.report.write_text("Awaiting review\n")
+        with self.assertRaisesRegex(ValueError, "not associated"):
             self.verify(" ci:123 pr:12")
 
     def test_explicit_pr_requires_ci_run_evidence(self):
