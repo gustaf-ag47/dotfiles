@@ -64,7 +64,7 @@ esac
                                 "DELEGATE_IGNORE_MEM": "1", "TMUX": "", "TMUX_PANE": ""}
             result = subprocess.run([str(SCRIPTS / "delegate.sh"), "--task", "fixture task", "--session", "Demo",
                                      "--model", "anthropic/claude-sonnet-5", "--min-context", "1000000",
-                                     "--no-probe", "--no-notify"], env=env, text=True, capture_output=True, timeout=20)
+                                     "--no-probe", "--no-notify", "--force"], env=env, text=True, capture_output=True, timeout=20)
             return result, (root / "keys").read_text()
 
     def test_pin_retry_succeeds_before_handover(self):

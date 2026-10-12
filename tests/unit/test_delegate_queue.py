@@ -24,7 +24,7 @@ class QueueTests(unittest.TestCase):
         for name, source in {
             "systemd-run": 'printf "%s\\n" "$*" >> "$FIXTURE/timers"',
             "systemctl": 'exit 0',
-            "gh": 'cat "$FIXTURE/pr-state"',
+            "gh": 'printf "%s\\n" "$*" > "$FIXTURE/gh-args"; cat "$FIXTURE/pr-state"',
             "launch": 'printf "%s\\n" "$*" >> "$FIXTURE/launched"',
         }.items():
             path = self.root / name
@@ -86,7 +86,7 @@ class QueueTests(unittest.TestCase):
                 with self.assertRaises((ValueError, subprocess.CalledProcessError)):
                     module.validate(condition)
 
-    def test_branch_ancestor(self):
+    def test_fresh_branch_without_pr_stays_queued_until_merged_pr(self):
         repo = self.root / "repo"
         repo.mkdir()
         def git(*args):
@@ -97,10 +97,31 @@ class QueueTests(unittest.TestCase):
         git("remote", "add", "origin", str(repo))
         git("fetch", "origin")
         git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-        self.assertTrue(module.satisfied("branch:dependency:merged", {"launch_cwd": str(repo)}, self.directory))
-        git("checkout", "dependency")
-        git("-c", "user.name=Fixture", "-c", "user.email=f@example.test", "commit", "--allow-empty", "-m", "unmerged")
-        self.assertFalse(module.satisfied("branch:dependency:merged", {"launch_cwd": str(repo)}, self.directory))
+        # A new branch has exactly the base commit: ancestry is trivially true,
+        # but the dependency has not been pushed or implemented.
+        self.assertEqual(git("rev-parse", "dependency"), git("rev-parse", "origin/main"))
+        path = self.enqueue("branch:dependency:merged")
+        lane = json.loads(path.read_text())
+        lane["launch_cwd"] = str(repo)
+        path.write_text(json.dumps(lane))
+        for answer in [[], [{"headRefName": "dependency", "state": "OPEN"}],
+                       [{"headRefName": "dependency", "state": "CLOSED"}],
+                       [{"headRefName": "other", "state": "MERGED"}]]:
+            with self.subTest(answer=answer):
+                (self.root / "pr-state").write_text(json.dumps(answer))
+                self.run_queue("_tick", str(path))
+                self.assertFalse((self.root / "launched").exists())
+                self.assertEqual(json.loads(path.read_text())["status"], "queued")
+        (self.root / "pr-state").unlink()
+        self.run_queue("_tick", str(path))
+        self.assertFalse((self.root / "launched").exists())
+        self.assertIn("last_error", json.loads(path.read_text()))
+        (self.root / "pr-state").write_text(json.dumps([{"headRefName": "dependency", "state": "MERGED"}]))
+        self.run_queue("_tick", str(path))
+        self.assertEqual((self.root / "launched").read_text().splitlines(), ["literal `quote`"])
+        self.assertEqual(json.loads(path.read_text())["status"], "launched")
+        self.assertEqual((self.root / "gh-args").read_text().strip(),
+                         "pr list --head dependency --state merged --json headRefName,state")
 
 
 if __name__ == "__main__":

@@ -61,21 +61,13 @@ def satisfied(condition, lane, directory):
         return other.get("status") == "closed" and other.get("result_status") == "DONE"
     cwd = lane["launch_cwd"]
     branch = condition[7:-7]
-    run(["git", "fetch", "--quiet", "origin"], cwd)
-    try:
-        base = run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd)
-    except subprocess.CalledProcessError:
-        # Fetch does not create origin/HEAD in shallow or hand-built checkouts.
-        remote = run(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd)
-        match = re.search(r"^ref: refs/heads/(.+)\s+HEAD$", remote, re.MULTILINE)
-        if not match:
-            raise ValueError("origin default branch is unknown")
-        base = f"refs/remotes/origin/{match[1]}"
-    target = run(["git", "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"], cwd)
-    result = subprocess.run(["git", "merge-base", "--is-ancestor", target, base], cwd=cwd, timeout=60, check=False)
-    if result.returncode not in (0, 1):
-        raise ValueError(f"cannot determine whether branch {branch} is merged")
-    return result.returncode == 0
+    # A freshly created branch is already an ancestor of the base. Only a
+    # merged PR proves that the dependency was delivered, including squash merges.
+    prs = json.loads(run(["gh", "pr", "list", "--head", branch, "--state", "merged",
+                          "--json", "headRefName,state"], cwd))
+    if not isinstance(prs, list) or any(not isinstance(pr, dict) for pr in prs):
+        raise ValueError("invalid merged-PR response")
+    return any(pr.get("headRefName") == branch and pr.get("state") == "MERGED" for pr in prs)
 
 
 def stop_timer(lane):

@@ -20,7 +20,8 @@ name it — the child cannot infer intent it never saw.
 - **Adversarial review:** <reviewer, findings and resolutions before coding risky work>
 - **Launch:** explicit `--model <provider/model>` with `--min-context 1000000`,
   `--owns '<glob>'` for each owned scope and `--after <condition>` for each dependency.
-  With no predecessor, gate on the known merged base branch.
+  With no predecessor, identify an already-merged baseline PR explicitly. A branch
+  gate requires a MERGED PR for that head branch, never mere Git ancestry.
 - **Dependency evidence:** <PR/branch/lane identifiers and why each must finish first>
 
 ## Your job
