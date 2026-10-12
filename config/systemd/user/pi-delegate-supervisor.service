@@ -1,0 +1,6 @@
+[Unit]
+Description=Scan registered Pi delegation lanes for idle children
+
+[Service]
+Type=oneshot
+ExecStart=%h/.pi/agent/skills/delegate/scripts/supervise-children.py

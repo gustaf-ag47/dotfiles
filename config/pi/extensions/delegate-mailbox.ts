@@ -72,12 +72,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function deliver(file: string, content: string): boolean {
+		const waitingOnCI = /^- verdict: \*\*waiting on CI\*\*$/m.test(content);
 		const message = {
 			customType: "delegate-mailbox",
 			content: steering(content)
 				? `DELEGATION STEERING — record ${file}. Apply these instructions at this turn boundary.\n\n${content}`
-				: `DELEGATION FINISHED — record ${file} (auto-acked to ${ACK_DIR}; do not mv it).\n` +
-					`Process the completion below: verify the child's claims, then decide next steps.\n\n` + content,
+				: waitingOnCI
+					? `DELEGATION WAITING ON CI — record ${file} (auto-acked to ${ACK_DIR}; do not mv it).\n` +
+						`The child has an active CI watch and has not finished.\n\n${content}`
+					: `DELEGATION FINISHED — record ${file} (auto-acked to ${ACK_DIR}; do not mv it).\n` +
+						`Process the completion below: verify the child's claims, then decide next steps.\n\n${content}`,
 			details: { record: file, steering: steering(content) },
 			display: true,
 		};

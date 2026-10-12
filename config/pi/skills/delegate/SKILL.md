@@ -226,12 +226,17 @@ parent, so work stops until a human happens to look. Measured 2026-08-29: nine a
 finished and **22.5 hours passed with zero merges** — every one of them a single nudge
 from progress.
 
-`delegate.sh` therefore detaches `watch-child.sh` per child. It polls the child's pane
-and, when the child goes idle, writes a durable record and nudges the parent.
-To avoid changing the rising-edge, grace, /goal and ACK/re-nudge state machine,
-watchers remain per-child for now. After 10 minutes, their default poll interval
-increases from 20 to 60 seconds, reducing tmux captures by two thirds for old
-lanes. Explicit `PI_DELEGATE_POLL_SECS` overrides both intervals:
+`delegate.sh` registers new children with one `pi-delegate-supervisor.timer` scanner.
+It polls only supervisor-owned manifests, writes durable mailbox records and nudges
+the parent. Existing children retain their original per-child `watch-child.sh` units
+until they finish; a new child falls back to that watcher with a warning if the timer
+is not installed or cannot start. After 10 minutes, each lane's default poll interval
+increases from 20 to 60 seconds. Explicit `PI_DELEGATE_POLL_SECS` overrides both.
+Install with `make install`, then `systemctl --user daemon-reload && systemctl
+--user enable --now pi-delegate-supervisor.timer`. Verify with `systemctl --user
+is-active pi-delegate-supervisor.timer` and `systemctl --user list-timers`.
+A registered `ci_wait` is reported as **waiting on CI** without closing the lane;
+completion is reported only after the child leaves CI wait or sends a result.
 
 ```
 notify : watching (nudges Work-Driver:speedup ci on idle)

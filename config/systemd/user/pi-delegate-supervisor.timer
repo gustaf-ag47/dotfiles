@@ -1,0 +1,11 @@
+[Unit]
+Description=Scan Pi delegation lanes every 20 seconds
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=20s
+AccuracySec=1s
+Unit=pi-delegate-supervisor.service
+
+[Install]
+WantedBy=timers.target
