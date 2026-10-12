@@ -68,6 +68,12 @@ class DelegateContractTest(unittest.TestCase):
         _, keys = self.run_watcher('example: nested task: PASS abcdef123 - docs/report.md\n' + 'x' * 100000)
         self.assertNotIn('/goal', keys)
 
+    def test_done_with_ci_run_is_preserved_in_record(self):
+        line = "example: DONE abcdef123 - /notes/report.md ci:123456"
+        record, keys = self.run_watcher(line, require_join=True)
+        self.assertIn("## Result\n" + line, record)
+        self.assertNotIn("/goal", keys)
+
     def test_legacy_handshake_does_not_resume(self):
         _, keys = self.run_watcher("PARENT: example accepted")
         self.assertNotIn("/goal", keys)
