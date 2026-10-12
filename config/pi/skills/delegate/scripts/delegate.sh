@@ -36,6 +36,7 @@
 #   --no-probe         Skip the model availability probe (faster, riskier).
 #   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
+#   --force            Bypass host-load admission for urgent recovery.
 # Worktrees land under $WORKTREES, a persistent mount; /tmp is refused. The
 # parent and the completion-report target are session:window-name, resolved to
 # a pane at send time (a bare %id from an older caller still works). At launch
@@ -50,7 +51,7 @@ CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0 MIN_CONTEXT=0
 PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
 PROJECT="" RESUME=confirm SESSION_EXPLICIT=0 CWD_EXPLICIT=0
 ORIGINAL_ARGS=("$@")
-AFTER=() OWNS=() ALLOW_OVERLAP=0
+AFTER=() OWNS=() ALLOW_OVERLAP=0 FORCE=0
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
 
@@ -76,6 +77,7 @@ while [ $# -gt 0 ]; do
 	--no-probe) PROBE=0; shift ;;
 	--no-notify) NOTIFY=0; shift ;;
 	--dry-run) DRY=1; shift ;;
+	--force) FORCE=1; shift ;;
 	-h | --help) sed -n '2,30p' "$0"; exit 0 ;;
 	*) die "unknown option: $1" ;;
 	esac
@@ -112,14 +114,46 @@ if [ -n "$PROJECT" ]; then
 	[ "$CWD_EXPLICIT" = "1" ] || CWD="$project_cwd"
 fi
 
-# Refuse new agents before any window/worktree is created. Override is explicit
-# for recovery work; scheduled lanes must still respect their own dispatch guard.
-if [ "${DELEGATE_IGNORE_MEM:-0}" != 1 ]; then
-	read -r total available < <(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {available=$2} END {print total, available}' /proc/meminfo)
-	[ "${total:-0}" -gt 0 ] || die "cannot read MemAvailable from /proc/meminfo (set DELEGATE_IGNORE_MEM=1 to override)"
-	if [ "$((available * 100))" -lt "$((total * 15))" ]; then
-		die "MemAvailable below 15% ($available / $total KiB); refusing to boot agent. Set DELEGATE_IGNORE_MEM=1 to override"
+# Linux-only admission. The thresholds are deliberately independent: pressure
+# catches contention, normalized load catches queued builds, RAM avoids swap.
+# A dry run reports the verdict without sleeping; --force is for urgent recovery.
+load_verdict() {
+	local cpu_file="${PI_DELEGATE_CPU_PRESSURE_FILE:-/proc/pressure/cpu}"
+	local load_file="${PI_DELEGATE_LOADAVG_FILE:-/proc/loadavg}"
+	local mem_file="${PI_DELEGATE_MEMINFO_FILE:-/proc/meminfo}"
+	[ -r "$cpu_file" ] || { echo 'unavailable (no Linux CPU PSI)'; return 0; }
+	local cpu load cores available
+	cpu=$(awk '$1=="some" {for(i=2;i<=NF;i++) if($i ~ /^avg60=/) {split($i,a,"="); print a[2]; exit}}' "$cpu_file")
+	read -r load _ < "$load_file"
+	cores=$(nproc)
+	available=$(awk '$1=="MemAvailable:" {print $2; exit}' "$mem_file")
+	if [ -z "$cpu" ] || [ -z "$load" ] || [ -z "$available" ]; then
+		echo 'unavailable (incomplete proc data)'
+		return 0
 	fi
+	awk -v cpu="$cpu" -v load_avg="$load" -v cores="$cores" -v mem="$available" \
+		-v max_cpu="${PI_DELEGATE_CPU_SOME_MAX:-40}" -v max_load="${PI_DELEGATE_LOAD_PER_CORE_MAX:-3}" \
+		-v min_mem="${PI_DELEGATE_MEM_AVAILABLE_MIN_GIB:-6}" \
+		'BEGIN {if (cpu>max_cpu || load_avg/cores>max_load || mem<min_mem*1048576) printf "overloaded (cpu some avg60=%s%%, load/core=%.2f, MemAvailable=%.2f GiB)",cpu,load_avg/cores,mem/1048576; else printf "ok (cpu some avg60=%s%%, load/core=%.2f, MemAvailable=%.2f GiB)",cpu,load_avg/cores,mem/1048576}'
+}
+if [ "$FORCE" = 1 ]; then
+	echo 'delegate: host-load admission skipped (--force)'
+else
+	max_wait="${PI_DELEGATE_LOAD_WAIT_MAX:-1800}"
+	[[ "$max_wait" =~ ^[0-9]+$ ]] || die 'PI_DELEGATE_LOAD_WAIT_MAX must be seconds (non-negative integer)'
+	waited=0
+	while :; do
+		verdict=$(load_verdict)
+		if [ "$DRY" = 1 ]; then echo "delegate: host load: $verdict (dry run; no wait)"; break; fi
+		case "$verdict" in overloaded*) ;; *) echo "delegate: host load: $verdict"; break ;; esac
+		if [ "$waited" -ge "$max_wait" ]; then
+			echo "delegate: host load: $verdict; refused after ${waited}s (use --force for urgent work)" >&2
+			exit 5
+		fi
+		echo "delegate: host load: $verdict; waiting 30s (${waited}/${max_wait}s)" >&2
+		sleep 30
+		waited=$((waited + 30))
+	done
 fi
 
 # ── the current tmux session ────────────────────────────────────────────────
@@ -417,6 +451,8 @@ if command -v llm-usage >/dev/null 2>&1; then
 fi
 # The colon makes numeric names unambiguously session targets, not window indexes.
 tmux new-window -t "${SESSION}:" -n "$NAME" -c "$CWD" -d
+WINDOW_ID="$(tmux display-message -p -t "$SESSION:$NAME" '#{window_id}')"
+tmux set-option -w -t "$WINDOW_ID" @pi_delegate_run_id "$RUN_ID"
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
 CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS" "PI_DELEGATE_LANE_MANIFEST=$LANE_MANIFEST")
@@ -440,17 +476,18 @@ LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
 if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	# <<- strips only LEADING TABS, and strips every one of them from every
 	# line, so python's own indentation below is built from spaces, not tabs.
-	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" "${OWNS[@]}" <<-'PY'
+	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" "$WINDOW_ID" "${OWNS[@]}" <<-'PY'
 	import json, sys, datetime
-	(path, session, window, cwd, branch, model, brief, parent, resume, run_id, parent_pane) = sys.argv[1:12]
+	(path, session, window, cwd, branch, model, brief, parent, resume, run_id, parent_pane, window_id) = sys.argv[1:13]
 	manifest = {
 	    "run_id": run_id,
+	    "window_id": window_id,
 	    "session": session,
 	    "window": window,
 	    "cwd": cwd,
 	    "branch": branch,
 	    "model": model,
-	    "owns": sys.argv[12:],
+	    "owns": sys.argv[13:],
 	    "brief": brief,
 	    "pi_session": None,
 	    "parent": parent,
@@ -465,6 +502,14 @@ if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	PY
 else
 	echo "delegate: warning: could not write lane manifest at $LANE_MANIFEST" >&2
+fi
+# Reaper scans only registered delegate.sh manifests, never arbitrary tmux windows.
+if [ -f "$LANE_MANIFEST" ]; then
+	registry="${PI_DELEGATE_REGISTRY:-$HOME/.pi/agent/delegate-lanes}"
+	mkdir -p "$registry"
+	ln -sfn "$LANE_MANIFEST" "$registry/$RUN_ID.json"
+	# A user timer is shared by every child; no extra polling loop per lane.
+	systemctl --user start pi-delegate-reap.timer 2>/dev/null || true
 fi
 
 # Wait for the TUI to be ready; keystrokes sent too early are silently DISCARDED

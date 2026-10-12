@@ -54,6 +54,23 @@ class DelegateContractTest(unittest.TestCase):
             self.assertEqual(len(records), 1)
             return records[0].read_text(), (root / "keys").read_text() if (root / "keys").exists() else ""
 
+    def test_old_child_uses_slow_poll(self):
+        # Check the shell's dynamic interval, not wall clock: mocked sleep exits instantly.
+        with tempfile.TemporaryDirectory(prefix='delegate-poll-') as tmp:
+            root = Path(tmp)
+            bindir = root / 'bin'
+            bindir.mkdir()
+            (bindir / 'tmux').write_text('#!/bin/bash\ncase "$1" in has-session) exit 1;; esac\n')
+            (bindir / 'sleep').write_text('#!/bin/bash\necho "$*" >> "$SLEEP_LOG"\n')
+            for name in ('tmux', 'sleep'):
+                (bindir / name).chmod(0o755)
+            env = os.environ | {'PATH': str(bindir) + ':' + os.environ['PATH'],
+                 'PI_DELEGATE_MAILBOX': str(root / 'mailbox'), 'SLEEP_LOG': str(root / 'sleeps'),
+                 'PI_DELEGATE_STARTED_AT': '1'}
+            subprocess.run([str(WATCHER), 'demo:child', 'unknown', 'run', tmp], env=env,
+                           capture_output=True, timeout=5)
+            self.assertEqual((root / 'sleeps').read_text().strip(), '60')
+
     def test_result_and_blocker_do_not_resume(self):
         for status in ("PASS", "DONE", "BLOCKER", "FAILED"):
             for sha in ("abcdef123", "none"):

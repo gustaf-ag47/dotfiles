@@ -106,7 +106,7 @@ pane_started() {
 	[ -n "$g" ] && [ "$g" != "0.0%/" ]
 }
 
-started_at=$(date +%s)
+started_at=${PI_DELEGATE_STARTED_AT:-$(date +%s)}
 deadline=$(( started_at + MAX_HOURS * 3600 ))
 streak=0
 seen_busy=0
@@ -146,7 +146,13 @@ result_fields_from_pane() {
 }
 
 while :; do
-	sleep "$POLL_SECS"
+	# Long-lived children need fewer tmux captures; keep the short startup poll
+	# for rising-edge detection, grace, /goal and mailbox behaviour unchanged.
+	poll_interval="$POLL_SECS"
+	if [ $(( $(date +%s) - started_at )) -ge 600 ] && [ -z "${PI_DELEGATE_POLL_SECS:-}" ]; then
+		poll_interval=60
+	fi
+	sleep "$poll_interval"
 	if ! tmux has-session -t "${TARGET%%:*}" 2>/dev/null ||
 		! tmux list-windows -t "${TARGET%%:*}" -F '#{window_name}' 2>/dev/null |
 		grep -qxF "${TARGET#*:}"; then
