@@ -111,8 +111,12 @@ command to the parent rather than blocking in `gh --watch`.
 
 Merge only through `merge-pr.sh` (`scripts/merge-pr.sh`, wraps `gh pr merge`): it
 appends pane/run-id/pr/head-sha to `~/.pi/agent/merge-log.tsv`, and refuses when the
-caller's brief contains "do not merge"/"no-merge"/"don't merge", or when the PR or any
-of its commits were authored by someone other than the agent identity.
+caller's brief has a standalone current-PR hold such as `Merge: no-merge`,
+`Do not merge this PR.` or `Do not merge PR #123.` (for PR 123), or when the PR or
+any of its commits were authored by someone other than the agent identity.
+Conditional safety prose (for example, "do not merge onto a red base"), quoted/code
+examples and directives naming other PRs are not blanket holds. Continue to enforce
+the actual CI/base/review gates regardless of whether an explicit hold exists.
 
 One coordinator owns the queue. Owners merge their own reviewed, green PRs unless
 the brief assigns merge ownership to the coordinator or declares a deploy hold;

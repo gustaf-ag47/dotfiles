@@ -48,9 +48,40 @@ command -v gh >/dev/null 2>&1 || die "gh not in PATH"
 
 if [ -n "$BRIEF" ]; then
 	[ -f "$BRIEF" ] || die "brief not found: $BRIEF"
-	if grep -qiE 'do not merge|no-merge|don.?t merge' "$BRIEF"; then
-		echo "merge-pr: refused: brief $BRIEF says not to merge PR #$PR_NUMBER" >&2
+	# Match an explicit standalone hold, not conditional CI/base safety prose,
+	# quoted examples, or a directive for a different PR.
+	if python3 - "$BRIEF" "$PR_NUMBER" <<-'PY'
+	import re, sys
+	from pathlib import Path
+	directive = re.compile(
+	    r"^(?:[-*+]\s+|\d+[.)]\s+)?(?:merge(?: ownership)?:\s*)?"
+	    r"(?:do not merge|don['’]t merge|no[- ]merge)"
+	    r"(?:\s+(?:(?:this|the) (?:pr|pull request)|(?:pr|pull request)\s*#?(?P<number>\d+)))?"
+	    r"\s*(?:[.!]|\s*[:—–]\s+.+|\s+-\s+.+)?$", re.I)
+	fence = None
+	for raw in Path(sys.argv[1]).read_text().splitlines():
+	    line = raw.strip()
+	    marker = re.match(r"^(`{3,}|~{3,})", line)
+	    if marker:
+	        if fence is None:
+	            fence = marker[1][0]
+	        elif marker[1][0] == fence:
+	            fence = None
+	        continue
+	    if fence is not None or line.startswith(">"):
+	        continue
+	    line = line.replace("**", "").replace("__", "").replace("`", "")
+	    match = directive.fullmatch(line)
+	    if match and (match["number"] is None or int(match["number"]) == int(sys.argv[2])):
+	        sys.exit(0)
+	sys.exit(3)
+	PY
+	then
+		echo "merge-pr: refused: brief $BRIEF explicitly holds PR #$PR_NUMBER" >&2
 		exit 2
+	else
+		guard_status=$?
+		[ "$guard_status" = 3 ] || die "could not parse merge directives in $BRIEF"
 	fi
 fi
 
