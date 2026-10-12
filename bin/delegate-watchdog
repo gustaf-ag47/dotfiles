@@ -43,10 +43,12 @@ def tick(manifest, child, parent):
     args = ["gh", "pr", "view"]
     if lane.get("pr"):
         args.append(str(lane["pr"]))
-    args += ["--json", "number,url,mergeStateStatus,headRefOid,state"]
+    args += ["--json", "number,url,mergeStateStatus,headRefOid,state,isDraft"]
     pr = json.loads(command(args, cwd))
     reason = pr["mergeStateStatus"] if pr["mergeStateStatus"] in ("DIRTY", "BEHIND") else ""
-    if not reason and pr["state"] == "OPEN":
+    # Draft CI may deliberately fail verdict jobs without running tests. Those
+    # failures are not a stall; real DIRTY/BEHIND conflicts remain actionable.
+    if not reason and pr["state"] == "OPEN" and not pr.get("isDraft", False):
         checks_args = ["gh", "pr", "checks", str(pr["number"]), "--required", "--json", "name,bucket"]
         checks = subprocess.run(checks_args, cwd=cwd, text=True, capture_output=True, timeout=30, check=False)
         # Repositories without required contexts still have CI gates. Check all
@@ -79,6 +81,8 @@ def tick(manifest, child, parent):
     else:
         state.pop("parent_idle_since", None)
         state.pop("signature", None)
+        state.pop("stalled_since", None)
+        state.pop("parent_alerted", None)
     state.update(checked_at=now, stalled=stalled, pr=pr["url"], reason=reason)
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(state) + "\n")
