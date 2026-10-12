@@ -13,14 +13,25 @@ State what is already known to be true, and what is still assumption. If a previ
 agent or the operator made a decision that constrains this work, say so explicitly and
 name it — the child cannot infer intent it never saw.
 
+## Decisions and launch gates
+
+- **Decided design:** <chosen approach and evidence; implement only these decisions>
+- **Open questions:** <draft/ADR questions in operator notes; do not implement guesses>
+- **Adversarial review:** <reviewer, findings and resolutions before coding risky work>
+- **Launch:** explicit `--model <provider/model>` with `--min-context 1000000`,
+  `--owns '<glob>'` for each owned scope and `--after <condition>` for each dependency.
+  With no predecessor, gate on the known merged base branch.
+- **Dependency evidence:** <PR/branch/lane identifiers and why each must finish first>
+
 ## Your job
 
 1. Numbered, checkable outcomes — not vibes.
 2. Say what "done" means for each one.
 3. If something is investigation-first, say so: "root-cause before changing code".
 
-Prefer outcomes over instructions. A capable agent given the goal and the constraints
-will find a better route than a step list written by someone not looking at the code.
+Prefer outcomes over instructions. Split work into small vertical PRs, each with
+green CI before proceeding to dependent work. A capable agent given the goal and
+constraints can choose implementation details within the decided design.
 
 ## Scope fence
 
@@ -43,6 +54,10 @@ will find a better route than a step list written by someone not looking at the 
   <exact commands>
   ```
   A `-run` filter that matches nothing exits 0 — confirm the tests actually ran.
+- Before committing, run `delegate-owns-check`; resolve any staged path outside the
+  lane's ownership with the coordinator before widening scope.
+- Steering uses `delegate-send <child> --file <message>`; pane typing is reserved for
+  slash commands, not task payloads.
 - Git: use `GIT_EDITOR=true` for any rebase/merge continuation so it cannot hang.
   `main` may enforce linear history — check before choosing a merge strategy.
 
@@ -56,6 +71,11 @@ findings. Never commit or push operator notes.
 
 Send the parent **one results-or-blocker line only**:
 `<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
+Every DONE line must instead include the exact verified SHA and its green CI run:
+`<task>: DONE <sha> - <report-path> ci:<run-id>`.
+Run `delegate-verify '<result-line>'` from the target checkout before reporting DONE.
+Include `merged: true` in the report only when claiming a merge; cite the PR, merge
+SHA, target base and post-merge CI run. Missing evidence is a BLOCKER, not DONE.
 No ACK, receipt, progress relay or repeated unchanged verification. At 300k tokens
 of context (the TUI footer's absolute count), write a handover file with state,
 remaining work, evidence and paths; send its path in the line above and stop.

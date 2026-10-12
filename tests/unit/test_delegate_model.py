@@ -73,6 +73,9 @@ esac
         self.assertIn("verified; 1000000 tokens", result.stdout)
         self.assertLess(keys.index("/model anthropic/claude-sonnet-5"), keys.index("You are a delegated"))
         self.assertEqual(keys.count("/failover off"), 1)
+        self.assertIn("operator-notes path in the brief", keys)
+        self.assertIn("ci:<successful-run-id>", keys)
+        self.assertNotIn("record findings in-repo", keys)
 
     def test_pin_retry_failure_never_sends_task(self):
         result, keys = self.launch(False)
