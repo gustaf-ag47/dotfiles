@@ -11,7 +11,9 @@ after you move on; you monitor it with `tmux capture-pane`.
 
 ```bash
 ~/.pi/agent/skills/delegate/scripts/delegate.sh --brief "$(ws route dotfiles | awk '{print $4}')/my-task.md" \
-  --task "fix the flaky daemon shell suite"
+  --task "fix the flaky daemon shell suite" \
+  --model anthropic/claude-sonnet-5 --min-context 1000000 \
+  --owns 'tests/**' --after branch:master:merged
 ```
 
 ## The rule that makes delegation work: write the brief first
@@ -37,6 +39,25 @@ Minimum contents:
   any code or project documentation changes separately.
 - **Cost guidance** — and what to do when blocked instead of burning budget.
 
+## Decide before delegating
+
+Implementation lanes implement **decided items only**. Record the chosen design,
+acceptance tests and merge owner before launch. Open questions stay draft/ADR
+questions in operator notes, not silently chosen implementation details. Delegate
+investigation separately when a decision still needs evidence.
+
+For risky work (shared contracts, migrations, auth, concurrency or production
+changes), run an adversarial review of the brief/design before coding: have an
+independent reviewer challenge failure paths, dependency order, ownership collisions
+and verification gaps. Resolve evidenced defects and record accepted trade-offs
+before handing implementation to the child.
+
+Prefer small vertical PRs, each independently testable and green in CI. Every
+implementation launch passes an explicit `--model`, `--min-context 1000000`, scoped
+`--owns` globs and `--after` dependencies. If no predecessor exists, use the known
+merged base branch as the launch gate. Check the launch summary's verified model
+and capacity; a successful availability probe alone is not model verification.
+
 ## Coordination contract
 
 Steer a running child with `delegate-send <session:window-or-%pane> --file <message>`
@@ -52,7 +73,11 @@ idempotent. A child needs the updated mailbox extension loaded (`/reload`).
 The child sends **one result or blocker**, never a chat ACK, receipt or relay:
 `<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
 Use a real commit SHA (at least 7 hex digits) or literal `none`, and a real path
-without spaces or angle-bracket placeholders. The watcher recognizes this line
+without spaces or angle-bracket placeholders. **Every DONE line cites a real SHA
+and a successful CI run ID for that exact SHA:**
+`<task>: DONE <sha> - <report-path> ci:<run-id>`.
+Use BLOCKER/FAILED rather than DONE when evidence is missing. Legacy lines remain
+readable, but are not an exemption for newly delegated work. The watcher recognizes this line
 and the older `PARENT: … done|accepted` handshake. A BLOCKER or FAILED line
 ends automatic `/goal` retries; it does not claim that work passed.
 Keep reports in their designated path; never git-commit or push the operator Vault.
@@ -65,8 +90,8 @@ automatically on DONE completion records and annotates PASS/FAIL evidence. Missi
 commits, unreachable PR ancestry, absent/pending/red CI and false merge claims fail.
 Merged PRs must have their merge commit on the base branch. `--merged` or report
 metadata `merged: true` explicitly asserts a merge; optional `ci_run: <id>` report
-metadata or a `ci:<id>` result suffix ties a run to the exact claimed SHA.
-Legacy result lines are still parsed. Automatic verification is evidence, not merge
+metadata or the required new-work `ci:<id>` result suffix ties a run to the exact
+claimed SHA. Legacy result lines are still parsed. Automatic verification is evidence, not merge
 authorization or a substitute for the repository's own tests/review gates.
 
 When the brief's DONE condition is met, report and stop, even if more work is in

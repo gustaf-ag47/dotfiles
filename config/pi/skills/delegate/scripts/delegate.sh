@@ -524,7 +524,7 @@ if [ -n "$BRIEF" ]; then
 	prompt="$prompt Read ${brief_rel} in full — it is your complete brief — then execute it."
 fi
 [ -n "$TASK" ] && prompt="$prompt Task: ${TASK}"
-prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings in-repo. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. No ACK, receipt or relay messages. At 300k tokens of context (the TUI footer's absolute count, not a percentage), write a handover file with remaining work and evidence, send its path in that line, and stop."
+prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings at the operator-notes path in the brief; never commit the Vault. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. For DONE, use a real SHA and append ci:<successful-run-id> for that exact SHA; run delegate-verify before reporting. No ACK, receipt or relay messages. At 300k tokens of context (the TUI footer's absolute count, not a percentage), write a handover file with remaining work and evidence, send its path in that line, and stop."
 
 # -l sends the string literally: without it tmux parses words like "Enter" or
 # "Space" inside the prompt as key names. Submit separately, and send Enter
