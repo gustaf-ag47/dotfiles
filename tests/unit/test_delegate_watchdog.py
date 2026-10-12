@@ -23,7 +23,7 @@ class WatchdogTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.manifest = self.root / "lane.json"
         self.manifest.write_text(json.dumps({"cwd": str(self.root)}))
-        self.pr = dict(number=12, url="https://github.com/owner/repo/pull/12", state="OPEN", mergeStateStatus="DIRTY", headRefOid="a" * 40)
+        self.pr = dict(number=12, url="https://github.com/owner/repo/pull/12", state="OPEN", isDraft=False, mergeStateStatus="DIRTY", headRefOid="a" * 40)
         self.child = "idle"
         self.parent = "idle"
         self.sent = []
@@ -43,6 +43,7 @@ class WatchdogTests(unittest.TestCase):
         if args[0] == "git":
             return ".git"
         if args[0] == "gh":
+            self.assertIn("isDraft", args[-1].split(","))
             return json.dumps(self.pr)
         return self.child if args[-1] == "child" else self.parent
 
@@ -65,6 +66,38 @@ class WatchdogTests(unittest.TestCase):
         self.checks = [{"name": "unit", "bucket": "fail"}]
         self.assertEqual(self.tick(), 10)
         self.assertIn("red: unit", self.sent[0][1])
+
+    def test_draft_red_verdicts_do_not_alert_or_escalate(self):
+        self.pr.update(isDraft=True, mergeStateStatus="CLEAN")
+        self.child = "⠁ Working\nci_wait registered"
+        self.checks = [{"name": "CI/global/org/hub/Rust verdict", "bucket": "fail"}]
+        self.assertEqual(self.tick(), 0)
+        self.clock += 601
+        self.assertEqual(self.tick(), 0)
+        self.assertEqual(self.sent, [])
+        module.subprocess.run.assert_not_called()
+
+    def test_converting_red_pr_to_draft_clears_stall_and_ready_resumes_detection(self):
+        self.pr["mergeStateStatus"] = "CLEAN"
+        self.checks = [{"name": "draft verdict", "bucket": "fail"}]
+        self.assertEqual(self.tick(), 10)
+        self.assertEqual(len(self.sent), 2)
+        self.pr["isDraft"] = True
+        self.clock += 601
+        self.assertEqual(self.tick(), 0)
+        self.assertEqual(len(self.sent), 2, "draft must not escalate existing idle state")
+        state = json.loads((self.root / "mailbox/watchdog/lane.json").read_text())
+        self.assertFalse(state["stalled"])
+        self.assertNotIn("parent_idle_since", state)
+        self.assertNotIn("signature", state)
+        self.pr["isDraft"] = False
+        self.assertEqual(self.tick(), 10)
+        self.assertEqual(len(self.sent), 4, "ready PR must alert afresh")
+
+    def test_draft_conflicts_still_alert(self):
+        self.pr["isDraft"] = True
+        self.assertEqual(self.tick(), 10)
+        self.assertIn("DIRTY", self.sent[0][1])
 
     def test_busy_nonwaiting_child_not_stalled(self):
         self.child = "⠁ Working"

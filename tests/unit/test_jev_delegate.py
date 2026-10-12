@@ -63,7 +63,7 @@ printf '{"status":"ok","suggestion":"mechanical","confidence":1,"applied":false}
     def run_delegate(self, *extra, task=True):
         args = ['bash', str(self.script), '--session', 'test', '--cwd', str(self.root),
                 '--model', 'anthropic/fixed-model', '--class', 'research',
-                '--no-probe', '--no-notify', '--brief', str(self.brief)]
+                '--no-probe', '--no-notify', '--force', '--brief', str(self.brief)]
         if task:
             args += ['--task', 'Compare public documentation']
         result = subprocess.run(args + list(extra), env=self.env, text=True,
