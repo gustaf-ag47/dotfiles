@@ -26,7 +26,7 @@ const answer = (candidates) => ({
   model: 'claude-fable-5-1', candidates, first_routable: candidates.find(c => c.routable) ?? null,
 });
 
-function harness({ routes, setModelOk = () => true, start = 1_000_000, wait }) {
+function harness({ routes, setModelOk = () => true, start = 1_000_000, wait, launchArgs = [] }) {
   const calls = { route: [], setModel: [], notify: [], sleep: [] };
   let clock = start;
   const core = createFailover({
@@ -36,6 +36,7 @@ function harness({ routes, setModelOk = () => true, start = 1_000_000, wait }) {
     now: () => clock,
     sleep: async (ms) => { calls.sleep.push(ms); clock += ms; },
     random: () => 0,
+    launchArgs,
     wait: wait ?? { enabled: true, maxWaitMs: 6 * 3_600_000, pollMs: RECOVERY_POLL_MS },
   });
   return { core, calls, tick: (ms) => { clock += ms; } };
@@ -109,6 +110,33 @@ test('turn boundary proactively follows preferred and manual pin disables it', a
   core.setPinned(false);
   core.onManualModelSelect({ provider: 'deepseek', model: 'deepseek-flash' });
   assert.equal(core.state.pinned, true);
+});
+
+test('explicit --model at launch blocks pressure routing, not exhaustion failover', async () => {
+  const preferred = { ...codex(true), pressure: 2e-7 };
+  const { core, calls, tick } = harness({
+    launchArgs: ['/usr/bin/node', '/usr/bin/pi', '--model', 'anthropic/claude-fable-5-1'],
+    routes: [{ ...answer([anthropic(false), codex(true)]), preferred }],
+  });
+  tick(RECOVERY_POLL_MS);
+  assert.equal(core.state.pinned, true);
+  assert.equal(await core.onTurnStart({ provider: 'anthropic', model: 'claude-fable-5-1' }), false);
+  assert.deepEqual(calls.route, [], 'no pressure probe while pinned');
+  assert.deepEqual(calls.setModel, []);
+  assert.equal(await core.onPoolExhausted({ provider: 'anthropic', model: 'claude-fable-5-1' }), true);
+  assert.deepEqual(calls.setModel, [{ provider: 'openai-codex', model: 'gpt-6-astra' }]);
+});
+
+test('no explicit launch model retains pressure routing (--models is not --model)', async () => {
+  const preferred = { ...codex(true), pressure: 2e-7 };
+  const { core, calls, tick } = harness({
+    launchArgs: ['/usr/bin/node', '/usr/bin/pi', '--models', 'anthropic/*'],
+    routes: [{ ...answer([anthropic(true), codex(true)]), preferred }],
+  });
+  tick(RECOVERY_POLL_MS);
+  assert.equal(core.state.pinned, false);
+  assert.equal(await core.onTurnStart({ provider: 'anthropic', model: 'claude-fable-5-1' }), true);
+  assert.deepEqual(calls.setModel, [{ provider: 'openai-codex', model: 'gpt-6-astra' }]);
 });
 
 test('pressure-driven switch-back follows preferred anthropic at a later turn boundary', async () => {

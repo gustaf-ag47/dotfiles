@@ -61,6 +61,8 @@ export type FailoverDeps = {
 	sleep?: (ms: number) => Promise<void>;
 	random?: () => number;
 	wait?: WaitSettings;
+	/** Pi process argv; injectable for testing CLI launch pins. */
+	launchArgs?: readonly string[];
 };
 
 export type WaitSettings = { enabled: boolean; maxWaitMs: number; pollMs: number };
@@ -70,6 +72,11 @@ export type CooldownReset = { account: string; at: string; epoch: number };
 export type WaitPlan =
 	| { action: "wait"; until: number | null; deadline: number; account: string | null }
 	| { action: "stop"; line: string };
+
+/** Pi's CLI accepts `--model <pattern>`; `--models` only sets the cycling list. */
+export function hasExplicitLaunchModel(args: readonly string[]): boolean {
+	return args.some((arg, i) => arg === "--model" && !!args[i + 1] && !args[i + 1].startsWith("-"));
+}
 
 export type FailoverState = {
 	enabled: boolean;
@@ -241,7 +248,7 @@ export function createFailover(deps: FailoverDeps) {
 		lastPollAt: 0,
 		lastPollRoutable: false,
 		pressureDriven: false,
-		pinned: false,
+		pinned: hasExplicitLaunchModel(deps.launchArgs ?? process.argv),
 		lastNoRouteLine: "",
 		lastNoRouteAt: 0,
 		waitingSince: 0,
