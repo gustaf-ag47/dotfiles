@@ -73,7 +73,10 @@ findings. Never commit or push operator notes.
 Send the parent **one results-or-blocker line only**:
 `<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
 Every DONE line must instead include the exact verified SHA and its green CI run:
-`<task>: DONE <sha> - <report-path> ci:<run-id>`.
+`<task>: DONE <sha> - <report-path> ci:<run-id> [pr:<number>]`.
+The optional `pr:` token comes after `ci:` and requires the exact current PR-head
+SHA plus a green run associated with that PR/head. Omit `pr:` for a merge-commit
+claim; provide the merge SHA and its post-merge run instead. Do not add other tokens.
 Run `delegate-verify '<result-line>'` from the target checkout before reporting DONE.
 Include `merged: true` in the report only when claiming a merge; cite the PR, merge
 SHA, target base and post-merge CI run. Missing evidence is a BLOCKER, not DONE.

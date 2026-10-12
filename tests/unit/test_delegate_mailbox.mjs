@@ -123,7 +123,7 @@ test('DONE completion receives automatic verifier evidence, including failures',
     for (const [verdict, code] of [['PASS', 0], ['FAIL', 1]]) {
       fs.writeFileSync(helper, `#!/bin/bash\n[ "$1" = --record ] || exit 9\nprintf '${verdict}: fixture evidence\\n'\nexit ${code}\n`, { mode: 0o755 });
       const { sent, handlers } = boot();
-      record('%99', `verify-${verdict}.md`, 'task: DONE abcdef123 - /report.md');
+      record('%99', `verify-${verdict}.md`, 'task: DONE abcdef123 - /report.md ci:123 pr:3915');
       await handlers.session_start({}, { hasUI: false });
       try {
         assert.equal(sent.length, 1);

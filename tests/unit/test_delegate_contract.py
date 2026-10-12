@@ -86,7 +86,7 @@ class DelegateContractTest(unittest.TestCase):
         self.assertNotIn('/goal', keys)
 
     def test_done_with_ci_run_is_preserved_in_record(self):
-        line = "example: DONE abcdef123 - /notes/report.md ci:123456"
+        line = "example: DONE abcdef123 - /notes/report.md ci:123456 pr:3915"
         record, keys = self.run_watcher(line, require_join=True)
         self.assertIn("## Result\n" + line, record)
         self.assertNotIn("/goal", keys)
