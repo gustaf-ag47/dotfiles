@@ -76,7 +76,13 @@ The child sends **one result or blocker**, never a chat ACK, receipt or relay:
 Use a real commit SHA (at least 7 hex digits) or literal `none`, and a real path
 without spaces or angle-bracket placeholders. **Every DONE line cites a real SHA
 and a successful CI run ID for that exact SHA:**
-`<task>: DONE <sha> - <report-path> ci:<run-id>`.
+`<task>: DONE <sha> - <report-path> ci:<run-id> [pr:<number>]`.
+The brackets mean optional syntax, not literal characters. Tokens must be in that
+order. `pr:<number>` asserts the SHA is that PR's **current head**, and the green
+CI run must list that PR and head SHA in its GitHub association. This supports
+unmerged work ready for review; it does not assert a merge. For a merge-commit
+claim, omit `pr:` and use the merge SHA with its post-merge CI run. Unknown tokens,
+stale PR heads and unrelated CI runs fail verification.
 Use BLOCKER/FAILED rather than DONE when evidence is missing. Legacy lines remain
 readable, but are not an exemption for newly delegated work. The watcher recognizes this line
 and the older `PARENT: … done|accepted` handshake. A BLOCKER or FAILED line

@@ -29,6 +29,7 @@ class VerifyTests(unittest.TestCase):
         self.statuses = []
         self.comparison = "ahead"
         self.ci_sha = self.sha
+        self.ci_pr = 12
         self.required = ["unit"]
         mock = patch.object(module, "api", side_effect=self.api)
         mock.start()
@@ -38,6 +39,8 @@ class VerifyTests(unittest.TestCase):
         self.addCleanup(mock.stop)
 
     def api(self, repo, endpoint, cwd, pages=False):
+        if endpoint == "pulls/12":
+            return self.pr
         if endpoint.endswith("/pulls?per_page=100"):
             return [[self.pr]]
         if "/check-runs?" in endpoint:
@@ -47,11 +50,30 @@ class VerifyTests(unittest.TestCase):
         if endpoint.startswith("compare/"):
             return {"status": self.comparison}
         if endpoint.startswith("actions/runs/"):
-            return {"head_sha": self.ci_sha, "status": "completed", "conclusion": "success", "html_url": "https://ci/123"}
+            return {"head_sha": self.ci_sha, "status": "completed", "conclusion": "success", "html_url": "https://ci/123", "pull_requests": [{"number": self.ci_pr, "head": {"sha": self.ci_sha}}]}
         return {"sha": self.sha}
 
     def verify(self, suffix=""):
         return module.verify(f"task: DONE {self.sha} - {self.report}{suffix}", str(self.root), "owner/repo")
+
+    def test_explicit_unmerged_pr_head_with_its_ci_run_passes(self):
+        self.report.write_text("Ready for parent review; not merged.\n")
+        self.pr["merged_at"] = None
+        self.assertIn("PR #12", self.verify(" ci:123 pr:12"))
+
+    def test_explicit_pr_rejects_ancestor_instead_of_exact_head(self):
+        self.pr["head"]["sha"] = "d" * 40
+        with self.assertRaisesRegex(ValueError, "not the head"):
+            self.verify(" ci:123 pr:12")
+
+    def test_explicit_pr_rejects_ci_from_other_pr(self):
+        self.ci_pr = 99
+        with self.assertRaisesRegex(ValueError, "not associated with PR #12"):
+            self.verify(" ci:123 pr:12")
+
+    def test_explicit_pr_requires_ci_run_evidence(self):
+        with self.assertRaisesRegex(ValueError, "requires a CI run"):
+            self.verify(" pr:12")
 
     def test_green_commit_and_merge_ancestry_pass(self):
         self.assertIn("PASS owner/repo@", self.verify(" ci:123"))

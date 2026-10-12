@@ -49,7 +49,7 @@ export default function (pi: ExtensionAPI) {
 	let rescan = false;
 
 	async function verification(file: string, content: string): Promise<string> {
-		if (steering(content) || !/^\s*[^<>\n]+: DONE (?:[a-fA-F0-9]{7,40}|none) - [^\s<>]+(?: ci:[0-9]+)?\s*$/m.test(content)) return content;
+		if (steering(content) || !/^\s*[^<>\n]+: DONE (?:[a-fA-F0-9]{7,40}|none) - [^\s<>]+(?: ci:[0-9]+)?(?: pr:[1-9][0-9]*)?\s*$/m.test(content)) return content;
 		const evidence = await new Promise<string>((resolve) => {
 			execFile(process.env.PI_DELEGATE_VERIFY || "delegate-verify", ["--record", file],
 				{ timeout: 90_000, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {

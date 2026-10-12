@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import subprocess
 
-RESULT = re.compile(r"^\s*[^<>\n]+: DONE ([a-fA-F0-9]{7,40}) - ([^\s<>]+)(?: ci:([0-9]+))?\s*$", re.MULTILINE)
+RESULT = re.compile(r"^\s*[^<>\n]+: DONE ([a-fA-F0-9]{7,40}) - ([^\s<>]+)(?: ci:([0-9]+))?(?: pr:([1-9][0-9]*))?\s*$", re.MULTILINE)
 
 
 def gh(args, cwd):
@@ -56,8 +56,8 @@ def check_evidence(repo, sha, pr, cwd):
 def verify(line, cwd, repo=None, merged=False):
     matches = list(RESULT.finditer(line))
     if not matches:
-        raise ValueError("expected <task>: DONE <sha> - <report> [ci:<run-id>]")
-    sha, report_path, ci_run = matches[-1].groups()
+        raise ValueError("expected <task>: DONE <sha> - <report> [ci:<run-id>] [pr:<number>]")
+    sha, report_path, ci_run, pr_number = matches[-1].groups()
     report = Path(report_path)
     if not report.is_absolute():
         report = Path(cwd) / report
@@ -69,11 +69,19 @@ def verify(line, cwd, repo=None, merged=False):
     if not ci_run:
         match = re.search(r"^(?:- )?ci_run:\s*([0-9]+)\s*$", content, re.M)
         ci_run = match[1] if match else None
+    if pr_number and not ci_run:
+        raise ValueError("an explicit PR requires a CI run (ci:<run-id> or report ci_run metadata)")
     repo = repo or gh(["repo", "view", "--json", "nameWithOwner"], cwd)["nameWithOwner"]
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise ValueError("invalid target repository")
     sha = api(repo, f"commits/{sha}", cwd)["sha"]
-    prs = [pr for page in api(repo, f"commits/{sha}/pulls?per_page=100", cwd, True) for pr in page]
+    if pr_number:
+        pr = api(repo, f"pulls/{pr_number}", cwd)
+        if pr["head"]["sha"] != sha:
+            raise ValueError(f"claimed SHA {sha} is not the head of PR #{pr_number}")
+        prs = [pr]
+    else:
+        prs = [pr for page in api(repo, f"commits/{sha}/pulls?per_page=100", cwd, True) for pr in page]
     eligible = []
     for pr in prs:
         if pr["base"]["repo"]["full_name"].lower() != repo.lower():
@@ -96,6 +104,11 @@ def verify(line, cwd, repo=None, merged=False):
                 run = api(repo, f"actions/runs/{ci_run}", cwd)
                 if run["head_sha"] != sha or run["status"] != "completed" or run["conclusion"] != "success":
                     raise ValueError(f"CI run {ci_run} is not green for claimed SHA {sha}")
+                if pr_number and not any(
+                    linked.get("number") == int(pr_number) and linked.get("head", {}).get("sha") == sha
+                    for linked in run.get("pull_requests", [])
+                ):
+                    raise ValueError(f"CI run {ci_run} is not associated with PR #{pr_number} at claimed SHA {sha}")
                 evidence.append(run["html_url"])
             return f"PASS {repo}@{sha} PR #{pr['number']} ({'merged on base' if is_merged else 'PR head ancestry'}); CI: {' '.join(filter(None, evidence))}"
         except ValueError as error:
