@@ -1,0 +1,110 @@
+#!/bin/bash
+# Recover Hyprland's "lockscreen app died" overlay from SSH or another tty.
+# hyprctl eval 'hl.clear_crashed_lockscreen()' requires the Lua config manager;
+# this machine uses hyprlang, and force-unlock is not a safe recovery method.
+# A replacement launched on an inactive VT never renders, even after returning
+# to Hyprland. Stop orphaned lock clients, then launch only after VT activation.
+set -uo pipefail
+
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    printf 'Usage: hyprlock-recover\nRun from SSH or another tty, then switch back to the Hyprland tty when prompted.\n'
+    exit 0
+fi
+if (( $# != 0 )); then
+    echo 'hyprlock-recover: unknown arguments (try --help)' >&2
+    exit 2
+fi
+
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+shopt -s nullglob
+instances=("$XDG_RUNTIME_DIR"/hypr/*/)
+if (( ${#instances[@]} == 0 )); then
+    echo 'hyprlock-recover: no Hyprland instance found' >&2
+    exit 1
+fi
+# Select newest instance, not an arbitrary directory (old stale sockets can remain).
+newest=${instances[0]}
+for instance in "${instances[@]:1}"; do
+    [[ $instance -nt $newest ]] && newest=$instance
+done
+export HYPRLAND_INSTANCE_SIGNATURE=${newest%/}
+HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE##*/}
+read -r compositor_pid < "$newest/hyprland.lock" || {
+    echo 'hyprlock-recover: cannot read instance lockfile' >&2; exit 1;
+}
+if [[ ! $compositor_pid =~ ^[0-9]+$ ]] || ! kill -0 "$compositor_pid" 2>/dev/null; then
+    echo 'hyprlock-recover: instance compositor is not alive' >&2
+    exit 1
+fi
+read -r WAYLAND_DISPLAY < <(tail -n 1 "$newest/hyprland.lock")
+export WAYLAND_DISPLAY
+
+# The compositor PID's logind session is authoritative even when invoked from
+# a different tty / SSH session; do not use the caller's XDG_SESSION_ID.
+VT=
+while read -r session _; do
+    [[ $session =~ ^[0-9]+$ ]] || continue
+    # Match the compositor's session scope rather than the invoking tty.
+    if grep -q "/session-${session}.scope" "/proc/$compositor_pid/cgroup" 2>/dev/null; then
+        vt=$(loginctl show-session "$session" -p VTNr --value 2>/dev/null) || continue
+        type=$(loginctl show-session "$session" -p Type --value 2>/dev/null) || continue
+        if [[ $type == wayland && $vt =~ ^[1-9][0-9]*$ ]]; then
+            VT=tty$vt
+            break
+        fi
+    fi
+done < <(loginctl list-sessions --no-legend 2>/dev/null)
+if [[ -z $VT ]]; then
+    echo 'hyprlock-recover: cannot identify compositor VT; refusing unsafe relaunch' >&2
+    exit 1
+fi
+
+if ! hyprctl -i "$HYPRLAND_INSTANCE_SIGNATURE" keyword misc:allow_session_lock_restore 1; then
+    echo 'hyprlock-recover: cannot enable session lock restoration' >&2
+    exit 1
+fi
+
+# pgrep -f/pkill -f can match our own command line. Inspect argv of this
+# user's processes and signal explicit PIDs only (never ourselves).
+for cmdline in /proc/[0-9]*/cmdline; do
+    pid=${cmdline#/proc/}
+    pid=${pid%/cmdline}
+    [[ $pid != "$$" && $pid != "$PPID" ]] || continue
+    [[ -O $cmdline ]] || continue
+    args=()
+    mapfile -d '' -t args < "$cmdline" 2>/dev/null || continue
+    case ${args[0]:-} in
+        */hyprlock-safe|hyprlock-safe) kill "$pid" 2>/dev/null || true ;;
+        */bash|bash) case ${args[1]:-} in
+            */hyprlock-safe|hyprlock-safe) kill "$pid" 2>/dev/null || true ;;
+        esac ;;
+    esac
+done
+sleep 0.5
+while read -r pid; do
+    if [[ $pid =~ ^[0-9]+$ && $pid != "$$" ]]; then
+        kill "$pid" 2>/dev/null || true
+    fi
+done < <(pgrep -u "$(id -u)" -x hyprlock || true)
+
+printf 'Switch back to %s now; waiting for Hyprland to render before launching hyprlock.\n' "$VT"
+while [[ $(< "${HYPRLOCK_ACTIVE_VT_FILE:-/sys/class/tty/tty0/active}") != "$VT" ]]; do
+    sleep 0.2
+done
+# Re-enable in case config was reloaded while waiting. This never force-unlocks.
+hyprctl -i "$HYPRLAND_INSTANCE_SIGNATURE" keyword misc:allow_session_lock_restore 1 >/dev/null || exit 1
+nohup setsid "$(dirname "${BASH_SOURCE[0]}")/hyprlock-safe" </dev/null >/dev/null 2>&1 &
+wrapper=$!
+for (( i=0; i<40; i++ )); do
+    if ! kill -0 "$wrapper" 2>/dev/null; then
+        echo 'hyprlock-recover: supervisor exited before lock client started' >&2
+        exit 1
+    fi
+    if pgrep -u "$(id -u)" -x hyprlock >/dev/null; then
+        echo 'hyprlock-recover: lock client running; unlock normally on Hyprland'
+        exit 0
+    fi
+    sleep 0.2
+done
+echo 'hyprlock-recover: no lock client observed within 8 seconds' >&2
+exit 1

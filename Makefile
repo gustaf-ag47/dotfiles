@@ -35,6 +35,7 @@ test: test-unit test-node
 
 test-unit:
 	@python3 -m unittest discover -s tests/unit -t tests/unit -v
+	@bash tests/hyprlock-safe.sh
 
 # PI_LLM_CLASS leaks from agent shells into class-sensitive tests; strip it.
 test-node:
