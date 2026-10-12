@@ -68,6 +68,16 @@ check "no temporary stash refs left behind" \
 out2="$(SYNC="$A" GIT_BUNDLE_DIR="$A/archive/git-bundles" "$BIN/git-bundle-backup" 2>&1)"
 check "second run rewrites nothing" bash -c "echo '$out2' | grep -q '0 bundle(s) written, 2 unchanged'"
 
+echo "-- exclude list in \$SYNC/state applies under a stale LOCAL_CONFIG"
+X="$T/x/sync"
+mkdir -p "$X/state/dotfiles-local" "$X/src"
+cp -a "$A/src/solo" "$X/src/solo"
+printf '# company code\nsrc/solo\n' >"$X/state/dotfiles-local/git-bundle-exclude"
+SYNC="$X" LOCAL_CONFIG="$X/dotfiles-local" GIT_BUNDLE_DIR="$X/archive/git-bundles" \
+	"$BIN/git-bundle-backup" >/dev/null 2>&1
+check "excluded repo is not bundled" test ! -e "$X/archive/git-bundles/$host/src/solo.full.bundle"
+check "excluded repo stays in the manifest" grep -q '^src/solo' "$X/archive/git-bundles/$host/repos.tsv"
+
 # --- machine B: what Syncthing delivers (no .git) ------------------------------
 B="$T/b/sync"
 mkdir -p "$B"

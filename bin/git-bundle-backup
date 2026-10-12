@@ -20,6 +20,7 @@
 # should get a private remote instead of being re-synced on every change.
 #
 # Excluded paths (space-separated globs: GIT_BUNDLE_EXCLUDE, else the words in
+# $SYNC/state/dotfiles-local/git-bundle-exclude and
 # $LOCAL_CONFIG/git-bundle-exclude, plus always tmp/*) keep a
 # repo in the manifest -- so git-rehydrate can still clone it from its remote
 # -- but never bundles its contents into the personal Syncthing mesh. Company
@@ -32,9 +33,17 @@ SYNC="${SYNC:-$HOME/sync}"
 OUT="${GIT_BUNDLE_DIR:-$SYNC/archive/git-bundles}/$(cat /etc/hostname 2>/dev/null || hostname)"
 MAX_MB="${GIT_BUNDLE_MAX_MB:-200}"
 # The company workspace path is private, so the default list lives in the
-# private overlay rather than this public repo.
-EXCLUDE_FILE="${GIT_BUNDLE_EXCLUDE_FILE:-${LOCAL_CONFIG:-$SYNC/state/dotfiles-local}/git-bundle-exclude}"
-EXCLUDE="${GIT_BUNDLE_EXCLUDE-$(sed 's/#.*//' "$EXCLUDE_FILE" 2>/dev/null | tr '\n' ' ')} tmp/*"
+# private overlay rather than this public repo. The exclude list keeps company
+# code out of the personal mesh, so it must fail safe: a session environment
+# imported before LOCAL_CONFIG moved (2026-10-07) still points at the old
+# overlay, so the canonical $SYNC/state copy is always read as well.
+if [ -n "${GIT_BUNDLE_EXCLUDE_FILE:-}" ]; then
+	EXCLUDE_FILES=("$GIT_BUNDLE_EXCLUDE_FILE")
+else
+	EXCLUDE_FILES=("$SYNC/state/dotfiles-local/git-bundle-exclude")
+	[ -n "${LOCAL_CONFIG:-}" ] && EXCLUDE_FILES+=("$LOCAL_CONFIG/git-bundle-exclude")
+fi
+EXCLUDE="${GIT_BUNDLE_EXCLUDE-$(cat "${EXCLUDE_FILES[@]}" 2>/dev/null | sed 's/#.*//' | tr '\n' ' ')} tmp/*"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
