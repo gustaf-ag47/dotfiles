@@ -207,13 +207,17 @@ nudges the parent. Watchers now run as `systemd-run --user` units (fallback `set
 `nohup` did not survive the tool-call shell that spawned them — seven delegations in a
 row produced zero nudges.
 
-A delegated child runs to completion and then **sits idle forever**. Nothing wakes the
+A delegated child can finish and sit idle. Without a watcher nothing wakes the
 parent, so work stops until a human happens to look. Measured 2026-08-29: nine agents
 finished and **22.5 hours passed with zero merges** — every one of them a single nudge
 from progress.
 
 `delegate.sh` therefore detaches `watch-child.sh` per child. It polls the child's pane
-and, when the child goes idle, writes a durable record and nudges the parent:
+and, when the child goes idle, writes a durable record and nudges the parent.
+To avoid changing the rising-edge, grace, /goal and ACK/re-nudge state machine,
+watchers remain per-child for now. After 10 minutes, their default poll interval
+increases from 20 to 60 seconds, reducing tmux captures by two thirds for old
+lanes. Explicit `PI_DELEGATE_POLL_SECS` overrides both intervals:
 
 ```
 notify : watching (nudges Work-Driver:speedup ci on idle)
@@ -279,7 +283,27 @@ TUI ready.
 
 Before probing, the launcher waits for a selected provider to become routable via `llm-wait`. Set `PI_DELEGATE_WAIT_MAX` (default `2h`) to bound that wait; a timed-out Codex wait can use the alternate-model/probe fallback only when no explicit `--model` was supplied.
 
-Knobs: `PI_DELEGATE_WAIT_MAX` (2h), `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20), `PI_DELEGATE_IDLE_STREAK`
+Host admission runs before the provider probe and before creating a worktree/window:
+Linux CPU PSI `some avg60 > 40`, load1 per `nproc > 3`, or MemAvailable `< 6 GiB`
+queues in 30-second intervals for `PI_DELEGATE_LOAD_WAIT_MAX` seconds (default
+1800), then exits 5. Tune via `PI_DELEGATE_CPU_SOME_MAX`,
+`PI_DELEGATE_LOAD_PER_CORE_MAX`, `PI_DELEGATE_MEM_AVAILABLE_MIN_GIB`;
+`--force` skips it, `--dry-run` reports the verdict without waiting. Hosts
+without CPU PSI skip admission. The legacy 15%-of-total memory guard was
+replaced so `--force` applies consistently.
+
+Finished-child reaping uses one shared `pi-delegate-reap.timer` (5-minute
+checks). Run `make install` / `pi-setup --apply` to install the new unit and
+script, then `systemctl --user daemon-reload && systemctl --user enable --now
+pi-delegate-reap.timer`. The launcher also starts an already-installed timer.
+`reap-children.py --dry-run` reports eligible windows without changing them.
+It scans only `~/.pi/agent/delegate-lanes/` (manifest symlinks registered at
+launch), requires a real result and ACK, checks exact tmux window identity,
+observes ≥`PI_DELEGATE_REAP_IDLE_MIN` (30) minutes idle, and refuses dirty,
+untracked or unpushed worktrees. It closes only the window, never removes a
+worktree; every reap goes to `~/.pi/agent/reap-log.tsv` beside merge-log.tsv.
+
+Knobs: `PI_DELEGATE_WAIT_MAX` (2h), `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20 then 60 after 10m), `PI_DELEGATE_IDLE_STREAK`
 (3), `PI_DELEGATE_MIN_GRACE_SECS` (45), `PI_DELEGATE_WATCH_HOURS` (12). `--no-notify`
 disables it.
 

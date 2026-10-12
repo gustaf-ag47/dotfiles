@@ -1,0 +1,6 @@
+[Unit]
+Description=Reap acknowledged idle Pi delegation windows
+
+[Service]
+Type=oneshot
+ExecStart=%h/.pi/agent/skills/delegate/scripts/reap-children.py

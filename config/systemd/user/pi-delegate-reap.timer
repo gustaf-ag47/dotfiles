@@ -1,0 +1,10 @@
+[Unit]
+Description=Check acknowledged Pi delegations for idle reaping
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
