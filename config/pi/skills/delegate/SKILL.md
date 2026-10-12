@@ -13,7 +13,7 @@ after you move on; you monitor it with `tmux capture-pane`.
 ~/.pi/agent/skills/delegate/scripts/delegate.sh --brief "$(ws route dotfiles | awk '{print $4}')/my-task.md" \
   --task "fix the flaky daemon shell suite" \
   --model anthropic/claude-sonnet-5 --min-context 1000000 \
-  --owns 'tests/**' --after branch:master:merged
+  --owns 'tests/**' --after 'pr:gustaf-ag47/dotfiles#73:merged'
 ```
 
 ## The rule that makes delegation work: write the brief first
@@ -54,8 +54,9 @@ before handing implementation to the child.
 
 Prefer small vertical PRs, each independently testable and green in CI. Every
 implementation launch passes an explicit `--model`, `--min-context 1000000`, scoped
-`--owns` globs and `--after` dependencies. If no predecessor exists, use the known
-merged base branch as the launch gate. Check the launch summary's verified model
+`--owns` globs and `--after` dependencies. If no predecessor exists, identify an
+already-merged baseline PR explicitly; do not use branch ancestry as a proxy for
+completed dependency work. Check the launch summary's verified model
 and capacity; a successful availability probe alone is not model verification.
 
 ## Coordination contract
@@ -152,8 +153,11 @@ the same coordination contract applies when it launches a child.
 
 Pass repeatable `--after pr:owner/repo#123:merged`, `--after branch:feature:merged`,
 or `--after lane:run-id:done`; all conditions must hold before the launcher creates
-any window or worktree. Branch conditions require ancestry on the fetched origin
-default branch (use a PR condition for squash merges). Lane conditions require a
+any window or worktree. Branch conditions require a MERGED PR with that exact head
+branch in the target repository (`gh pr list --head <branch> --state merged`). A
+fresh branch at the base commit, no PR, or an open/closed-unmerged PR stays queued;
+Git ancestry is never completion evidence. Squash merges work too. Use a specific
+PR condition when branch names are reused across multiple pieces of work. Lane conditions require a
 closed lane with `result_status: DONE` in the same project's lane directory.
 API/ref errors keep the launch queued, with `last_error` evidence in its manifest.
 
