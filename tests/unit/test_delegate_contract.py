@@ -95,7 +95,7 @@ class DelegateContractTest(unittest.TestCase):
 
 
 class LaneManifestResultFieldsTest(unittest.TestCase):
-    def run_watcher_with_manifest(self, child_line, has_session=True):
+    def run_watcher_with_manifest(self, child_line, has_session=True, parent_pane=None):
         with tempfile.TemporaryDirectory(prefix="delegate-contract-manifest-") as tmp:
             root = Path(tmp)
             commands = root / "bin"
@@ -117,6 +117,7 @@ class LaneManifestResultFieldsTest(unittest.TestCase):
             manifest_path = root / "lane.json"
             manifest_path.write_text(json.dumps({
                 "run_id": "run-id", "session": "demo", "window": "child", "status": "open",
+                "parent_pane": parent_pane,
             }))
             env = os.environ | {
                 "PATH": str(commands) + os.pathsep + os.environ["PATH"],
@@ -136,7 +137,14 @@ class LaneManifestResultFieldsTest(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(run.returncode, 0, run.stderr)
-            return json.loads(manifest_path.read_text())
+            manifest = json.loads(manifest_path.read_text())
+            self.last_record = Path(manifest["mailbox_record"]).read_text()
+            return manifest
+
+    def test_completion_targets_pinned_parent_pane_for_in_band_delivery(self):
+        self.run_watcher_with_manifest("example: DONE abcdef123 - /notes/report.md", parent_pane="%42")
+        self.assertIn('- parent: `%42`', self.last_record)
+        self.assertIn('- parent-window: `unknown`', self.last_record)
 
     def test_done_line_fills_result_fields(self):
         manifest = self.run_watcher_with_manifest("example: DONE abcdef1234567 - docs/report.md")

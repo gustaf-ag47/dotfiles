@@ -221,11 +221,24 @@ rec="$MAILBOX/${ts//:/-}_${RUN_ID}.md"
 
 close_lane_manifest "$result_line" "$result_status" "$result_sha" "$result_path" "$ts" "$cost" "$rec"
 
+# The stable parent window is for fallback nudges; the in-band mailbox matches
+# exact pane IDs. Prefer the launcher's pinned parent pane (also handles renames).
+MAILBOX_PARENT="$PARENT"
+if [ -n "$LANE_MANIFEST" ] && [ -f "$LANE_MANIFEST" ]; then
+	pinned_parent="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent_pane", ""))' "$LANE_MANIFEST" 2>/dev/null)"
+	if [[ "$pinned_parent" =~ ^%[0-9]+$ ]]; then MAILBOX_PARENT="$pinned_parent"; fi
+fi
+if [[ "$MAILBOX_PARENT" != %* ]] && [ "$PARENT" != unknown ]; then
+	resolved_parent="$(tmux display-message -p -t "$PARENT" '#{pane_id}' 2>/dev/null)"
+	if [[ "$resolved_parent" =~ ^%[0-9]+$ ]]; then MAILBOX_PARENT="$resolved_parent"; fi
+fi
+
 {
 	echo "# Delegation finished: ${TASK:-$RUN_ID}"
 	echo
 	echo "- window: \`$TARGET\`"
-	echo "- parent: \`$PARENT\`"
+	echo "- parent: \`$MAILBOX_PARENT\`"
+	echo "- parent-window: \`$PARENT\`"
 	echo "- run id: \`$RUN_ID\`"
 	echo "- cwd: \`$CHILD_CWD\`"
 	echo "- verdict: **$verdict**"
