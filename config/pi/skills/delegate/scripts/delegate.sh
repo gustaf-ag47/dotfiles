@@ -31,6 +31,8 @@
 #   --resume auto|confirm  Lane manifest resume policy read by `ws up` (default: confirm).
 #   --after <condition>  Queue until pr:owner/repo#N:merged, branch:NAME:merged,
 #                     or lane:RUN_ID:done (repeatable; all must hold).
+#   --owns <glob>     Claim repository-relative paths (repeatable).
+#   --allow-overlap   Override a conflicting active ownership claim explicitly.
 #   --no-probe         Skip the model availability probe (faster, riskier).
 #   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
@@ -48,7 +50,7 @@ CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0 MIN_CONTEXT=0
 PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
 PROJECT="" RESUME=confirm SESSION_EXPLICIT=0 CWD_EXPLICIT=0
 ORIGINAL_ARGS=("$@")
-AFTER=()
+AFTER=() OWNS=() ALLOW_OVERLAP=0
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
 
@@ -61,6 +63,8 @@ while [ $# -gt 0 ]; do
 	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
 	--min-context) MIN_CONTEXT="${2:?}"; shift 2 ;;
 	--after) AFTER+=("${2:?}"); shift 2 ;;
+	--owns) OWNS+=("${2:?}"); shift 2 ;;
+	--allow-overlap) ALLOW_OVERLAP=1; shift ;;
 	--class) CLASS="${2:?}"; shift 2 ;;
 	--when) WHEN="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
@@ -226,6 +230,29 @@ if [ "${#AFTER[@]}" -gt 0 ]; then
 	exec "$queue_helper" _enqueue --directory "$LANE_DIR" "${queue_args[@]}" -- "${cmd[@]}"
 fi
 
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if [ -n "${PI_DELEGATE_QUEUED_MANIFEST:-}" ]; then
+	RUN_ID="$(basename "$PI_DELEGATE_QUEUED_MANIFEST" .json)"
+	LANE_DIR="$(dirname "$(dirname "$PI_DELEGATE_QUEUED_MANIFEST")")"
+fi
+LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
+if [ "${#OWNS[@]}" -gt 0 ] && [ "$DRY" != 1 ]; then
+	owns_helper="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../../../bin/delegate-owns-check"
+	owns_args=()
+	for pattern in "${OWNS[@]}"; do owns_args+=(--owns "$pattern"); done
+	[ "$ALLOW_OVERLAP" = 0 ] || owns_args+=(--allow-overlap)
+	"$owns_helper" --reserve --run-id "$RUN_ID" --manifest "$LANE_MANIFEST" --cwd "$CWD" "${owns_args[@]}"
+	# Failed launches relinquish reservations; live ownership lasts until the
+	# lane manifest closes, not merely until this launcher exits.
+	# Invoked indirectly by the EXIT trap.
+	# shellcheck disable=SC2317,SC2329
+	release_failed_claim() {
+		local launch_status=$?
+		if [ "$launch_status" != 0 ]; then "$owns_helper" --release --run-id "$RUN_ID" || true; fi
+	}
+	trap release_failed_claim EXIT
+fi
+
 # ── worktree isolation (children that write code must not share a checkout) ──
 # Fail closed: WORKTREES must be set to a persistent mount, never /tmp (tmpfs
 # loses every worktree on reboot; 22 were found there on 2026-10-07).
@@ -303,11 +330,6 @@ while tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$NAME"; do
 	NAME="${base}-${n}"; n=$((n + 1))
 done
 
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-if [ -n "${PI_DELEGATE_QUEUED_MANIFEST:-}" ]; then
-	RUN_ID="$(basename "$PI_DELEGATE_QUEUED_MANIFEST" .json)"
-	LANE_DIR="$(dirname "$(dirname "$PI_DELEGATE_QUEUED_MANIFEST")")"
-fi
 if [ "$MODEL_EXPLICIT" = "0" ]; then
 	ROUTE_URL="http://127.0.0.1:${CC_PROXY_PORT:-8788}/_route?class=${CLASS}"
 	MODEL="$(curl -fsS "$ROUTE_URL" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d.get("preferred") or d.get("first_routable") or {}; print(p.get("provider","")+"/"+p.get("model", ""))' || true)"
@@ -397,7 +419,7 @@ fi
 tmux new-window -t "${SESSION}:" -n "$NAME" -c "$CWD" -d
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
-CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS")
+CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS" "PI_DELEGATE_LANE_MANIFEST=$LANE_MANIFEST")
 # Expose the brief path so merge-pr.sh (and the child itself) can find it without
 # re-deriving it from the prompt text. Absolute, so it resolves regardless of cwd.
 if [ -n "$BRIEF" ]; then
@@ -418,7 +440,7 @@ LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
 if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	# <<- strips only LEADING TABS, and strips every one of them from every
 	# line, so python's own indentation below is built from spaces, not tabs.
-	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" <<-'PY'
+	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" "${OWNS[@]}" <<-'PY'
 	import json, sys, datetime
 	(path, session, window, cwd, branch, model, brief, parent, resume, run_id, parent_pane) = sys.argv[1:12]
 	manifest = {
@@ -428,6 +450,7 @@ if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	    "cwd": cwd,
 	    "branch": branch,
 	    "model": model,
+	    "owns": sys.argv[12:],
 	    "brief": brief,
 	    "pi_session": None,
 	    "parent": parent,

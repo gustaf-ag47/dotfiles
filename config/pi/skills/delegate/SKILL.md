@@ -107,6 +107,8 @@ the same coordination contract applies when it launches a child.
 | `--agent <bin>` / `--provider <p>` | Launcher defaults to `pi` for every provider. Example: `--model openai-codex/gpt-6-astra` or `--model deepseek/deepseek-v4-pro`. |
 | `--no-probe` | Skip the model availability check. |
 | `--after <condition>` | Queue until every PR/branch/lane dependency holds; repeatable. |
+| `--owns <glob>` | Reserve a repository-relative file scope; repeatable. |
+| `--allow-overlap` | Explicitly permit a reported ownership conflict. |
 | `--dry-run` | Show the plan, change nothing. |
 
 ## Dependency-gated launches
@@ -124,6 +126,22 @@ pass `--directory <runs>/.lanes` for a project. Queued manifests live under
 A user systemd timer checks every 30 seconds. Cancellation never kills a started
 agent. Transient timers do not survive reboot; inspect queued manifests and run
 `delegate-queue _tick <manifest-path>` to retry a retained queue after reboot.
+
+## File ownership
+
+Pass repeatable `--owns 'path/**'` for each implementation lane. Claims are scoped
+to the Git common directory (worktrees of one repository share ownership) and
+reserved under a lock before window/worktree creation. Active overlapping claims
+print the owner and refuse launch; `--allow-overlap` is an explicit coordinated
+override, not the default. Closed lanes release their claims; failed launches release
+reservations. A crashed lane with an open manifest remains owned until reconciled.
+
+Globs use case-sensitive `fnmatch` semantics: `*` can match `/`; paths are relative
+to the repository. Wildcard/wildcard intersection is conservative: compatible literal
+prefixes conflict even when suffixes might be disjoint. Prefer directory scopes.
+Run `delegate-owns-check` before committing (the launcher exports the manifest path),
+or pass `--manifest <lane.json>`. It lists staged paths outside ownership and exits
+nonzero; a lane with no ownership declaration cannot pass this check.
 
 ## Parallel delegation
 

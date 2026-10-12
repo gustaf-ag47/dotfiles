@@ -157,7 +157,7 @@ def main():
             directory.mkdir(parents=True, exist_ok=True)
             run_id = f"queued-{uuid.uuid4().hex}"
             path = directory / f"{run_id}.json"
-            keys = ["TMUX", "TMUX_PANE", "NOTES", "PATH", "WORKTREES", "PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_DELEGATE_MAILBOX"]
+            keys = ["TMUX", "TMUX_PANE", "NOTES", "PATH", "WORKTREES", "PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_DELEGATE_MAILBOX", "PI_DELEGATE_OWNERS_DIR"]
             lane = dict(run_id=run_id, status="queued", after=args.after, command=command,
                         launch_cwd=os.getcwd(), created_at=now(),
                         environment={k: os.environ[k] for k in keys if k in os.environ})
