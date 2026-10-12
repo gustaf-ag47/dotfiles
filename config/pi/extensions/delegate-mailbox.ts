@@ -28,6 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAILBOX = process.env.PI_DELEGATE_MAILBOX || path.join(os.homedir(), ".pi/agent/delegate-mailbox");
 const ACK_DIR = path.join(MAILBOX, "ack");
+const STATE_DIR = path.join(MAILBOX, "state");
 // Settle delay before reading a freshly created record: watch-child writes it
 // with a shell redirect, so an event can fire before the content lands.
 const SETTLE_MS = 300;
@@ -38,19 +39,38 @@ export default function (pi: ExtensionAPI) {
 	const delivered = new Set<string>();
 
 	const addressedToUs = (content: string): boolean =>
-		pane !== "" && content.includes(`- parent: \`${pane}\``);
+		pane !== "" && content.match(/^- parent: `([^`]+)`$/m)?.[1] === pane;
+	const steering = (content: string): boolean =>
+		content.split("\n\n", 1)[0].split("\n").includes('- kind: `steer`');
+	let closed = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+
+	function state(file: string, status: string) {
+		fs.mkdirSync(STATE_DIR, { recursive: true });
+		const target = path.join(STATE_DIR, `${path.basename(file)}.json`);
+		fs.writeFileSync(`${target}.tmp`, JSON.stringify({ state: status, pane, at: new Date().toISOString() }) + "\n");
+		fs.renameSync(`${target}.tmp`, target);
+	}
+
+	function ack(file: string) {
+		fs.mkdirSync(ACK_DIR, { recursive: true });
+		fs.renameSync(file, path.join(ACK_DIR, path.basename(file)));
+	}
 
 	function deliver(file: string, content: string): boolean {
 		const message = {
 			customType: "delegate-mailbox",
-			content:
-				`DELEGATION FINISHED — record ${file} (auto-acked to ${ACK_DIR}; do not mv it).\n` +
-				`Process the completion below: verify the child's claims, then decide next steps.\n\n` +
-				content,
+			content: steering(content)
+				? `DELEGATION STEERING — record ${file}. Apply these instructions at this turn boundary.\n\n${content}`
+				: `DELEGATION FINISHED — record ${file} (auto-acked to ${ACK_DIR}; do not mv it).\n` +
+					`Process the completion below: verify the child's claims, then decide next steps.\n\n` + content,
+			details: { record: file, steering: steering(content) },
 			display: true,
 		};
 		try {
-			pi.sendMessage(message, { triggerTurn: true });
+			pi.sendMessage(message, steering(content)
+				? { triggerTurn: true, deliverAs: "steer" }
+				: { triggerTurn: true });
 		} catch {
 			// Mid-stream and triggerTurn alone was rejected: queue behind the turn.
 			try {
@@ -63,6 +83,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function scan() {
+		if (closed) return;
 		let names: string[];
 		try {
 			names = fs.readdirSync(MAILBOX).filter((n) => n.endsWith(".md"));
@@ -79,29 +100,52 @@ export default function (pi: ExtensionAPI) {
 				continue; // raced with an ack/removal
 			}
 			if (!addressedToUs(content)) continue;
-			if (!deliver(file, content)) continue;
 			delivered.add(file);
 			try {
-				fs.mkdirSync(ACK_DIR, { recursive: true });
-				fs.renameSync(file, path.join(ACK_DIR, name));
+				if (steering(content)) state(file, "accepted");
+			} catch { delivered.delete(file); continue; }
+			if (!deliver(file, content)) {
+				delivered.delete(file);
+				try { if (steering(content)) state(file, "queued"); } catch { /* Retry later. */ }
+				continue;
+			}
+			try {
+				// Steering stays durable until Pi actually starts its custom message.
+				// A restart before that boundary replays the pending record.
+				if (!steering(content)) ack(file);
 			} catch {
 				// Ack failed; watch-child re-nudges keep the at-least-once contract.
 			}
 		}
 	}
 
+	pi.on("message_start", async (event) => {
+		const message = event.message;
+		if (message.role !== "custom" || message.customType !== "delegate-mailbox") return;
+		const details = message.details as { record?: string; steering?: boolean } | undefined;
+		if (!details?.steering || !details.record || !delivered.has(details.record)) return;
+		try {
+			state(details.record, "delivered");
+			ack(details.record);
+		} catch { /* The pending record survives for replay after restart. */ }
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
+		closed = false;
 		if (pane === "") return; // not under tmux: no delegations can address us
 		fs.mkdirSync(ACK_DIR, { recursive: true });
 		scan(); // catch up on records that arrived while no session was running
 		watcher = fs.watch(MAILBOX, (_type, filename) => {
 			if (!filename || !filename.toString().endsWith(".md")) return;
-			setTimeout(scan, SETTLE_MS);
+			clearTimeout(timer);
+			timer = setTimeout(scan, SETTLE_MS);
 		});
 		if (ctx.hasUI) ctx.ui.notify(`delegate-mailbox: watching ${MAILBOX} for ${pane}`, "info");
 	});
 
 	pi.on("session_shutdown", async () => {
+		closed = true;
+		clearTimeout(timer);
 		watcher?.close(); // idempotent: close() on a closed watcher is a no-op
 		watcher = null;
 	});
