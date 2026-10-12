@@ -153,6 +153,17 @@ while :; do
 		verdict="window-gone"
 		break
 	fi
+	# PR conflicts/red checks cannot be cured by waiting in ci_wait. Keep the
+	# lane open while the watchdog sends durable parent + child steering.
+	watchdog="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../../../bin/delegate-watchdog"
+	if [ -n "$LANE_MANIFEST" ] && [ -f "$LANE_MANIFEST" ] && [ -x "$watchdog" ] && ! child_reported_result; then
+		"$watchdog" "$LANE_MANIFEST" "$TARGET" "$PARENT"
+		if [ "$?" = 10 ]; then
+			streak=0
+			if [ "$(date +%s)" -ge "$deadline" ]; then verdict="watch-timeout-${MAX_HOURS}h"; break; fi
+			continue
+		fi
+	fi
 	if pane_busy; then
 		seen_busy=1
 		streak=0

@@ -220,6 +220,16 @@ root either way.
 It watches **from the outside**, so a child that crashes, wedges, or simply forgets to
 report is still reported — the loop must not depend on the child's cooperation.
 
+For lanes with a Git checkout, the watchdog discovers the branch's PR (or uses a
+`pr` number/URL recorded in its manifest). An idle child, or one displaying `ci_wait`,
+with a DIRTY/BEHIND PR or failed required checks gets a durable rebase/fix steer;
+the parent receives the same blocker. Without configured required contexts, all
+reported checks are considered. A stalled lane stays open instead of being reaped
+as a completion. Repeated alerts are deduplicated by PR head and reason.
+`PI_DELEGATE_STALL_POLL_SECS` defaults to 60; `PI_DELEGATE_PARENT_IDLE_MINUTES`
+defaults to 10 before an additional parent-idle alert. State is under mailbox
+`watchdog/`. API failures are logged as unknown, never reported as green.
+
 Watcher verdicts identify idle, never-started prompts and missing windows; idle
 alone is not proof of completion. The watcher does not yet distinguish an idle
 provider error from other idle stops. Its mailbox record includes the pane tail
