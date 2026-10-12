@@ -29,6 +29,8 @@
 #   --session <name>   Target tmux session (default: auto-detected).
 #   --project <name>   Resolve session and cwd from `ws route <name>` (see docs/WORKSPACE.md).
 #   --resume auto|confirm  Lane manifest resume policy read by `ws up` (default: confirm).
+#   --after <condition>  Queue until pr:owner/repo#N:merged, branch:NAME:merged,
+#                     or lane:RUN_ID:done (repeatable; all must hold).
 #   --no-probe         Skip the model availability probe (faster, riskier).
 #   --when reset|waste|now  Queue work until quota is fresh or wasting (default now).
 #   --dry-run          Print what would happen, change nothing.
@@ -46,6 +48,7 @@ CLASS="${PI_LLM_CLASS:-build}" MODEL_EXPLICIT=0 MIN_CONTEXT=0
 PROVIDER="${PI_DELEGATE_PROVIDER:-}" WORKTREE="" SESSION="" PROBE=1 DRY=0 WHEN=now
 PROJECT="" RESUME=confirm SESSION_EXPLICIT=0 CWD_EXPLICIT=0
 ORIGINAL_ARGS=("$@")
+AFTER=()
 
 die() { echo "delegate: error: $*" >&2; exit 1; }
 
@@ -57,6 +60,7 @@ while [ $# -gt 0 ]; do
 	--cwd) CWD="${2:?}"; CWD_EXPLICIT=1; shift 2 ;;
 	--model) MODEL="${2:?}"; MODEL_EXPLICIT=1; shift 2 ;;
 	--min-context) MIN_CONTEXT="${2:?}"; shift 2 ;;
+	--after) AFTER+=("${2:?}"); shift 2 ;;
 	--class) CLASS="${2:?}"; shift 2 ;;
 	--when) WHEN="${2:?}"; shift 2 ;;
 	--agent) AGENT="${2:?}"; shift 2 ;;
@@ -201,6 +205,27 @@ check_parent_window_name() {
 }
 check_parent_window_name
 
+# Resolve durable lane storage before any window/worktree creation.
+RUNS_DIR="$PROJECT_RUNS"
+if [ -z "$RUNS_DIR" ] && command -v ws >/dev/null 2>&1; then
+	fallback_route="$(ws route "$(printf '%s' "$SESSION" | tr '[:upper:]' '[:lower:]')" 2>/dev/null)" || true
+	[ -z "$fallback_route" ] || read -r _fb_session _fb_prefix _fb_cwd RUNS_DIR <<<"$fallback_route"
+fi
+[ -n "$RUNS_DIR" ] || RUNS_DIR="${NOTES:-$HOME/.local/state/pi}/.unrouted-lanes"
+LANE_DIR="$RUNS_DIR/.lanes"
+if [ "${#AFTER[@]}" -gt 0 ]; then
+	queue_helper="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../../../bin/delegate-queue"
+	cmd=("$(readlink -f "$0")")
+	set -- "${ORIGINAL_ARGS[@]}"
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = --after ]; then shift 2; else cmd+=("$1"); shift; fi
+	done
+	if [ "$DRY" = 1 ]; then printf 'would dependency-queue: %q ' "${cmd[@]}"; echo; exit 0; fi
+	queue_args=()
+	for condition in "${AFTER[@]}"; do queue_args+=(--after "$condition"); done
+	exec "$queue_helper" _enqueue --directory "$LANE_DIR" "${queue_args[@]}" -- "${cmd[@]}"
+fi
+
 # ── worktree isolation (children that write code must not share a checkout) ──
 # Fail closed: WORKTREES must be set to a persistent mount, never /tmp (tmpfs
 # loses every worktree on reboot; 22 were found there on 2026-10-07).
@@ -279,6 +304,10 @@ while tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$NAME"; do
 done
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if [ -n "${PI_DELEGATE_QUEUED_MANIFEST:-}" ]; then
+	RUN_ID="$(basename "$PI_DELEGATE_QUEUED_MANIFEST" .json)"
+	LANE_DIR="$(dirname "$(dirname "$PI_DELEGATE_QUEUED_MANIFEST")")"
+fi
 if [ "$MODEL_EXPLICIT" = "0" ]; then
 	ROUTE_URL="http://127.0.0.1:${CC_PROXY_PORT:-8788}/_route?class=${CLASS}"
 	MODEL="$(curl -fsS "$ROUTE_URL" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d.get("preferred") or d.get("first_routable") or {}; print(p.get("provider","")+"/"+p.get("model", ""))' || true)"
@@ -385,13 +414,6 @@ tmux send-keys -t "$SESSION:$NAME" -l -- "$child_command"
 tmux send-keys -t "$SESSION:$NAME" Enter
 
 # ── lane manifest: survives a tmux/server restart, unlike the pane itself ────
-RUNS_DIR="$PROJECT_RUNS"
-if [ -z "$RUNS_DIR" ] && command -v ws >/dev/null 2>&1; then
-	fallback_route="$(ws route "$(printf '%s' "$SESSION" | tr '[:upper:]' '[:lower:]')" 2>/dev/null)" || true
-	[ -z "$fallback_route" ] || read -r _fb_session _fb_prefix _fb_cwd RUNS_DIR <<<"$fallback_route"
-fi
-[ -n "$RUNS_DIR" ] || RUNS_DIR="${NOTES:-$HOME/.local/state/pi}/.unrouted-lanes"
-LANE_DIR="$RUNS_DIR/.lanes"
 LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
 if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	# <<- strips only LEADING TABS, and strips every one of them from every
