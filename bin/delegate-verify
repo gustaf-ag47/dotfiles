@@ -108,7 +108,16 @@ def verify(line, cwd, repo=None, merged=False):
                     linked.get("number") == int(pr_number) and linked.get("head", {}).get("sha") == sha
                     for linked in run.get("pull_requests", [])
                 ):
-                    raise ValueError(f"CI run {ci_run} is not associated with PR #{pr_number} at claimed SHA {sha}")
+                    # GitHub clears run/check-suite PR associations after merge.
+                    # The merged PR's own check links still identify its Actions run.
+                    linked = False
+                    if is_merged and not run.get("pull_requests") and run.get("event") == "pull_request":
+                        checks = gh(["pr", "checks", pr_number, "--repo", repo, "--json", "link"], cwd)
+                        run_url = re.compile(r"https://github\.com/" + re.escape(repo)
+                                             + r"/actions/runs/" + re.escape(ci_run) + r"(?:/job/[0-9]+)?/?")
+                        linked = any(run_url.fullmatch(check.get("link") or "") for check in checks)
+                    if not linked:
+                        raise ValueError(f"CI run {ci_run} is not associated with PR #{pr_number} at claimed SHA {sha}")
                 evidence.append(run["html_url"])
             return f"PASS {repo}@{sha} PR #{pr['number']} ({'merged on base' if is_merged else 'PR head ancestry'}); CI: {' '.join(filter(None, evidence))}"
         except ValueError as error:
