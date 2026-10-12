@@ -96,6 +96,16 @@ SCRATCH_TMP=/mnt/my_encrypted_nvme/scratch/tmp
 if [ -d /mnt/my_encrypted_nvme/sync ] && mkdir -p "$SCRATCH_TMP" 2>/dev/null && [ -w "$SCRATCH_TMP" ]; then
     export TMPDIR="$SCRATCH_TMP"
     export GOTMPDIR="$SCRATCH_TMP"
+else
+    # Laptop fallback: use persistent encrypted-root storage, never /tmp tmpfs.
+    export SCRATCH="$XDG_STATE_HOME/scratch"
+    export WORKTREES="$XDG_DATA_HOME/worktrees"
+    SCRATCH_TMP="$SCRATCH/tmp"
+    mkdir -p "$WORKTREES" "$SCRATCH_TMP" 2>/dev/null
+    if [ -d "$SCRATCH_TMP" ] && [ -w "$SCRATCH_TMP" ]; then
+        export TMPDIR="$SCRATCH_TMP"
+        export GOTMPDIR="$SCRATCH_TMP"
+    fi
 fi
 unset SCRATCH_TMP
 

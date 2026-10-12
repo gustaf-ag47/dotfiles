@@ -21,6 +21,23 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091  # sourced at runtime; path is resolved from $REPO_ROOT
 source "$REPO_ROOT/config/zsh/.zshenv"
 
+# Hermes gateway state is canonical only on skrubben. Do not infer ownership
+# from a stale local ~/.hermes checkout on a client laptop.
+RUNNING_HOSTNAME="$(cat /etc/hostname 2>/dev/null || echo unknown)"
+
+disable_hermes_snapshot_units() {
+	command -v systemctl >/dev/null 2>&1 || return 0
+	systemctl --user disable --now hermes-state-snapshot.timer 2>/dev/null || true
+	for unit_name in hermes-state-snapshot.service hermes-state-snapshot.timer; do
+		target="$XDG_CONFIG_HOME/systemd/user/$unit_name"
+		source="$DOTFILES/config/systemd/user/$unit_name"
+		if [ -L "$target" ] && [ "$(readlink -f "$target")" = "$(readlink -f "$source")" ]; then
+			rm -f "$target"
+		fi
+	done
+	systemctl --user daemon-reload 2>/dev/null || true
+}
+
 if [ -d "$DOTFILES/bin" ] && [ -d "$DOTFILES/config" ] && [ -f "$DOTFILES/Makefile" ]; then
 	echo "Dotfiles are correctly located at $DOTFILES."
 else
@@ -179,21 +196,42 @@ for unit_dir in "$DOTFILES/config/systemd/user" "$DOTFILES/local/config/systemd/
 	[ -d "$unit_dir" ] || continue
 	for unit in "$unit_dir"/*.service "$unit_dir"/*.timer "$unit_dir"/*.path "$unit_dir"/*.socket; do
 		[ -f "$unit" ] || continue
-		link_config "$unit" "$XDG_CONFIG_HOME/systemd/user/$(basename "$unit")"
+		unit_name="$(basename "$unit")"
+		if [ "$RUNNING_HOSTNAME" != "skrubben" ] && [[ "$unit_name" == hermes-state-snapshot.* ]]; then
+			continue
+		fi
+		link_config "$unit" "$XDG_CONFIG_HOME/systemd/user/$unit_name"
 	done
 done
 
-# Hermes Agent: only on the host that runs the gateway (see config/hermes/README.md).
-# State dirs are fstab bind mounts from $SYNC/hermes (not managed here).
-if [ -d "$HOME/.hermes/hermes-agent" ]; then
+# Hermes Agent: only skrubben runs the gateway (see config/hermes/README.md).
+# Require the canonical host and all shared state bind mounts before enabling
+# the snapshot writer; a stale ~/.hermes checkout on a client is not sufficient.
+if [ "$RUNNING_HOSTNAME" = "skrubben" ] && [ "${PROFILE:-$RUNNING_HOSTNAME}" = "skrubben" ] && [ -d "$HOME/.hermes/hermes-agent" ]; then
 	link_config "$DOTFILES/config/hermes/SOUL.md" "$HOME/.hermes/SOUL.md"
 	link_config "$DOTFILES/local/config/hermes/config.yaml" "$HOME/.hermes/config.yaml"
 	link_config "$DOTFILES/config/systemd/user/hermes-gateway.service.d" \
 		"$XDG_CONFIG_HOME/systemd/user/hermes-gateway.service.d"
 	if command -v systemctl >/dev/null 2>&1; then
 		systemctl --user daemon-reload 2>/dev/null || true
-		systemctl --user enable --now hermes-state-snapshot.timer 2>/dev/null || true
+		HERMES_MOUNTS_READY=true
+		for state_dir in memories skills handovers scripts assets sessions; do
+			if ! mountpoint -q "$HOME/.hermes/$state_dir"; then
+				HERMES_MOUNTS_READY=false
+				break
+			fi
+		done
+		if [ "$HERMES_MOUNTS_READY" = true ]; then
+			systemctl --user enable --now hermes-state-snapshot.timer 2>/dev/null || true
+		else
+			disable_hermes_snapshot_units
+			echo "  warning: Hermes snapshot timer left disabled; required state bind mounts are missing"
+		fi
 	fi
+else
+	# Remove only our own snapshot-unit links on non-gateway hosts. This keeps
+	# both scheduled and manual snapshot starts unavailable on client laptops.
+	disable_hermes_snapshot_units
 fi
 
 # mkdir -p, not rm -rf + mkdir: transmission keeps its runtime state (stats,
