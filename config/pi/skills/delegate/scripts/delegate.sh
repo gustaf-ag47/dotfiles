@@ -124,8 +124,10 @@ load_verdict() {
 	[ -r "$cpu_file" ] || { echo 'unavailable (no Linux CPU PSI)'; return 0; }
 	local cpu load cores available
 	cpu=$(awk '$1=="some" {for(i=2;i<=NF;i++) if($i ~ /^avg60=/) {split($i,a,"="); print a[2]; exit}}' "$cpu_file")
-	read -r load _ < "$load_file"
+	[ -r "$load_file" ] || { echo 'unavailable (no Linux loadavg)'; return 0; }
+	read -r load _ < "$load_file" || { echo 'unavailable (could not read loadavg)'; return 0; }
 	cores=$(nproc)
+	[ -r "$mem_file" ] || { echo 'unavailable (no Linux meminfo)'; return 0; }
 	available=$(awk '$1=="MemAvailable:" {print $2; exit}' "$mem_file")
 	if [ -z "$cpu" ] || [ -z "$load" ] || [ -z "$available" ]; then
 		echo 'unavailable (incomplete proc data)'
