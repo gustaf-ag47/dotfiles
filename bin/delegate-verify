@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Verify a DONE line against GitHub commit ancestry and CI, never prose alone."""
+import argparse
+import json
+import re
+from pathlib import Path
+import subprocess
+
+RESULT = re.compile(r"^\s*[^<>\n]+: DONE ([a-fA-F0-9]{7,40}) - ([^\s<>]+)(?: ci:([0-9]+))?\s*$", re.MULTILINE)
+
+
+def gh(args, cwd):
+    result = subprocess.run(["gh", *args], cwd=cwd, text=True, capture_output=True, timeout=30, check=False)
+    if result.returncode:
+        raise ValueError(result.stderr.strip() or "GitHub query failed")
+    return json.loads(result.stdout)
+
+
+def api(repo, endpoint, cwd, pages=False):
+    return gh(["api", f"repos/{repo}/{endpoint}", *(["--paginate", "--slurp"] if pages else [])], cwd)
+
+
+def ancestor(repo, older, newer, cwd):
+    return api(repo, f"compare/{older}...{newer}", cwd).get("status") in ("ahead", "identical")
+
+
+def check_evidence(repo, sha, pr, cwd):
+    result = subprocess.run(["gh", "pr", "checks", str(pr["number"]), "--repo", repo,
+                             "--required", "--json", "name"], cwd=cwd, text=True, capture_output=True, timeout=30, check=False)
+    if "no required checks" in result.stderr.lower():
+        required = set()
+    elif result.returncode in (0, 1, 8):
+        required = {c["name"] for c in json.loads(result.stdout)}
+    else:
+        raise ValueError(result.stderr or "required checks unavailable")
+    runs = [check for page in api(repo, f"commits/{sha}/check-runs?per_page=100", cwd, True) for check in page["check_runs"]]
+    statuses = [status for page in api(repo, f"commits/{sha}/statuses?per_page=100", cwd, True) for status in page]
+    latest = {}
+    for check in sorted(runs, key=lambda check: check["id"]):
+        latest[(check["name"], str((check.get("app") or {}).get("id", "checks")))] = (check.get("status") == "completed" and check.get("conclusion") in ("success", "neutral", "skipped"),
+                                 check.get("details_url", ""), check.get("conclusion") == "success")
+    for status in sorted(statuses, key=lambda status: status["id"]):
+        latest[(status["context"], "status")] = (status["state"] == "success", status.get("target_url", ""), status["state"] == "success")
+    names = required or {name for name, _ in latest}
+    if not names:
+        raise ValueError(f"no CI evidence for {sha}")
+    selected = {name: [value for (context, _), value in latest.items() if context == name] for name in names}
+    bad = sorted(name for name, values in selected.items() if not values or not all(value[0] for value in values))
+    if bad:
+        raise ValueError("missing, pending or red checks: " + ", ".join(bad))
+    if not any(value[2] for values in selected.values() for value in values):
+        raise ValueError("all checks were skipped/neutral; no successful CI evidence")
+    return [value[1] for name in sorted(selected) for value in selected[name]]
+
+
+def verify(line, cwd, repo=None, merged=False):
+    matches = list(RESULT.finditer(line))
+    if not matches:
+        raise ValueError("expected <task>: DONE <sha> - <report> [ci:<run-id>]")
+    sha, report_path, ci_run = matches[-1].groups()
+    report = Path(report_path)
+    if not report.is_absolute():
+        report = Path(cwd) / report
+    content = report.read_text()
+    # Structured report metadata is optional for old reports; natural-language
+    # merge claims also require a merged PR, never just a successful branch run.
+    merged = merged or bool(re.search(r"^(?:- )?merged:\s*true\s*$", content, re.I | re.M))
+    merged = merged or bool(re.search(r"\b(?:was|is|have|has been|successfully) merged\b", content, re.I))
+    if not ci_run:
+        match = re.search(r"^(?:- )?ci_run:\s*([0-9]+)\s*$", content, re.M)
+        ci_run = match[1] if match else None
+    repo = repo or gh(["repo", "view", "--json", "nameWithOwner"], cwd)["nameWithOwner"]
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        raise ValueError("invalid target repository")
+    sha = api(repo, f"commits/{sha}", cwd)["sha"]
+    prs = [pr for page in api(repo, f"commits/{sha}/pulls?per_page=100", cwd, True) for pr in page]
+    eligible = []
+    for pr in prs:
+        if pr["base"]["repo"]["full_name"].lower() != repo.lower():
+            continue
+        merge_sha = pr.get("merge_commit_sha")
+        if sha == merge_sha or ancestor(repo, sha, pr["head"]["sha"], cwd):
+            eligible.append(pr)
+    if not eligible:
+        raise ValueError("SHA is not reachable from an associated PR head or merge")
+    errors = []
+    for pr in eligible:
+        try:
+            is_merged = bool(pr.get("merged_at"))
+            if merged and not is_merged:
+                raise ValueError("report claims merged, but PR is not merged")
+            if is_merged and not ancestor(repo, pr["merge_commit_sha"], pr["base"]["ref"], cwd):
+                raise ValueError("merge commit is not on the current base branch")
+            evidence = check_evidence(repo, sha, pr, cwd)
+            if ci_run:
+                run = api(repo, f"actions/runs/{ci_run}", cwd)
+                if run["head_sha"] != sha or run["status"] != "completed" or run["conclusion"] != "success":
+                    raise ValueError(f"CI run {ci_run} is not green for claimed SHA {sha}")
+                evidence.append(run["html_url"])
+            return f"PASS {repo}@{sha} PR #{pr['number']} ({'merged on base' if is_merged else 'PR head ancestry'}); CI: {' '.join(filter(None, evidence))}"
+        except ValueError as error:
+            errors.append(str(error))
+    raise ValueError("; ".join(errors))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("line", nargs="?")
+    parser.add_argument("--record", type=Path)
+    parser.add_argument("--repo")
+    parser.add_argument("--cwd", default=".")
+    parser.add_argument("--merged", action="store_true")
+    args = parser.parse_args()
+    try:
+        line = args.line or ""
+        cwd = args.cwd
+        if args.record:
+            line = args.record.read_text()
+            match = re.search(r"^- cwd: `([^`]+)`$", line, re.M)
+            if not match:
+                raise ValueError("completion record has no target cwd")
+            cwd = match[1]
+        print(verify(line, cwd, args.repo, args.merged))
+        return 0
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print(f"FAIL: {error}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

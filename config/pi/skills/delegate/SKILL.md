@@ -59,7 +59,15 @@ Keep reports in their designated path; never git-commit or push the operator Vau
 At 300k tokens of context (the TUI footer's absolute count, not a percentage), write
 a handover with remaining work, evidence and paths; report that pointer and stop.
 Briefs reference this rule by name; they do not restate a number. A parent verifies
-results against gates and CI itself.
+results against gates and CI itself. For DONE, run `delegate-verify '<result-line>'`
+in the child's checkout (or pass `--cwd`/`--repo`). The mailbox extension runs it
+automatically on DONE completion records and annotates PASS/FAIL evidence. Missing
+commits, unreachable PR ancestry, absent/pending/red CI and false merge claims fail.
+Merged PRs must have their merge commit on the base branch. `--merged` or report
+metadata `merged: true` explicitly asserts a merge; optional `ci_run: <id>` report
+metadata or a `ci:<id>` result suffix ties a run to the exact claimed SHA.
+Legacy result lines are still parsed. Automatic verification is evidence, not merge
+authorization or a substitute for the repository's own tests/review gates.
 
 When the brief's DONE condition is met, report and stop, even if more work is in
 sight — do not widen scope. The parent re-delegates follow-on work to a new session.

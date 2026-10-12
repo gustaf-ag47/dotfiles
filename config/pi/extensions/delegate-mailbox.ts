@@ -24,6 +24,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAILBOX = process.env.PI_DELEGATE_MAILBOX || path.join(os.homedir(), ".pi/agent/delegate-mailbox");
@@ -44,6 +45,19 @@ export default function (pi: ExtensionAPI) {
 		content.split("\n\n", 1)[0].split("\n").includes('- kind: `steer`');
 	let closed = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let scanning = false;
+	let rescan = false;
+
+	async function verification(file: string, content: string): Promise<string> {
+		if (steering(content) || !/^\s*[^<>\n]+: DONE (?:[a-fA-F0-9]{7,40}|none) - [^\s<>]+(?: ci:[0-9]+)?\s*$/m.test(content)) return content;
+		const evidence = await new Promise<string>((resolve) => {
+			execFile(process.env.PI_DELEGATE_VERIFY || "delegate-verify", ["--record", file],
+				{ timeout: 90_000, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
+					resolve(error ? `FAIL: ${stdout || stderr || error.message}` : stdout);
+				});
+		});
+		return `AUTOMATIC DONE VERIFICATION: ${evidence.trim()}\nClaims remain subject to the parent's repository gates.\n\n${content}`;
+	}
 
 	function state(file: string, status: string) {
 		fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -82,8 +96,19 @@ export default function (pi: ExtensionAPI) {
 		return true;
 	}
 
-	function scan() {
+	async function scan() {
 		if (closed) return;
+		if (scanning) { rescan = true; return; }
+		scanning = true;
+		try {
+		await scanRecords();
+		} finally {
+			scanning = false;
+			if (rescan && !closed) { rescan = false; void scan(); }
+		}
+	}
+
+	async function scanRecords() {
 		let names: string[];
 		try {
 			names = fs.readdirSync(MAILBOX).filter((n) => n.endsWith(".md"));
@@ -100,6 +125,8 @@ export default function (pi: ExtensionAPI) {
 				continue; // raced with an ack/removal
 			}
 			if (!addressedToUs(content)) continue;
+			content = await verification(file, content);
+			if (closed) return;
 			delivered.add(file);
 			try {
 				if (steering(content)) state(file, "accepted");
@@ -132,13 +159,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		closed = false;
+		delivered.clear();
 		if (pane === "") return; // not under tmux: no delegations can address us
 		fs.mkdirSync(ACK_DIR, { recursive: true });
-		scan(); // catch up on records that arrived while no session was running
+		await scan(); // catch up on records that arrived while no session was running
 		watcher = fs.watch(MAILBOX, (_type, filename) => {
 			if (!filename || !filename.toString().endsWith(".md")) return;
 			clearTimeout(timer);
-			timer = setTimeout(scan, SETTLE_MS);
+			timer = setTimeout(() => { void scan(); }, SETTLE_MS);
 		});
 		if (ctx.hasUI) ctx.ui.notify(`delegate-mailbox: watching ${MAILBOX} for ${pane}`, "info");
 	});

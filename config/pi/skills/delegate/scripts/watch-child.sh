@@ -116,7 +116,7 @@ verdict="idle"
 # A result or blocker is terminal for the watcher, not proof the work passed.
 # Keep the old PARENT handshake for children launched before this contract.
 # Exclude template placeholders and ACK/progress chatter from the new format.
-RESULT_LINE_RE='^[[:space:]]*[^[:space:]<>][^<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+[[:space:]]*$'
+RESULT_LINE_RE='^[[:space:]]*[^[:space:]<>][^<>]*: (PASS|BLOCKER|DONE|FAILED) ([[:xdigit:]]{7,40}|none) - [^[:space:]<>]+([[:space:]]+ci:[0-9]+)?[[:space:]]*$'
 
 child_reported_result() {
 	local pane
@@ -231,6 +231,11 @@ close_lane_manifest "$result_line" "$result_status" "$result_sha" "$result_path"
 	echo "- verdict: **$verdict**"
 	echo "- cost: ${cost:-unknown}"
 	echo "- at: $ts"
+	if [ -n "$result_line" ]; then
+		echo
+		echo '## Result'
+		printf '%s\n' "$result_line"
+	fi
 	if [ -n "$CHILD_CWD" ] && [ -f "$CHILD_CWD/scripts/reap-finished-work.sh" ]; then
 		echo
 		echo '## Finished-work dry-run'

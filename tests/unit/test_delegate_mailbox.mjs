@@ -115,6 +115,29 @@ test('queued steering replays after restart before delivery', async () => {
   } finally { await second.handlers.session_shutdown({}, {}); }
 });
 
+test('DONE completion receives automatic verifier evidence, including failures', async () => {
+  const saved = process.env.PI_DELEGATE_VERIFY;
+  const helper = path.join(MAILBOX, 'fake-verifier');
+  process.env.PI_DELEGATE_VERIFY = helper;
+  try {
+    for (const [verdict, code] of [['PASS', 0], ['FAIL', 1]]) {
+      fs.writeFileSync(helper, `#!/bin/bash\n[ "$1" = --record ] || exit 9\nprintf '${verdict}: fixture evidence\\n'\nexit ${code}\n`, { mode: 0o755 });
+      const { sent, handlers } = boot();
+      record('%99', `verify-${verdict}.md`, 'task: DONE abcdef123 - /report.md');
+      await handlers.session_start({}, { hasUI: false });
+      try {
+        assert.equal(sent.length, 1);
+        assert.match(sent[0][0].content, new RegExp(`AUTOMATIC DONE VERIFICATION: ${verdict}`));
+        assert.match(sent[0][0].content, /fixture evidence/);
+      } finally { await handlers.session_shutdown({}, {}); }
+    }
+  } finally {
+    if (saved === undefined) delete process.env.PI_DELEGATE_VERIFY;
+    else process.env.PI_DELEGATE_VERIFY = saved;
+    fs.rmSync(helper);
+  }
+});
+
 test('no TMUX_PANE: session_start is inert (no watcher, nothing delivered)', async () => {
   const savedPane = process.env.TMUX_PANE;
   delete process.env.TMUX_PANE;
