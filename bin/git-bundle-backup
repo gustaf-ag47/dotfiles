@@ -51,7 +51,7 @@ mkdir -p "$OUT"
 manifest="$OUT/repos.tsv.partial"
 printf '# path\tremote\tbranch\thead\n' >"$manifest"
 
-n_repos=0 n_written=0 n_skipped=0 n_warn=0
+n_repos=0 n_written=0 n_skipped=0 n_warn=0 n_errors=0
 while IFS= read -r gitdir; do
 	repo="${gitdir%/.git}"
 	rel="${repo#"$SYNC"/}"
@@ -136,6 +136,7 @@ while IFS= read -r gitdir; do
 		rm -f "$bundle.partial"
 		echo "WARN  $rel: git bundle failed" >&2
 		n_warn=$((n_warn + 1))
+		n_errors=$((n_errors + 1))
 	fi
 	for ((j = 0; j < i; j++)); do git -C "$repo" update-ref -d "refs/bundle-stash/$j"; done
 done < <(find -H "$SYNC" -maxdepth 5 -name .git \
@@ -147,4 +148,10 @@ else
 	rm -f "$manifest"
 fi
 echo "$n_repos repos: $n_written bundle(s) written, $n_skipped unchanged, $n_warn warning(s) -> $OUT"
-[ "$n_warn" -eq 0 ]
+# Exit non-zero only for actual write failures. Advisory warnings (a repo's
+# .git is invalid/missing, or a no-remote repo exceeds GIT_BUNDLE_MAX_MB and
+# needs a private remote) describe a standing condition the backup already
+# worked around -- they would otherwise mark the service "failed" every run
+# until a human fixes the underlying repo, even though every other repo's
+# history was safely bundled.
+[ "$n_errors" -eq 0 ]
