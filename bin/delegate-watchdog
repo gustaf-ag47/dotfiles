@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""One bounded stall-watchdog tick; exit 10 keeps watch-child monitoring a stalled lane."""
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+BUSY = re.compile(r"[⠀-⣿] Working|Working\.\.\.|esc to interrupt")
+
+
+def command(args, cwd=None):
+    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=30, check=False)
+    if result.returncode:
+        raise ValueError(result.stderr.strip() or f"command failed: {args[0]}")
+    return result.stdout
+
+
+def notify(target, message):
+    sender = Path(__file__).resolve().with_name("delegate-send")
+    command([str(sender), target, "--text", message])
+
+
+def tick(manifest, child, parent):
+    lane = json.loads(manifest.read_text())
+    cwd = lane.get("cwd")
+    if not cwd:
+        return 0
+    command(["git", "rev-parse", "--git-dir"], cwd)
+    mailbox = Path(os.environ.get("PI_DELEGATE_MAILBOX", Path.home() / ".pi/agent/delegate-mailbox"))
+    directory = mailbox / "watchdog"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (manifest.stem + ".json")
+    state = json.loads(path.read_text()) if path.exists() else {}
+    now = time.time()
+    interval = float(os.environ.get("PI_DELEGATE_STALL_POLL_SECS", "60"))
+    if now - state.get("checked_at", 0) < interval:
+        return 10 if state.get("stalled") else 0
+    pane = command(["tmux", "capture-pane", "-J", "-p", "-t", child])
+    idle_or_waiting = not BUSY.search(pane) or bool(re.search(r"ci_wait|CI watch|CI WAIT", pane))
+    args = ["gh", "pr", "view"]
+    if lane.get("pr"):
+        args.append(str(lane["pr"]))
+    args += ["--json", "number,url,mergeStateStatus,headRefOid,state"]
+    pr = json.loads(command(args, cwd))
+    reason = pr["mergeStateStatus"] if pr["mergeStateStatus"] in ("DIRTY", "BEHIND") else ""
+    if not reason and pr["state"] == "OPEN":
+        checks_args = ["gh", "pr", "checks", str(pr["number"]), "--required", "--json", "name,bucket"]
+        checks = subprocess.run(checks_args, cwd=cwd, text=True, capture_output=True, timeout=30, check=False)
+        # Repositories without required contexts still have CI gates. Check all
+        # reported jobs there; permission/network failures are not green evidence.
+        if "no required checks" in checks.stderr.lower():
+            checks_args.remove("--required")
+            checks = subprocess.run(checks_args, cwd=cwd, text=True, capture_output=True, timeout=30, check=False)
+        if checks.returncode not in (0, 1, 8):
+            raise ValueError(checks.stderr or "checks unavailable")
+        data = json.loads(checks.stdout)
+        failed = [check["name"] for check in data if check.get("bucket") in ("fail", "cancel")]
+        if failed:
+            reason = "red: " + ", ".join(failed)
+    stalled = bool(idle_or_waiting and reason and pr["state"] == "OPEN")
+    if stalled:
+        signature = f"{pr['headRefOid']}:{reason}"
+        if state.get("signature") != signature or not state.get("stalled"):
+            notify(parent, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
+            notify(child, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
+            state.update(signature=signature, stalled_since=now, parent_alerted=False)
+        parent_pane = command(["tmux", "capture-pane", "-J", "-p", "-t", parent])
+        if BUSY.search(parent_pane):
+            state["parent_idle_since"] = None
+        else:
+            state["parent_idle_since"] = state.get("parent_idle_since") or now
+            minutes = float(os.environ.get("PI_DELEGATE_PARENT_IDLE_MINUTES", "10"))
+            if now - state["parent_idle_since"] >= minutes * 60 and not state.get("parent_alerted"):
+                notify(parent, f"Orchestrator idle while child {child} remains stalled for PR #{pr['number']} {reason}. Take ownership of the blocker. {pr['url']}")
+                state["parent_alerted"] = True
+    else:
+        state.pop("parent_idle_since", None)
+        state.pop("signature", None)
+    state.update(checked_at=now, stalled=stalled, pr=pr["url"], reason=reason)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(state) + "\n")
+    temp.replace(path)
+    return 10 if stalled else 0
+
+
+def main():
+    try:
+        return tick(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
+    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError) as error:
+        print(f"delegate-watchdog: unable to assess lane: {error}", file=sys.stderr)
+        return 0  # Do not invent a stall verdict when discovery fails.
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
