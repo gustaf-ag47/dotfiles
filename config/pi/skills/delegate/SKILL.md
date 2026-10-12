@@ -39,6 +39,16 @@ Minimum contents:
 
 ## Coordination contract
 
+Steer a running child with `delegate-send <session:window-or-%pane> --file <message>`
+(or `--text <literal-message>`). The durable record is injected in-band at the next
+turn boundary. Use a file for multiline text or shell metacharacters. Do not type
+messages into panes; reserve pane input for slash commands and launcher bootstrap.
+`delegate-send` prints the record path. Its `state/<filename>.json` transitions from
+`queued` to `accepted` (Pi queue) to `delivered` (message started); `ack/` retains the
+payload. Delivery acknowledges receipt, not implementation of the instruction.
+Pending steering survives session restart and may be replayed: make instructions
+idempotent. A child needs the updated mailbox extension loaded (`/reload`).
+
 The child sends **one result or blocker**, never a chat ACK, receipt or relay:
 `<task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>`.
 Use a real commit SHA (at least 7 hex digits) or literal `none`, and a real path
@@ -90,7 +100,8 @@ the same coordination contract applies when it launches a child.
 |---|---|
 | `--brief <file>` | Brief the child reads first. Strongly recommended. |
 | `--task "<text>"` | One-line summary; also names the window. |
-| `--model <m>` | Prefer `provider/model`; defaults to Pi's configured model. |
+| `--model <m>` | Prefer exact `provider/model`; verified against the live footer before handover. |
+| `--min-context <tokens>` | Minimum rendered context capacity; retries the model pin once, exits 4 without delivering work on failure. |
 | `--worktree <branch>` | Isolate a code-writing child in its own git worktree + branch off `origin/main`. |
 | `--cwd <dir>` | Working directory (default: current). |
 | `--agent <bin>` / `--provider <p>` | Launcher defaults to `pi` for every provider. Example: `--model openai-codex/gpt-6-astra` or `--model deepseek/deepseek-v4-pro`. |
@@ -188,7 +199,7 @@ plus a startup grace window (`PI_DELEGATE_MIN_GRACE_SECS`, default 45s). Without
 reports "finished" during startup, which is the same mistake as calling a not-yet-ready
 TUI ready.
 
-Before probing, the launcher waits for a selected provider to become routable via `llm-wait`. Set `PI_DELEGATE_WAIT_MAX` (default `2h`) to bound that wait; a timed-out Codex wait proceeds to the existing alternate-model/probe fallback path.
+Before probing, the launcher waits for a selected provider to become routable via `llm-wait`. Set `PI_DELEGATE_WAIT_MAX` (default `2h`) to bound that wait; a timed-out Codex wait can use the alternate-model/probe fallback only when no explicit `--model` was supplied.
 
 Knobs: `PI_DELEGATE_WAIT_MAX` (2h), `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SECS` (20), `PI_DELEGATE_IDLE_STREAK`
 (3), `PI_DELEGATE_MIN_GRACE_SECS` (45), `PI_DELEGATE_WATCH_HOURS` (12). `--no-notify`

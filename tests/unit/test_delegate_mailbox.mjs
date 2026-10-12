@@ -79,6 +79,42 @@ test('failed sendMessage leaves the record unacked for the keystroke fallback', 
   }
 });
 
+test('steering queues at a turn boundary and acks only when its message starts', async () => {
+  const { sent, handlers } = boot();
+  const name = 'steer-boundary.md';
+  fs.writeFileSync(path.join(MAILBOX, name), '# steering\n- parent: `%99`\n- kind: `steer`\n\nliteral `payload`\n');
+  await handlers.session_start({}, { hasUI: false });
+  try {
+    assert.equal(sent.length, 1);
+    const [message, opts] = sent[0];
+    assert.equal(opts.deliverAs, 'steer');
+    assert.match(message.content, /DELEGATION STEERING/);
+    assert.ok(fs.existsSync(path.join(MAILBOX, name)), 'still durable while queued in Pi');
+    const state = () => JSON.parse(fs.readFileSync(path.join(MAILBOX, 'state', `${name}.json`)));
+    assert.equal(state().state, 'accepted');
+    await handlers.message_start({ message: { role: 'custom', ...message } });
+    assert.equal(state().state, 'delivered');
+    assert.ok(fs.existsSync(path.join(MAILBOX, 'ack', name)));
+    assert.ok(!fs.existsSync(path.join(MAILBOX, name)));
+  } finally {
+    await handlers.session_shutdown({}, {});
+  }
+});
+
+test('queued steering replays after restart before delivery', async () => {
+  const name = 'steer-restart.md';
+  fs.writeFileSync(path.join(MAILBOX, name), '# steering\n- parent: `%99`\n- kind: `steer`\n\nretry\n');
+  const first = boot();
+  await first.handlers.session_start({}, { hasUI: false });
+  await first.handlers.session_shutdown({}, {});
+  const second = boot();
+  await second.handlers.session_start({}, { hasUI: false });
+  try {
+    assert.equal(second.sent.length, 1);
+    await second.handlers.message_start({ message: { role: 'custom', ...second.sent[0][0] } });
+  } finally { await second.handlers.session_shutdown({}, {}); }
+});
+
 test('no TMUX_PANE: session_start is inert (no watcher, nothing delivered)', async () => {
   const savedPane = process.env.TMUX_PANE;
   delete process.env.TMUX_PANE;
