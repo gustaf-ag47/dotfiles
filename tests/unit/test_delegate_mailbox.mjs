@@ -48,6 +48,19 @@ test('matching record is delivered once, with triggerTurn, and acked', async () 
   }
 });
 
+test('CI wait is delivered as waiting rather than a completion', async () => {
+  const { sent, handlers } = boot();
+  record('%99', 'waiting-ci.md', '- verdict: **waiting on CI**');
+  await handlers.session_start({}, { hasUI: false });
+  try {
+    assert.equal(sent.length, 1);
+    assert.match(sent[0][0].content, /DELEGATION WAITING ON CI/);
+    assert.doesNotMatch(sent[0][0].content, /DELEGATION FINISHED/);
+  } finally {
+    await handlers.session_shutdown({}, {});
+  }
+});
+
 test('malformed and unreadable records do not throw and are not acked', async () => {
   const { sent, handlers } = boot();
   fs.writeFileSync(path.join(MAILBOX, 'malformed.md'), 'no parent line at all');

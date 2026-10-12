@@ -636,7 +636,25 @@ if [ -n "$BRIEF" ] && [ -z "${PI_DELEGATE_GOAL:-}" ]; then
 	PI_DELEGATE_GOAL="every numbered item under Your job in ${brief_rel:-$BRIEF} is completed or has a documented operator decision, applicable gates have been run and reported, and findings are recorded at the path in the brief. Report blockers truthfully; never commit or push the operator Vault. Send the parent one result or blocker line with a report path."
 fi
 export PI_DELEGATE_GOAL
-if [ "${NOTIFY:-1}" = "1" ] && [ -x "$WATCHER" ]; then
+if [ "${NOTIFY:-1}" = "1" ] && systemctl --user start pi-delegate-supervisor.timer 2>/dev/null &&
+	systemctl --user is-active --quiet pi-delegate-supervisor.timer && [ -f "$LANE_MANIFEST" ]; then
+	# Mark only this new lane as supervisor-owned; older manifests stay on their
+	# existing per-child units. Store the /goal condition across timer ticks.
+	python3 - "$LANE_MANIFEST" "${TASK:-}" "${PI_DELEGATE_GOAL:+/goal $PI_DELEGATE_GOAL}" <<-'PY'
+		import json, os, sys, tempfile
+		path, task, goal = sys.argv[1:]
+		with open(path, encoding="utf-8") as source:
+		    lane = json.load(source)
+		lane.update(watcher="supervisor", task=task, goal=goal)
+		fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".manifest-")
+		with os.fdopen(fd, "w") as dest:
+		    json.dump(lane, dest, indent=2)
+		    dest.write("\n")
+		os.replace(tmp, path)
+	PY
+	NOTIFY_STATE="watching via pi-delegate-supervisor.timer (nudges $PARENT_WINDOW on idle)"
+elif [ "${NOTIFY:-1}" = "1" ] && [ -x "$WATCHER" ]; then
+	echo 'delegate: warning: supervisor timer unavailable; falling back to per-child watcher' >&2
 	# setsid: a parent that spawns from an agent tool-call shell has its whole
 	# process group killed when the call returns; nohup alone did not survive that
 	# (2026-09-28: zero watchers alive after 7 delegations, no nudges ever landed).
