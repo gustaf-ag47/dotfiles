@@ -106,7 +106,24 @@ the same coordination contract applies when it launches a child.
 | `--cwd <dir>` | Working directory (default: current). |
 | `--agent <bin>` / `--provider <p>` | Launcher defaults to `pi` for every provider. Example: `--model openai-codex/gpt-6-astra` or `--model deepseek/deepseek-v4-pro`. |
 | `--no-probe` | Skip the model availability check. |
+| `--after <condition>` | Queue until every PR/branch/lane dependency holds; repeatable. |
 | `--dry-run` | Show the plan, change nothing. |
+
+## Dependency-gated launches
+
+Pass repeatable `--after pr:owner/repo#123:merged`, `--after branch:feature:merged`,
+or `--after lane:run-id:done`; all conditions must hold before the launcher creates
+any window or worktree. Branch conditions require ancestry on the fetched origin
+default branch (use a PR condition for squash merges). Lane conditions require a
+closed lane with `result_status: DONE` in the same project's lane directory.
+API/ref errors keep the launch queued, with `last_error` evidence in its manifest.
+
+`delegate-queue list|cancel <run-id>` uses the unrouted lane directory by default;
+pass `--directory <runs>/.lanes` for a project. Queued manifests live under
+`.lanes/queued/` so `ws up` cannot accidentally resume one before its dependencies.
+A user systemd timer checks every 30 seconds. Cancellation never kills a started
+agent. Transient timers do not survive reboot; inspect queued manifests and run
+`delegate-queue _tick <manifest-path>` to retry a retained queue after reboot.
 
 ## Parallel delegation
 

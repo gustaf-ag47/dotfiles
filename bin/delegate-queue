@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Inspect/cancel dependency-gated launches; internal enqueue/tick runs under systemd."""
+import argparse
+import datetime
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import uuid
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def save(path, value):
+    fd, tmp = tempfile.mkstemp(prefix=".lane-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(value, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def run(args, cwd=None):
+    return subprocess.check_output(args, cwd=cwd, text=True, stderr=subprocess.PIPE, timeout=60).strip()
+
+
+def validate(condition):
+    if re.fullmatch(r"pr:[\w.-]+/[\w.-]+#[1-9]\d*:merged", condition):
+        return
+    if re.fullmatch(r"lane:[\w.-]+:done", condition):
+        return
+    if condition.startswith("branch:") and condition.endswith(":merged"):
+        branch = condition[7:-7]
+        run(["git", "check-ref-format", "--branch", branch])
+        if not branch.startswith("-") and "@{" not in branch:
+            return
+    raise ValueError(f"invalid dependency: {condition}")
+
+
+def satisfied(condition, lane, directory):
+    validate(condition)
+    if condition.startswith("pr:"):
+        repo, number = condition[3:-7].split("#")
+        return run(["gh", "pr", "view", number, "--repo", repo, "--json", "state", "--jq", ".state"]) == "MERGED"
+    if condition.startswith("lane:"):
+        path = directory / (condition[5:-5] + ".json")
+        if not path.exists():
+            return False
+        other = json.loads(path.read_text())
+        return other.get("status") == "closed" and other.get("result_status") == "DONE"
+    cwd = lane["launch_cwd"]
+    branch = condition[7:-7]
+    run(["git", "fetch", "--quiet", "origin"], cwd)
+    try:
+        base = run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd)
+    except subprocess.CalledProcessError:
+        # Fetch does not create origin/HEAD in shallow or hand-built checkouts.
+        remote = run(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd)
+        match = re.search(r"^ref: refs/heads/(.+)\s+HEAD$", remote, re.MULTILINE)
+        if not match:
+            raise ValueError("origin default branch is unknown")
+        base = f"refs/remotes/origin/{match[1]}"
+    target = run(["git", "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"], cwd)
+    result = subprocess.run(["git", "merge-base", "--is-ancestor", target, base], cwd=cwd, timeout=60, check=False)
+    if result.returncode not in (0, 1):
+        raise ValueError(f"cannot determine whether branch {branch} is merged")
+    return result.returncode == 0
+
+
+def stop_timer(lane):
+    subprocess.run(["systemctl", "--user", "stop", f"pi-delegate-queue-{lane['run_id']}.timer"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=30)
+
+
+def tick(path):
+    # Cancel and tick serialize on a separate inode: atomic manifest replacement
+    # must not change the lock inode. Hold the lock through launch to avoid duplicates.
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        lane = json.loads(path.read_text())
+        if lane["status"] != "queued":
+            stop_timer(lane)
+            return
+        try:
+            if not all(satisfied(c, lane, path.parent.parent) for c in lane["after"]):
+                return
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            lane["last_error"] = str(error)
+            save(path, lane)
+            return  # Unknown is not satisfied; retry next timer tick.
+        lane.update(status="launching", started_at=now())
+        save(path, lane)
+        try:
+            env = os.environ | lane["environment"] | {"PI_DELEGATE_QUEUED_MANIFEST": str(path)}
+            result = subprocess.run(lane["command"], cwd=lane["launch_cwd"], env=env, check=False)
+            if result.returncode:
+                lane.update(status="launch-failed", exit_code=result.returncode)
+                save(path, lane)
+            else:
+                lane.update(status="launched", live_manifest=str(path.parent.parent / path.name))
+                save(path, lane)
+        except OSError as error:
+            lane.update(status="launch-failed", last_error=str(error))
+            save(path, lane)
+        finally:
+            stop_timer(lane)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["list", "cancel", "_enqueue", "_tick"])
+    parser.add_argument("value", nargs="?")
+    parser.add_argument("--directory", type=Path, default=Path(os.environ.get("PI_DELEGATE_LANE_DIR", Path(os.environ.get("NOTES", Path.home() / ".local/state/pi")) / ".unrouted-lanes/.lanes")))
+    parser.add_argument("--after", action="append", default=[])
+    argv = sys.argv[1:]
+    split = argv.index("--") if "--" in argv else len(argv)
+    args = parser.parse_args(argv[:split])
+    command = argv[split + 1:]
+    directory = args.directory.expanduser().resolve() / "queued"
+    try:
+        if args.action == "list":
+            for path in sorted(directory.glob("*.json")):
+                lane = json.loads(path.read_text())
+                if lane.get("after"):
+                    print(f"{lane['run_id']} {lane['status']} {json.dumps(lane['after'])} {path}")
+        elif args.action in ("cancel", "_tick"):
+            if not args.value:
+                parser.error("need a run id or manifest path")
+            path = Path(args.value) if "/" in args.value else directory / f"{args.value}.json"
+            if args.action == "_tick":
+                tick(path)
+            else:
+                with path.with_suffix(".lock").open("a") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    lane = json.loads(path.read_text())
+                    if lane["status"] != "queued":
+                        raise ValueError("only queued launches can be cancelled; running agents are not killed")
+                    lane.update(status="cancelled", cancelled_at=now())
+                    save(path, lane)
+                stop_timer(lane)
+        else:
+            if not command or not args.after:
+                parser.error("enqueue requires --after and -- command")
+            for condition in args.after:
+                validate(condition)
+            directory.mkdir(parents=True, exist_ok=True)
+            run_id = f"queued-{uuid.uuid4().hex}"
+            path = directory / f"{run_id}.json"
+            keys = ["TMUX", "TMUX_PANE", "NOTES", "PATH", "WORKTREES", "PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_DELEGATE_MAILBOX"]
+            lane = dict(run_id=run_id, status="queued", after=args.after, command=command,
+                        launch_cwd=os.getcwd(), created_at=now(),
+                        environment={k: os.environ[k] for k in keys if k in os.environ})
+            save(path, lane)
+            try:
+                run(["systemd-run", "--user", "--quiet", "--unit", f"pi-delegate-queue-{run_id}",
+                     "--on-active=20s", "--on-unit-active=30s", "--timer-property=AccuracySec=1s",
+                     str(Path(__file__).resolve()), "_tick", str(path)])
+            except (OSError, subprocess.SubprocessError):
+                lane.update(status="schedule-failed")
+                save(path, lane)
+                raise
+            print(f"queued {run_id}: {path}")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"delegate-queue: {error}\n")
+
+
+if __name__ == "__main__":
+    main()
