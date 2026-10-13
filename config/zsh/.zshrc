@@ -82,7 +82,7 @@ source $ZDOTDIR/aliases
 # Host-specific configuration (based on hostname)
 # $HOST is a built-in zsh variable containing the hostname
 # Machine overlays: class (laptop/desktop, from the generated profile facts),
-# then host (most specific wins last). See profiles/README.md.
+# then host (most specific wins last). See $NOTES/Homelab/dotfiles/PROFILES.md.
 [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles-profile.env" ]] && \
   source "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles-profile.env"
 [[ -n "${PROFILE_CLASS:-}" && -f "$DOTFILES/config/zsh/class/$PROFILE_CLASS.zsh" ]] && \

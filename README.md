@@ -2,12 +2,13 @@
 
 A keyboard-driven Arch Linux development environment with Hyprland (Wayland), i3 (X11), Zsh, Neovim, tmux and Pi.
 
-Start with the [setup and feature guide](`$NOTES/Homelab/dotfiles/README.md`). For root-owned machine setup, see [system/README.md](system/README.md) and [profiles/README.md](profiles/README.md).
+```bash
+make install                             # user config symlinks
+make install-system                      # root-side drift (dry run)
+sudo scripts/install-system.sh --apply   # apply root-side layer
+make test && make lint
+```
 
-## References
-
-- [Keybindings](`$NOTES/Homelab/dotfiles/KEYBINDINGS.md`)
-- [Git workflow](`$NOTES/Homelab/dotfiles/GIT_WORKFLOW.md`)
-- [Backup and restore](`$NOTES/Homelab/dotfiles/BACKUP.md`)
-- [Linting and tests](`$NOTES/Homelab/dotfiles/LINTING.md`)
-- [Security](`$NOTES/Homelab/dotfiles/SECURITY.md`)
+Documentation lives in the operator notes, not in this repo: `$NOTES/Homelab/dotfiles/`
+(`README.md`, `SYSTEM_LAYER.md`, `PROFILES.md`, `TESTING.md`, `KEYBINDINGS.md`,
+`GIT_WORKFLOW.md`, `LINTING.md`, `SECURITY.md`, `BACKUP.md`).

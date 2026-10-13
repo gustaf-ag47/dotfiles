@@ -3,7 +3,7 @@
 	name =
 [alias]
 	glog = log --all --pretty='format:%d %Cgreen%h%Creset %an - %s' --graph
-	# Workflow aliases documented in docs/GIT_WORKFLOW.md. `clean` cannot be an
+	# Workflow aliases documented in $NOTES/Homelab/dotfiles/GIT_WORKFLOW.md. `clean` cannot be an
 	# alias (git builtins shadow aliases); the branch cleaner is `git clean-branches`.
 	sync = !git checkout master && git pull origin master
 	nb = new-branch

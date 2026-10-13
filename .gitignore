@@ -64,3 +64,8 @@ DELEGATE_BRIEF.md
 # Machine overlay links are created OUTSIDE the repo by scripts/install.sh; the
 # old waybar target landed inside it. Never track it again.
 config/gui/Wayland/waybar/profile.jsonc
+
+# Python bytecode / tool caches anywhere in the tree
+__pycache__/
+*.pyc
+.ruff_cache/

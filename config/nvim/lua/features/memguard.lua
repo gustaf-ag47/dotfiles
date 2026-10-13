@@ -1,7 +1,7 @@
 -- Memory guard feature module
 -- Samples this Neovim server's RSS once a minute and warns when it crosses a
 -- threshold, so a runaway heap can't silently grow to 13 GB again.
--- Background: docs/nvim-memory-leak.md
+-- Background: $NOTES/Homelab/dotfiles/nvim-memory-leak.md
 --
 -- Warns (vim.notify + a line in stdpath('log')/nvim.log) the first time RSS
 -- exceeds `threshold_mb`, then again each time it grows by another `step_mb`.
@@ -53,7 +53,7 @@ local function tick()
   next_warn_kb = kb + step_kb
   local msg = snapshot(kb)
   log_line(msg)
-  vim.notify(('Neovim memory is high: %s\nRestart this nvim; see docs/nvim-memory-leak.md'):format(msg), vim.log.levels.WARN, { title = 'memguard' })
+  vim.notify(('Neovim memory is high: %s\nRestart this nvim (:MemGuard shows usage)'):format(msg), vim.log.levels.WARN, { title = 'memguard' })
 end
 
 M.setup = function()

@@ -135,7 +135,6 @@ for name in "${STATE_LINKS[@]}"; do
 	src="$(realpath "$src")"
 	link_config "$src" "$HOME/.$name"
 done
-link_config "$LOCAL_CONFIG/config/tmuxp" "$XDG_CONFIG_HOME/tmuxp"
 
 # NOTE: do NOT `rm -rf "$ZDOTDIR"` here. HISTFILE is $ZDOTDIR/.zhistory, so
 # that wiped the entire zsh history on every `make install`, along with
@@ -204,7 +203,7 @@ for unit_dir in "$DOTFILES/config/systemd/user" "$DOTFILES/local/config/systemd/
 	done
 done
 
-# Hermes Agent: only skrubben runs the gateway (see config/hermes/README.md).
+# Hermes Agent: only skrubben runs the gateway (see $NOTES/Homelab/dotfiles/HERMES.md).
 # Require the canonical host and all shared state bind mounts before enabling
 # the snapshot writer; a stale ~/.hermes checkout on a client is not sufficient.
 if [ "$RUNNING_HOSTNAME" = "skrubben" ] && [ "${PROFILE:-$RUNNING_HOSTNAME}" = "skrubben" ] && [ -d "$HOME/.hermes/hermes-agent" ]; then
@@ -268,7 +267,7 @@ link_config "$DOTFILES/config/gui/Wayland/wofi" "$XDG_CONFIG_HOME/wofi"
 
 # --- machine profile ------------------------------------------------------
 # One file per machine describing what it IS (class, battery, gpu, disk), read
-# both here and by install-arch. See profiles/README.md.
+# both here and by install-arch. See $NOTES/Homelab/dotfiles/PROFILES.md.
 HOSTNAME="${HOST:-$(cat /etc/hostname 2>/dev/null || echo 'unknown')}"
 PROFILE="${PROFILE:-$HOSTNAME}"
 PROFILE_FILE="$DOTFILES/profiles/$PROFILE.env"
@@ -282,7 +281,7 @@ fi
 echo "Profile: $PROFILE (class=${PROFILE_CLASS:-unknown} battery=${PROFILE_HAS_BATTERY:-unknown})"
 
 # systemd --user units this machine runs: declared per role and host, in the
-# same system/ layers that hold its packages (see system/README.md).
+# same system/ layers that hold its packages (see $NOTES/Homelab/dotfiles/SYSTEM_LAYER.md).
 if command -v systemctl >/dev/null 2>&1; then
 	systemctl --user daemon-reload 2>/dev/null || true
 	unit_lists=()

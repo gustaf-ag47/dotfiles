@@ -28,7 +28,7 @@
 #   scripts/install-system.sh --profile xps14 --list   # review its packages
 #   scripts/install-system.sh --undeclared    # installed here, declared nowhere
 #
-# See system/README.md.
+# See $NOTES/Homelab/dotfiles/SYSTEM_LAYER.md.
 set -euo pipefail
 
 DOTFILES="${DOTFILES:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
