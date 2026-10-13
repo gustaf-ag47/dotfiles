@@ -7,3 +7,6 @@ enable llm-alert.timer
 enable llm-schedule.timer
 enable tmux-resurrect-save.timer
 enable git-bundle-backup.timer
+enable host-pressure-alert.timer
+enable pi-delegate-supervisor.timer
+enable pi-delegate-reap.timer

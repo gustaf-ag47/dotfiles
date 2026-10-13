@@ -4,7 +4,7 @@
 # checkout required. Exercises the wrapper contract (config/credential
 # resolution, bounds, redaction, discovery) via subprocess + temp env, never
 # the upstream library itself (that needs `scripts/setup.sh` + a live Chrome,
-# out of scope for this offline suite -- see docs/jev-ultrafast.md).
+# out of scope for this offline suite -- see $NOTES/Homelab/dotfiles/jev-ultrafast.md).
 import json
 import os
 import stat

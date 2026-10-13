@@ -30,7 +30,7 @@ M.load_features = function()
     'lsp',
     'completion',
     'debugging',
-    'memguard', -- RSS watchdog, see docs/nvim-memory-leak.md
+    'memguard', -- RSS watchdog, see $NOTES/Homelab/dotfiles/nvim-memory-leak.md
   }
 
   for _, feature in ipairs(features) do

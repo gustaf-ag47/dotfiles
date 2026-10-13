@@ -278,7 +278,7 @@ sudo systemctl disable nvidia-suspend.service nvidia-resume.service nvidia-hiber
 ```
 
 #### `/etc/systemd/logind.conf.d/idle.conf`
-Prevents logind from double-suspending alongside idle-manager:
+Prevents logind from double-suspending alongside hypridle:
 ```ini
 [Login]
 IdleAction=ignore
@@ -369,11 +369,10 @@ changes; the full rescan is only a daily safety net).
 - Screen locker: `hyprlock` with `hyprlock-safe` wrapper (restarts on crash)
 - Session launcher: `bin/hyprland-session` wrapper (saves Hyprland log to
   `~/.local/share/hyprland/logs/` on every exit for post-mortem debugging)
-- `bin/idle-manager` (swayidle wrapper) is kept as fallback but is no longer active.
 
 ### Testing: Docker
-- Dockerfile provides clean testing environment
-- Includes essential packages for dotfiles functionality
+- `make test-install` runs the real installer in an Arch container (CI parity)
+- `Dockerfile.linters` builds the lint image used by `make lint`
 
 ## Important Notes
 

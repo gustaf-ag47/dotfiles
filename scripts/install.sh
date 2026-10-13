@@ -135,7 +135,6 @@ for name in "${STATE_LINKS[@]}"; do
 	src="$(realpath "$src")"
 	link_config "$src" "$HOME/.$name"
 done
-link_config "$LOCAL_CONFIG/config/tmuxp" "$XDG_CONFIG_HOME/tmuxp"
 
 # NOTE: do NOT `rm -rf "$ZDOTDIR"` here. HISTFILE is $ZDOTDIR/.zhistory, so
 # that wiped the entire zsh history on every `make install`, along with

@@ -27,7 +27,7 @@
 #   --provider <name>  Optional provider; usually use --model provider/model.
 #   --worktree <branch>  Create a git worktree for <branch> off $WORKTREES and use it as --cwd.
 #   --session <name>   Target tmux session (default: auto-detected).
-#   --project <name>   Resolve session and cwd from `ws route <name>` (see docs/WORKSPACE.md).
+#   --project <name>   Resolve session and cwd from `ws route <name>` (see $NOTES/Homelab/dotfiles/WORKSPACE.md).
 #   --resume auto|confirm  Lane manifest resume policy read by `ws up` (default: confirm).
 #   --after <condition>  Queue until pr:owner/repo#N:merged, branch:NAME:merged,
 #                     or lane:RUN_ID:done (repeatable; all must hold).

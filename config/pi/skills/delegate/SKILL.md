@@ -232,8 +232,7 @@ the parent. Existing children retain their original per-child `watch-child.sh` u
 until they finish; a new child falls back to that watcher with a warning if the timer
 is not installed or cannot start. After 10 minutes, each lane's default poll interval
 increases from 20 to 60 seconds. Explicit `PI_DELEGATE_POLL_SECS` overrides both.
-Install with `make install`, then `systemctl --user daemon-reload && systemctl
---user enable --now pi-delegate-supervisor.timer`. Verify with `systemctl --user
+`make install` enables it (base role `user-services`). Verify with `systemctl --user
 is-active pi-delegate-supervisor.timer` and `systemctl --user list-timers`.
 A registered `ci_wait` is reported as **waiting on CI** without closing the lane;
 completion is reported only after the child leaves CI wait or sends a result.
@@ -315,9 +314,7 @@ without CPU PSI skip admission. The legacy 15%-of-total memory guard was
 replaced so `--force` applies consistently.
 
 Finished-child reaping uses one shared `pi-delegate-reap.timer` (5-minute
-checks). Run `make install` / `pi-setup --apply` to install the new unit and
-script, then `systemctl --user daemon-reload && systemctl --user enable --now
-pi-delegate-reap.timer`. The launcher also starts an already-installed timer.
+checks), enabled by `make install` (base role `user-services`). The launcher also starts an already-installed timer.
 `reap-children.py --dry-run` reports eligible windows without changing them.
 It scans only `~/.pi/agent/delegate-lanes/` (manifest symlinks registered at
 launch), requires a real result and ACK, checks exact tmux window identity,

@@ -62,5 +62,5 @@ reproduces locally.
 
 `tests/e2e/` holds tests that drive real models or browsers. Each one is
 documented where its feature lives (e.g. `jev-ultrafast-fixture.py` in
-`docs/jev-ultrafast.md`) and requires explicit CLI opt-in flags. CI never runs
+`$NOTES/Homelab/dotfiles/jev-ultrafast.md`) and requires explicit CLI opt-in flags. CI never runs
 them.

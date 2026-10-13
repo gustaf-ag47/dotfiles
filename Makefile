@@ -22,7 +22,7 @@ help:
 	@echo "  make lint-build    - Build/rebuild Docker linter image"
 	@echo "  make help          - Show this help message"
 	@echo ""
-	@echo "For more information, see docs/README.md and docs/LINTING.md"
+	@echo 'For more information, see $$NOTES/Homelab/dotfiles/README.md and LINTING.md'
 
 install:
 	@bash ./scripts/install.sh
