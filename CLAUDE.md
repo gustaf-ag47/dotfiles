@@ -31,7 +31,7 @@ make test
 ```
 
 Machines are described once in `profiles/<hostname>.env` (class, GPU, roles,
-disk); see `profiles/README.md` (user-config overlays) and `system/README.md`
+disk); see `$NOTES/Homelab/dotfiles/PROFILES.md` (user-config overlays) and `$NOTES/Homelab/dotfiles/SYSTEM_LAYER.md`
 (root-side layer, roles = apps per machine). Review a machine's apps with
 `scripts/install-system.sh --profile <host> --list`.
 
@@ -123,6 +123,14 @@ rm test.sh
 - $NOTES/Homelab/dotfiles/BACKUP.md - Backup/restore of system state outside the repo
 - $NOTES/Homelab/dotfiles/LOCAL_CONFIG.md - Private config overlay ($SYNC/state/dotfiles-local)
 - $NOTES/Homelab/dotfiles/pi-resources.md - Pi agent resources installed from config/pi/
+- $NOTES/Homelab/dotfiles/SYSTEM_LAYER.md - Root-owned system/ layer (roles, packages, /etc)
+- $NOTES/Homelab/dotfiles/PROFILES.md - Machine profiles and user-config overlays
+- $NOTES/Homelab/dotfiles/TESTING.md - Test suites and conventions
+- $NOTES/Homelab/dotfiles/HERMES.md - Hermes Agent state layout (skrubben)
+- $NOTES/Homelab/dotfiles/nvim/ - Neovim commands, tools and unit testing
+
+No narrative docs in this repo: `tests/unit/test_doc_links.py` fails on any
+`.md` outside README.md, CLAUDE.md and the functional pi/Hermes resources.
 - $NOTES/Homelab/dotfiles/pi-delegate-contract.md - Delegation coordination contract
 
 ### Common Development Tasks
