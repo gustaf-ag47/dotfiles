@@ -1,459 +1,73 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Dotfiles for an Arch Linux fleet (Hyprland primary, i3 fallback): user config in
+`config/`, tools in `bin/`, root-owned machine layer in `system/`, one
+`profiles/<hostname>.env` per machine (class, GPU, roles, disk).
 
-## Repository Overview
-
-This is a comprehensive dotfiles repository that provides a complete development environment for Arch Linux with dual desktop support (Hyprland/Wayland and i3/X11). The configuration creates a cohesive, keyboard-driven development workflow optimized for productivity.
-
-## Development Commands
-
-### Installation & Setup
-```bash
-# Install dotfiles system-wide
-make install
-
-# What install does:
-# 1. Sources config/zsh/.zshenv to get $DOTFILES, $XDG_CONFIG_HOME, etc.
-# 2. Moves/copies dotfiles to $DOTFILES location if not already there
-# 3. Creates symlinks from $XDG_CONFIG_HOME to $DOTFILES/config/*
-# 4. Clones zsh plugins (syntax-highlighting, autosuggestions)
-# 5. Clones tmux plugin manager (tpm)
-# 6. Symlinks both Wayland (Hyprland) and Xorg (i3) configs
-# 7. Copies .desktop files to $XDG_DATA_HOME/applications
-
-# Root-side machine setup (packages, /etc, kernel params, services) from system/
-make install-system                      # dry run: show drift on this machine
-sudo scripts/install-system.sh --apply   # apply (install-arch does this on a fresh box)
-
-# Run the unit test suites (python + node)
-make test
-```
-
-Machines are described once in `profiles/<hostname>.env` (class, GPU, roles,
-disk); see `$NOTES/Homelab/dotfiles/PROFILES.md` (user-config overlays) and `$NOTES/Homelab/dotfiles/SYSTEM_LAYER.md`
-(root-side layer, roles = apps per machine). Review a machine's apps with
-`scripts/install-system.sh --profile <host> --list`.
-
-Git history is machine-local (Syncthing ignores `.git`): `git-bundle-backup`
-(weekly timer) bundles unpushed branches, stashes and no-remote repos into
-`$SYNC/archive/git-bundles`; `git-rehydrate` rebuilds `.git` on a new machine.
-Open design questions (work/private split, sign-in, secrets):
-operator notes: fleet-design.md.
-
-Research reports, audits and agent briefs never go in this repo. Write them to
-operator notes (the runs folder from `ws route dotfiles`).
-
-### Git Workflow (Trunk-Based Development)
-```bash
-# Setup Git hooks for current repository
-git-setup-hooks
-
-# Daily workflow
-git sync                    # Sync with master
-git nb feature add-feature  # Create new standardized branch
-git feat "add new feature"  # Quick conventional commit
-git pushf                   # Safe force push
-git clean-branches          # Interactive branch cleanup (clean is the git builtin!)
-
-# Commit validation enforced via hooks once git-setup-hooks has run in the repo
-```
-
-### Core Scripts
-- `scripts/install.sh` - Main installation script that symlinks configurations to proper XDG locations
-- `scripts/install-system.sh` - Applies the root-owned `system/` layer for the machine's profile (dry run by default)
-- `bin/` - Custom utility scripts (75+ tools):
-  - `git-*` - Git workflow tools (setup-hooks, new-branch, clean-branches, version)
-  - `backup`/`restore` - System backup/restore utilities
-  - `filemanager`, `browser-launcher` - Application launchers
-  - `fzf-docker`, `fzk`, `fzsd` - FZF integration tools
-  - `screenshot`, `clipboardman` - Screenshot and clipboard management
-  - `capture` - Quick note capture into the inbox
-
-### Validation & Quality
-```bash
-# Git hooks (after running git-setup-hooks in the repo) enforce:
-# - Conventional commit format validation (via config/git/hooks/commit-msg)
-# - Merge conflict marker detection
-# - Large file warnings (>1MB)
-# - Shell script syntax validation (bash -n)
-# - **Secret detection** (AWS keys, GitHub tokens, private keys, etc.)
-
-# Test and lint targets (CI parity; see $NOTES/Homelab/dotfiles/LINTING.md)
-make test-unit               # Python unit tests (tests/unit/*.py)
-make test-node               # Node unit tests (tests/unit/*.mjs)
-make test-install            # Real installer + assertions in Docker
-make test-bootstrap          # Bootstrap kit round-trip (needs age)
-make lint                    # shellcheck + luacheck + yamllint (+ stylua if installed)
-
-# Manual validation
-bash -n script.sh           # Test shell script syntax
-git-setup-hooks             # Symlink hooks from config/git/hooks/ into .git/hooks/
-```
-
-### Security (Preventing Secret Leaks)
-```bash
-# Three-layer protection automatically enabled:
-
-# 1. Global gitignore (config/git/ignore)
-#    - Blocks .env files, private keys, credentials
-#    - Applied during `make install`
-
-# 2. Pre-commit hook (config/git/hooks/pre-commit)
-#    - Detects AWS keys, GitHub tokens, Stripe keys, etc.
-#    - Scans for high-entropy strings (base64 secrets)
-#    - Blocks sensitive filenames
-
-# 3. Best practices documentation ($NOTES/Homelab/dotfiles/SECURITY.md)
-
-# Test secret detection
-echo 'API_KEY="AKIAIOSFODNN7EXAMPLE"' > test.sh
-git add test.sh && git commit -m "test"  # Should be blocked!
-rm test.sh
-
-# See $NOTES/Homelab/dotfiles/SECURITY.md for complete guide
-```
-
-### Documentation
-- $NOTES/Homelab/dotfiles/GIT_WORKFLOW.md - Complete Git workflow documentation
-- $NOTES/Homelab/dotfiles/KEYBINDINGS.md - Complete keybinding reference
-- $NOTES/Homelab/dotfiles/README.md - Repository overview and setup guide
-- $NOTES/Homelab/dotfiles/SECURITY.md - **Security guide for preventing secret leaks**
-- $NOTES/Homelab/dotfiles/LINTING.md - Lint gates and how to reproduce CI locally
-- $NOTES/Homelab/dotfiles/BACKUP.md - Backup/restore of system state outside the repo
-- $NOTES/Homelab/dotfiles/LOCAL_CONFIG.md - Private config overlay ($SYNC/state/dotfiles-local)
-- $NOTES/Homelab/dotfiles/pi-resources.md - Pi agent resources installed from config/pi/
-- $NOTES/Homelab/dotfiles/SYSTEM_LAYER.md - Root-owned system/ layer (roles, packages, /etc)
-- $NOTES/Homelab/dotfiles/PROFILES.md - Machine profiles and user-config overlays
-- $NOTES/Homelab/dotfiles/TESTING.md - Test suites and conventions
-- $NOTES/Homelab/dotfiles/HERMES.md - Hermes Agent state layout (skrubben)
-- $NOTES/Homelab/dotfiles/nvim/ - Neovim commands, tools and unit testing
-
-No narrative docs in this repo: `tests/unit/test_doc_links.py` fails on any
-`.md` outside README.md, CLAUDE.md and the functional pi/Hermes resources.
-- $NOTES/Homelab/dotfiles/pi-delegate-contract.md - Delegation coordination contract
-
-### Common Development Tasks
-```bash
-# Start development environment
-# Hyprland auto-launches on tty1
-# Tmux auto-starts in terminals with session persistence
-
-# Tmux session management
-tn                 # Open session picker (ftmuxp) — create or attach
-tl                 # List tmux sessions
-ta                 # Attach to session
-ts                 # Save current tmux session (tmux-safe-save)
-trs                # Restore last tmux session (tmux-resurrect)
-tc                 # Clean old resurrect files (>7 days)
-ftsess             # Interactive session killer with fzf preview
-
-# Access file manager
-Super + R  # or run: filemanager
-
-# Calculator tools
-Super + C          # Floating terminal calculator
-
-# System utilities
-backup            # Backup system
-restore           # Restore from backup
-power             # Power management menu
-```
-
-## Architecture Overview
-
-### Core Components
-1. **Shell Environment (Zsh)**
-   - Location: `config/zsh/`
-   - Vi-mode enabled, FZF integration
-   - Auto-launches Hyprland on tty1, tmux on other terminals
-   - Modern CLI tools with conditional aliases (bat, eza, fd, ripgrep, etc.)
-
-2. **Editor (Neovim)**
-   - Location: `config/nvim/`
-   - Lazy.nvim plugin manager (44 plugin specs, ~100 locked plugins)
-   - LSP support, Treesitter, Telescope, DAP debugging
-   - Tokyo Night theme, Space as leader key
-   - Integration: Obsidian notes, AI assistance (avante), tmux navigation
-   - **Modular architecture**: `lua/core/` base config, `lua/features/` cross-language features, `lua/lang/` per-language configs
-
-3. **Window Management**
-   - **Hyprland** (Primary): `config/gui/Wayland/hypr/`
-     - 4K multi-monitor support with HiDPI scaling
-     - NVIDIA optimization, modern blur effects
-     - Waybar status bar with custom styling
-   - **i3** (Fallback): `config/gui/Xorg/i3/`
-     - Polybar integration, Rofi launcher
-
-4. **Terminal Multiplexer (Tmux)**
-   - Location: `config/tmux/`
-   - Prefix: Ctrl-Space
-   - **Automatic session persistence** with resurrect/continuum (saves every 5min)
-   - **Interactive session picker** on terminal startup via `ftmuxp` (attach, load layout, or create new)
-   - **Auto-restore** when tmux server starts via continuum (not on every terminal open)
-   - Manual save/restore: `Ctrl-Space + Ctrl-S` (save via wrapper) / `Ctrl-Space + Ctrl-R` (restore)
-   - Vim-tmux-navigator for seamless pane navigation
-   - Tokyo Night theme matching other components
-
-### Directory Structure
-```
-config/
-├── zsh/          # Shell configuration
-├── nvim/         # Editor configuration
-├── git/          # Git settings
-├── tmux/         # Terminal multiplexer
-├── gui/          # Desktop environments
-│   ├── Wayland/  # Hyprland, Waybar, Wofi
-│   └── Xorg/     # i3, Polybar, Rofi
-├── lf/           # File manager
-└── applications/ # Custom .desktop files
-
-bin/              # 75+ utility scripts
-scripts/          # Installation and testing
-profiles/         # One <hostname>.env per machine (class, GPU, disk)
-system/           # Root-owned layer: common/, gpu/<gpu>/, hosts/<host>/
-```
-
-### Key Integration Points
-- **Visual Consistency**: Tokyo Night theme across all components
-- **Navigation**: Vim-style keybindings throughout (hjkl movement)
-- **Session Management**: Tmux persistence, automatic session restoration
-- **Clipboard**: Unified clipboard across Wayland/X11 with history (cliphist)
-- **Development Workflow**: Integrated LSP, debugging, Git tools
-
-## Configuration Highlights
-
-### Environment Variables
-- Follows XDG Base Directory Specification
-- Wayland-optimized application settings
-- Custom paths for Go, Rust, Python environments
-- Location: `config/zsh/.zshenv`
-
-### Modern CLI Tools
-The system uses enhanced versions of standard tools:
-- `ls` → `eza` (with icons and colors)
-- `grep` → `ripgrep`
-- `find` → `fd`
-- `cat` → `bat` (syntax highlighting)
-- `du` → `dust`, `df` → `duf`
-- `ps` → `procs`
-
-### Keyboard-Driven Workflow
-- **Hyprland**: Super key + vim-style navigation
-- **Tmux**: Ctrl-Space prefix + vim bindings
-- **Neovim**: Space leader key + comprehensive shortcuts
-- **Shell**: Vi-mode with FZF fuzzy finding
-
-## Platform Support
-
-### Primary: Arch Linux (`arch` host — Dell XPS 15)
-
-**Hardware:** Intel Iris Xe + NVIDIA RTX 3050 Ti Mobile (Optimus hybrid)
-
-The system-level files below are **codified in `system/`** (`system/common`,
-`system/gpu/hybrid`, `system/hosts/arch`) and applied by
-`scripts/install-system.sh`, which install-arch runs on a fresh install. These
-sections keep the *why*; change the repo copy, then run
-`sudo scripts/install-system.sh --apply`. Never hand-edit `/etc` first; it
-drifts. `make install-system` shows any drift.
-
-#### `/etc/modprobe.d/nvidia-suspend.conf`
-Required for the display to survive suspend/resume (lid close). The laptop has
-no S3 sleep; only s2idle (Modern Standby / S0ix) is available.
-
-**Critical**: `EnableS0ixPowerManagement=1` implicitly activates
-`UseKernelSuspendNotifiers`, which means the kernel handles GPU state save/restore
-via PM callbacks — **not** via the nvidia-suspend/resume systemd services. The
-services must therefore be **disabled**; having both active double-handles GPU
-state and corrupts the driver on resume.
-
-`DynamicPowerManagement=0x01` is required: the default value (3) on laptops
-causes GSP Xid 120 task panics on resume with nvidia-open 595 on Optimus systems.
-
-```
-options nvidia NVreg_PreserveVideoMemoryAllocations=1
-options nvidia NVreg_EnableS0ixPowerManagement=1
-options nvidia NVreg_DynamicPowerManagement=0x01
-```
-After creating the file: `sudo mkinitcpio -P`
-
-#### Systemd services — keep DISABLED
-```bash
-# DO NOT enable these — kernel notifiers (activated by EnableS0ixPowerManagement)
-# handle GPU state. Enabling the services alongside notifiers causes double
-# save/restore which corrupts the driver and produces a black screen on resume.
-sudo systemctl disable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service
-```
-
-#### `/etc/systemd/logind.conf.d/idle.conf`
-Prevents logind from double-suspending alongside hypridle:
-```ini
-[Login]
-IdleAction=ignore
-```
-
-#### Kernel cmdline (`/etc/default/grub` → `GRUB_CMDLINE_LINUX_DEFAULT`)
-```
-nvidia_drm.modeset=1 i915.enable_psr=0 pcie_aspm=off acpi_osi=!ACPI-Video
-```
-- `i915.enable_psr=0`: disables Intel Panel Self Refresh. Without it, i915 on
-  Alder Lake can fail to re-initialize the eDP link at the correct clock
-  frequency on s2idle resume (black screen despite NVIDIA resuming correctly).
-- `pcie_aspm=off`: prevents ASPM link state transitions that can race with
-  NVIDIA S0ix resume, causing hangs.
-- `acpi_osi=!ACPI-Video`: stops the ACPI subsystem from delivering D-Notifier
-  events to the NVIDIA driver during resume. Without it, the driver logs
-  `RmHandleDNotifierEvent: Failed … status=0x11` on every wake — the RM objects
-  haven't been reconstructed yet when the events arrive, leaving the driver in
-  an inconsistent state that can cause downstream crashes.
-
-After editing grub: `sudo grub-mkconfig -o /boot/grub/grub.cfg`
-
-#### Lid switch handling (Hyprland host config)
-Use **`dispatch dpms`** for lid open/close — never `keyword monitor "eDP-1, disable"`.
-
-`keyword monitor` tears down Aquamarine's `SDRMConnector` for eDP-1. On resume
-the reconnect path hits a use-after-free in `CLogger` inside
-`SDRMConnector::disconnect()`, crashing Hyprland (confirmed in coredump, March
-2026). `dispatch dpms off eDP-1` / `dispatch dpms on` only toggles display
-power; the DRM pipeline stays intact, so there is nothing to reconstruct.
-
-```ini
-# config/gui/Wayland/hypr/hosts/arch.conf
-bindl=,switch:on:Lid Switch,exec,hyprctl dispatch dpms off eDP-1
-bindl=,switch:off:Lid Switch,exec,sleep 2 && hyprctl dispatch dpms on
-```
-
-#### `/etc/systemd/system-sleep/hyprland-sigstop`
-Prevents Hyprland from issuing DRM/NVIDIA ioctls during the GPU suspend/resume
-transition. Without this, Hyprland blocks on an NVIDIA driver call that only
-resolves after a ~20 s timeout, after which Hyprland calls `exit()` — producing
-a black screen with no coredump (confirmed June 2026).
+## Commands
 
 ```bash
-#!/bin/bash
-HYPRLAND_PID=$(pgrep -x Hyprland 2>/dev/null)
-[[ -z "$HYPRLAND_PID" ]] && exit 0
-case "$1" in
-    pre)  kill -STOP "$HYPRLAND_PID" ;;
-    post) kill -CONT "$HYPRLAND_PID" ;;
-esac
+make install                             # symlink config/ into XDG paths, bin/ into ~/.local/bin,
+                                         # enable role/host user units, run pi-setup
+make install-system                      # dry run: root-side drift for this machine
+sudo scripts/install-system.sh --apply   # apply system/ (packages, /etc, kernel params, services, DKMS)
+scripts/install-system.sh --profile <host> --list   # a machine's apps
+make test                                # python + node unit tests (tests/unit/)
+make test-install / test-system / test-bootstrap     # installer, system layer, bootstrap kit
+make lint                                # shellcheck, luacheck, yamllint, stylua, ruff
 ```
-Make executable: `sudo chmod +x /etc/systemd/system-sleep/hyprland-sigstop`
 
-**Do not** use `nvidia-suspend/resume.service` for this — those services must
-stay disabled (see modprobe.conf note above).
+Before committing, run the gates CI runs (`.github/workflows/dotfiles.yml`,
+`nvim.yml`): bash -n + shellcheck, luacheck, stylua v2.5.2 `--check config/nvim/`,
+yamllint, `ruff check --select F bin scripts tests/unit`, unit tests. Hooks from
+`git-setup-hooks` enforce conventional commits (subject ≤ 50 chars) and secret
+detection.
 
-#### `/usr/src/hid-annepro2-1.0/` — AnnePro2 BLE keyboard DKMS module
-The AnnePro2 sends a malformed 44-byte HID descriptor over BLE. A DKMS module
-is required to replace it with a valid 6KRO descriptor. Without it, the kernel
-truncates the descriptor to 4 bytes, creating no input device.
+## Invariants
 
-The module source is **not owned by any pacman package**; it lives in
-`system/common/files/usr/src/hid-annepro2-1.0/` and `install-system.sh` runs
-`dkms install hid-annepro2/1.0` whenever it changes. The key fix:
-`report_fixup` must return a hardcoded valid descriptor, not try to trim the
-malformed one (the trim approach always produces a 4-byte no-op descriptor).
+- **Symlinks, not copies.** Edit files here; `install.sh` links them. Machine
+  differences go in overlays (`profiles/`, `config/zsh/{class,hosts}/`,
+  `config/gui/Wayland/hypr/hosts/`, `system/{gpu,hosts,roles}/`).
+- **`/etc` changes go through `system/`.** Change the repo copy, then
+  `install-system.sh --apply`; `make install-system` shows drift.
+- **User units** live in `config/systemd/user/` and are enabled per
+  `system/{roles,hosts}/*/user-services`. A unit missing from those lists never runs.
+- **Private config** lives in `$SYNC/state/dotfiles-local` (linked as `local/`,
+  gitignored): company launchers, `env/.env` secrets, work aliases, private units.
+  This repo is public.
+- **Docs live in operator notes** (`$NOTES/Homelab/dotfiles/`). Reports, audits and
+  agent briefs go to the runs folder from `ws route dotfiles`.
+  `tests/unit/test_doc_links.py` fails on any tracked `.md` except README.md,
+  CLAUDE.md and runtime-loaded pi skills/prompts and the Hermes persona.
+- **Git history is machine-local** (Syncthing ignores `.git`): `git-bundle-backup`
+  bundles unpushed work weekly; `git-rehydrate` rebuilds `.git` on a new machine.
 
-`AUTOINSTALL=yes` in `dkms.conf` rebuilds automatically on kernel updates.
+## Hardware guardrails (arch: XPS 15, NVIDIA Optimus, s2idle only)
 
-#### `/etc/systemd/system/zram-swap.service` — zram swap (24G, lz4), **skrubben**
-This is on skrubben (`system/hosts/skrubben`), not the XPS 15 (which has an 8G
-swap partition). The box runs heavy agent workloads; an 8G zram swap pinned at 100% full caused
-system-wide reclaim stalls (PSI memory `full` ~5%). 24G disksize costs RAM only
-for what is actually swapped (lz4 compresses ~2.5:1).
-The unit is `system/hosts/skrubben/files/etc/systemd/system/zram-swap.service`,
-enabled through `system/hosts/skrubben/services`.
+Each one prevents a confirmed crash or black screen on resume. Read
+`$NOTES/Homelab/dotfiles/HARDWARE.md` before touching suspend, GPU, lid,
+kernel cmdline or the AnnePro2 DKMS module.
 
-#### Syncthing tuning (the `sync` folder is 400GB / 1.2M files on LUKS)
-Unlimited hashers + hourly rescans + 10s watcher delay kept syncthing at a
-sustained ~70% CPU (plus kcryptd kernel load) because agents churn files
-constantly. Set via REST or GUI on the `sync` folder: `hashers=2`,
-`fsWatcherDelayS=60`, `rescanIntervalS=86400` (the fs watcher still picks up
-changes; the full rescan is only a daily safety net).
+- `nvidia-{suspend,resume,hibernate}.service` stay disabled: `EnableS0ixPowerManagement=1`
+  makes the kernel save GPU state, and the services would do it twice.
+- Lid open/close uses `hyprctl dispatch dpms`; `keyword monitor … disable` crashes Hyprland on resume.
+- Keep `system-sleep/hyprland-sigstop` (SIGSTOP Hyprland across GPU suspend) and the
+  cmdline `i915.enable_psr=0 pcie_aspm=off acpi_osi=!ACPI-Video`.
+- Idle and lock: `hypridle` + `hyprlock-safe`; session via `bin/hyprland-session` (keeps Hyprland logs).
 
-#### Lock manager notes
-- Idle daemon: `hypridle` — started via `exec-once` in hyprland.conf
-- Screen locker: `hyprlock` with `hyprlock-safe` wrapper (restarts on crash)
-- Session launcher: `bin/hyprland-session` wrapper (saves Hyprland log to
-  `~/.local/share/hyprland/logs/` on every exit for post-mortem debugging)
+## Scripting conventions
 
-### Testing: Docker
-- `make test-install` runs the real installer in an Arch container (CI parity)
-- `Dockerfile.linters` builds the lint image used by `make lint`
+- `bin/<name>`: no extension, executable, `#!/bin/bash`, `set -euo pipefail` for
+  anything load-bearing. `install.sh` links it into PATH and prunes dead links.
+- Load-bearing scripts get unit tests in `tests/unit/test_<name_with_underscores>.{py,mjs}`
+  (Python loads extensionless `bin/` files via `SourceFileLoader`).
+- `config/zsh/.zshenv` defines `$DOTFILES`, `$SYNC`, `$NOTES` and the XDG paths; start there.
 
-## Important Notes
+## Reference (operator notes, `$NOTES/Homelab/dotfiles/`)
 
-### Configuration Management
-- **Symlinks, not copies**: `scripts/install.sh` creates symlinks from `$DOTFILES` to XDG locations
-- **XDG compliance**: Configurations follow XDG Base Directory Specification (defined in `config/zsh/.zshenv`)
-- **Auto-detection**: System detects Wayland/X11 and loads appropriate configs
-- **Modular independence**: Components (shell, editor, WM) function independently
-
-### Local/Private Configurations
-- **Location**: `$SYNC/state/dotfiles-local/` (symlinked as `$DOTFILES/local/`)
-- **Purpose**: Store personal, company-specific, or sensitive configs (gitignored but backed up)
-- **Structure**: `local/{applications,bin,config,env}/` - automatically loaded during installation
-- **Backup**: Automatically backed up via `$SYNC` and synced across machines
-- **Use cases**:
-  - Company-specific `.desktop` launchers
-  - Personal API keys in `local/env/.env`
-  - Work aliases in `local/config/zsh/*.zsh`
-  - Private scripts in `local/bin/`
-- **See**: `local/README.md` for complete documentation
-
-### Auto-start Behavior
-- **tty1**: Automatically launches Hyprland (see `config/zsh/.zshrc`)
-- **Other terminals**: Automatically starts tmux with session restoration
-- **Session persistence**: Tmux saves every 5min via continuum; restores when tmux server starts
-
-### Shell Functions (config/zsh/scripts/functions.zsh)
-- `docker-nuke <project>` - Complete cleanup of Docker resources for a project
-- `extract <file>` - Universal archive extraction
-- `mkcd <dir>` - Create directory and cd into it
-- `up <n>` - Move up n directories
-
-### FZF Integration (config/zsh/scripts/fzf.sh)
-Key FZF-powered commands available throughout the system:
-- `ftmuxp` - Tmux session picker (runs on terminal start)
-- `ftsess` - Interactive tmux session killer with preview
-- `fglog` - Interactive git log browser with diffs
-- `fgco` - Fuzzy git branch checkout
-- `fgbd` - Fuzzy git branch delete
-- `fsb` - Fuzzy branch switcher
-
-Related `bin/` tools: `fzk` (fuzzy process killer), `fzf-docker` (Docker
-menu), `fzsd` (fuzzy cd into $SYNC dirs).
-
-## Scripting Conventions
-
-### Shell Scripts (bin/ and scripts/)
-- **Shebang**: Always use `#!/bin/bash` (not `/usr/bin/env bash`)
-- **Error handling**: Use `set -euo pipefail` for critical scripts
-- **Validation**: All shell scripts are validated via git hooks using `bash -n`
-- **Testing**: Load-bearing scripts should have unit tests in `tests/unit/` (Python or Node)
-
-### Adding New Utilities
-1. Create script in `bin/<script-name>` (no .sh extension)
-2. Make executable: `chmod +x bin/<script-name>`
-3. Scripts in `bin/` are automatically available in PATH via symlink
-4. Follow existing patterns: check `bin/git-*` for git utilities, `bin/fzf-*` for FZF tools
-
-## File Locations
-
-Key files to understand when making changes:
-- `config/zsh/.zshenv` - **START HERE**: Defines all XDG paths and environment variables
-- `config/zsh/.zshrc` - Shell startup, auto-launch logic, plugin loading
-- `config/zsh/scripts/functions.zsh` - Custom shell functions
-- `config/zsh/scripts/fzf.sh` - FZF integration commands
-- `config/nvim/init.lua` - Editor initialization (loads `lua/core/`)
-- `config/nvim/lua/core/init.lua` - Core Neovim setup orchestration
-- `config/gui/Wayland/hypr/hyprland.conf` - Hyprland window manager config
-- `config/tmux/tmux.conf` - Terminal multiplexer setup
-- `scripts/install.sh` - Installation logic and symlinking
-- `config/git/hooks/` - Git hook templates (installed via `git-setup-hooks`)
-- $NOTES/Homelab/dotfiles/KEYBINDINGS.md - Complete reference of all shortcuts
-- $NOTES/Homelab/dotfiles/GIT_WORKFLOW.md - Git workflow and branching strategy
-- $NOTES/Homelab/dotfiles/README.md - Setup and feature overview
-
-This dotfiles system provides a complete, integrated development environment optimized for keyboard-driven productivity with modern tooling and visual consistency.
+- `SYSTEM_LAYER.md`, `PROFILES.md`: adding a machine, role, package or `/etc` file
+- `HARDWARE.md`: suspend/GPU/lid/kernel/DKMS rationale; skrubben zram; Syncthing tuning
+- `TESTING.md`, `LINTING.md`: test conventions, reproducing CI locally
+- `SECURITY.md`, `LOCAL_CONFIG.md`: secrets, hook rules, the private overlay
+- `pi-resources.md`, `pi-delegate-contract.md`, `HERMES.md`: pi resources, delegation, Hermes
+- `GIT_WORKFLOW.md`, `KEYBINDINGS.md`, `OVERVIEW.md`, `nvim/`: user-facing workflow and feature tour
