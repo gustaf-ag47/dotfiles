@@ -1,40 +1,80 @@
 #!/bin/bash
-# Wrapper around hyprlock that restarts it if the NVIDIA driver crashes it on
-# resume from suspend. Without this, a crash leaves the session unlocked.
-#
-# Exits cleanly (loop breaks) when hyprlock exits with status 0 (user unlocked).
-# Falls back to systemctl suspend after 5 rapid crashes (<10s between crashes)
-# to avoid a spin loop on a broken GPU state.
-
-# No `set -e`: a crashing hyprlock must not abort this wrapper — surviving the
-# crash and relocking is its entire purpose.
+# Restart hyprlock after a crash; a dead lock client leaves Hyprland's
+# "lockscreen app died" overlay, not an unlocked session. Hyprland denies a
+# replacement unless misc:allow_session_lock_restore is enabled.
+# A core dump *can* delay SIGCHLD/relaunch, but the Oct 12 dump completed in
+# 285 ms; it does not explain the observed two-minute gap. Keep cores enabled
+# for diagnosis rather than sacrificing evidence with ulimit -c 0.
+# Hyprland does not render a lock client started on an inactive VT: wait for
+# its VT to be active before retrying. Five rapid crashes still suspend.
+# No set -e: a crashing hyprlock must not abort the supervisor.
 set -uo pipefail
 
+session_vt() {
+    local session vt type uid
+    if [[ -n ${XDG_SESSION_ID:-} ]]; then
+        vt=$(loginctl show-session "$XDG_SESSION_ID" -p VTNr --value 2>/dev/null) || vt=
+        type=$(loginctl show-session "$XDG_SESSION_ID" -p Type --value 2>/dev/null) || type=
+        if [[ $type == wayland && $vt =~ ^[1-9][0-9]*$ ]]; then
+            printf 'tty%s\n' "$vt"
+            return 0
+        fi
+    fi
+    # SSH/tty invocations have a different XDG_SESSION_ID: find this user's
+    # Wayland session, not the invoking terminal's VT.
+    while read -r session _; do
+        [[ $session =~ ^[0-9]+$ ]] || continue
+        uid=$(loginctl show-session "$session" -p User --value 2>/dev/null) || continue
+        [[ $uid == "$(id -u)" ]] || continue
+        type=$(loginctl show-session "$session" -p Type --value 2>/dev/null) || continue
+        [[ $type == wayland ]] || continue
+        vt=$(loginctl show-session "$session" -p VTNr --value 2>/dev/null) || continue
+        if [[ $vt =~ ^[1-9][0-9]*$ ]]; then
+            printf 'tty%s\n' "$vt"
+            return 0
+        fi
+    done < <(loginctl list-sessions --no-legend 2>/dev/null)
+    return 1
+}
+
+ACTIVE_VT_FILE=${HYPRLOCK_ACTIVE_VT_FILE:-/sys/class/tty/tty0/active}
 CRASH_COUNT=0
 LAST_CRASH=0
-
 while true; do
     EXIT=0
     hyprlock || EXIT=$?
+    [[ $EXIT -eq 0 ]] && break # normal unlock
     NOW=$(date +%s)
+    logger -t hyprlock-safe "hyprlock exited status=$EXIT at $(date --iso-8601=seconds); attempting relock"
 
-    # Clean unlock
-    [[ $EXIT -eq 0 ]] && break
-
-    # Count rapid crashes
     if (( NOW - LAST_CRASH < 10 )); then
         (( CRASH_COUNT++ ))
     else
         CRASH_COUNT=1
     fi
     LAST_CRASH=$NOW
-
-    # Too many crashes — suspend rather than loop forever unlocked
     if (( CRASH_COUNT >= 5 )); then
+        logger -t hyprlock-safe "hyprlock crashed 5 times rapidly; suspending"
         notify-send -u critical "hyprlock" "Crashed 5 times, suspending for safety" 2>/dev/null || true
         systemctl suspend
         break
     fi
 
+    VT=$(session_vt) || {
+        logger -t hyprlock-safe "cannot identify Hyprland VT; refusing to relaunch on an unknown VT"
+        exit 1
+    }
+    while [[ $(< "$ACTIVE_VT_FILE") != "$VT" ]]; do
+        sleep 0.5
+    done
+    if ! hyprctl keyword misc:allow_session_lock_restore 1 >/dev/null; then
+        logger -t hyprlock-safe "failed to allow session lock restoration; retrying after delay"
+        sleep 1
+        continue
+    fi
     sleep 0.5
+    # VT can change during the delay: check again before launching.
+    while [[ $(< "$ACTIVE_VT_FILE") != "$VT" ]]; do
+        sleep 0.5
+    done
 done

@@ -6,6 +6,7 @@ This directory contains tests for the dotfiles system.
 tests/
 ├── e2e/                    # Opt-in live tests (real inference/browsers; never run in CI)
 ├── unit/                   # Python + Node unit tests (offline, CI-gated)
+├── hyprlock-safe.sh        # fake lock client crash/relock/suspend (CI unit job)
 ├── bootstrap-kit.sh        # age bootstrap kit round-trip (CI bootstrap-kit job)
 ├── bootstrap-preflight.sh  # bootstrap kit preconditions
 ├── install-assertions.sh   # post-install state assertions (CI install job)
@@ -13,6 +14,9 @@ tests/
 ├── system-layer.sh         # system/ applied per profile into a fake root (CI system-layer job)
 └── git-bundles.sh          # git-bundle-backup -> git-rehydrate round trip (CI unit job)
 ```
+
+`make test-unit` also runs `hyprlock-safe.sh` with fake commands; it never locks,
+suspends or changes the live compositor.
 
 `make test-system` runs `system-layer.sh` without root. CI runs it inside
 `archlinux:latest` with `SYSTEM_LAYER_RESOLVE=1`, which also resolves every
