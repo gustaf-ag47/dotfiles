@@ -16,7 +16,7 @@ try {
   // CI without a Pi installation still runs the dependency-discovery fixtures.
 }
 
-for (const resource of ['config/pi/extensions/grok-build.ts', 'config/pi/lib/anthropic-subscription.ts']) {
+for (const resource of ['config/pi/extensions/grok-build.ts', 'config/pi/extensions/compaction-model.ts', 'config/pi/lib/anthropic-subscription.ts']) {
   test(`${resource} loads through the installed Pi extension loader`, {
     skip: !loader || !existsSync(loader) ? 'Pi installation unavailable' : false,
   }, async () => {

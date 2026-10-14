@@ -84,6 +84,10 @@ if [ -d "$XDG_DATA_HOME/npm/bin" ]; then
     export PATH="$XDG_DATA_HOME/npm/bin:$PATH"
 fi
 export PI_CLAUDE_SUB_PI_BIN="$HOME/.local/share/npm/bin/pi"
+# 1h Anthropic prompt cache (Claude Code's subscription default) instead of 5m:
+# idle gaps of 5-60 min were re-writing ~180k-token contexts at 25x the read
+# price. Providers without long retention ignore it.
+export PI_CACHE_RETENTION=long
 
 CLAUDE_CODE_ENV="$XDG_CONFIG_HOME/claude-code/env.sh"
 [ -r "$CLAUDE_CODE_ENV" ] && source "$CLAUDE_CODE_ENV"
