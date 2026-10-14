@@ -20,52 +20,40 @@
   "compaction": {
     "modelOverrides": {
       "anthropic/claude-opus-5-5": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "anthropic/claude-opus-5": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "anthropic/claude-fable-5": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "anthropic/claude-fable-5-1": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "anthropic/claude-sonnet-5": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "anthropic/claude-sonnet-5-5": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "openai-codex/gpt-6-astra": {
-        "reserveTokens": 800000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 800000
       },
       "openai-codex/gpt-6-luna": {
-        "reserveTokens": 900000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 900000
       },
       "deepseek/deepseek-v4-pro": {
-        "reserveTokens": 700000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 700000
       },
       "deepseek/deepseek-v4-flash": {
-        "reserveTokens": 700000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 700000
       },
       "deepseek/deepseek-flash": {
-        "reserveTokens": 700000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 700000
       },
       "grok-build/grok-4.7": {
-        "reserveTokens": 76000,
-        "keepRecentTokens": 40000
+        "reserveTokens": 76000
       }
     }
   }
