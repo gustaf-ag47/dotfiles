@@ -27,6 +27,7 @@ RUNNING_HOSTNAME="$(cat /etc/hostname 2>/dev/null || echo unknown)"
 
 disable_hermes_snapshot_units() {
 	command -v systemctl >/dev/null 2>&1 || return 0
+	local unit_lists role list action unit
 	systemctl --user disable --now hermes-state-snapshot.timer 2>/dev/null || true
 	for unit_name in hermes-state-snapshot.service hermes-state-snapshot.timer; do
 		target="$XDG_CONFIG_HOME/systemd/user/$unit_name"
@@ -183,8 +184,8 @@ link_config "$DOTFILES/config/claude-code/env.sh" "$XDG_CONFIG_HOME/claude-code/
 
 # Hot-swap proxy as a user service so EVERY session can rotate tokens mid-run
 # (env.sh routes through it via ANTHROPIC_BASE_URL when it is active). The
-# units use %h/.local/bin ExecStart paths; the bin/* loop below provides those
-# links before any unit starts.
+# units use %h/.local/bin ExecStart paths; enable_user_units runs after the
+# bin/* loop and pi-setup so those paths exist before any unit starts.
 mkdir -p "$XDG_CONFIG_HOME/systemd/user" "${XDG_CACHE_HOME:-$HOME/.cache}/cc-proxy"
 # Link EVERY unit file -- public ones from this repo, private ones (company
 # infra, personal services) from the local/ overlay -- but enable only what the
@@ -282,7 +283,11 @@ echo "Profile: $PROFILE (class=${PROFILE_CLASS:-unknown} battery=${PROFILE_HAS_B
 
 # systemd --user units this machine runs: declared per role and host, in the
 # same system/ layers that hold its packages (see $NOTES/Homelab/dotfiles/SYSTEM_LAYER.md).
-if command -v systemctl >/dev/null 2>&1; then
+# Called at the END of install: units ExecStart ~/.local/bin/* and
+# ~/.pi/agent/skills/* paths, which the bin/ loop and pi-setup create later.
+enable_user_units() {
+	command -v systemctl >/dev/null 2>&1 || return 0
+	local unit_lists role list action unit
 	systemctl --user daemon-reload 2>/dev/null || true
 	unit_lists=()
 	for role in ${PROFILE_ROLES:-}; do
@@ -304,7 +309,7 @@ if command -v systemctl >/dev/null 2>&1; then
 			esac
 		done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$list")
 	done
-fi
+}
 
 # Machine facts at a fixed runtime path, so shells and scripts can read the
 # profile without re-deriving it (e.g. .zshrc selects the class overlay).
@@ -431,6 +436,9 @@ fi
 if command -v pi >/dev/null 2>&1; then
     "$DOTFILES/bin/pi-setup" --apply || echo "  warning: pi-setup reported problems" >&2
 fi
+
+# Last of the link steps: every ExecStart target now exists.
+enable_user_units
 
 # Link Claude Code user configuration (private overlay only; not in this repo)
 if [ -f "$DOTFILES/.claude/CLAUDE.md" ]; then
