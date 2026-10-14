@@ -17,6 +17,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // cheaper (input price) than the session's current model.
 export const CANDIDATES: Record<string, string[]> = {
 	anthropic: ["claude-sonnet-5-5", "claude-sonnet-5"],
+	// gpt-6-astra is $10/MTok input; 6.1-sol is $2 on the same ChatGPT login.
+	"openai-codex": ["gpt-6.1-sol", "gpt-6-sol"],
 };
 
 // The summary budget is min(0.8 * reserveTokens, maxTokens). A large

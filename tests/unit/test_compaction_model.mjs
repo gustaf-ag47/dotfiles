@@ -7,6 +7,9 @@ const models = {
   'anthropic/claude-sonnet-5-5': { provider: 'anthropic', id: 'claude-sonnet-5-5', cost: { input: 2 } },
   'anthropic/claude-sonnet-5': { provider: 'anthropic', id: 'claude-sonnet-5', cost: { input: 2 } },
   'deepseek/deepseek-flash': { provider: 'deepseek', id: 'deepseek-flash', cost: { input: 0.3 } },
+  'openai-codex/gpt-6-astra': { provider: 'openai-codex', id: 'gpt-6-astra', cost: { input: 10 } },
+  'openai-codex/gpt-6.1-sol': { provider: 'openai-codex', id: 'gpt-6.1-sol', cost: { input: 2 } },
+  'openai-codex/gpt-6-luna': { provider: 'openai-codex', id: 'gpt-6-luna', cost: { input: 0.1 } },
 };
 
 function registry(extra = {}) {
@@ -18,6 +21,11 @@ function registry(extra = {}) {
 
 test('picks the cheaper same-provider summariser', () => {
   assert.equal(pickSummaryModel(models['anthropic/claude-opus-5-5'], registry(), {}).id, 'claude-sonnet-5-5');
+});
+
+test('codex: astra summarises with 6.1-sol, cheaper luna keeps its own model', () => {
+  assert.equal(pickSummaryModel(models['openai-codex/gpt-6-astra'], registry(), {}).id, 'gpt-6.1-sol');
+  assert.equal(pickSummaryModel(models['openai-codex/gpt-6-luna'], registry(), {}), undefined);
 });
 
 test('keeps native compaction when already on the summariser or another provider', () => {
