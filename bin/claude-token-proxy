@@ -2366,10 +2366,11 @@ class Handler(BaseHTTPRequestHandler):
         return fwd
 
     def _proxy(self):
+        # Strip first so /anthropic/_x cannot bypass the control-endpoint guard.
+        self.path = strip_anthropic_gateway_prefix(self.path)
         if self.path.startswith("/_"):  # local control endpoints are read-only and never forwarded
             self._send_json(405, {"error": "method not allowed", "path": self.path.split("?", 1)[0]})
             return
-        self.path = strip_anthropic_gateway_prefix(self.path)
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         if self.command == "POST" and self.path.split("?", 1)[0] == "/v1/messages" and body:

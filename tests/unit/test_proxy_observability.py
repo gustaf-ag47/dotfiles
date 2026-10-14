@@ -97,6 +97,16 @@ class EndpointTests(ProxyIsolationMixin, unittest.TestCase):
                 urllib.request.urlopen(req)
             self.assertEqual(error.exception.code, 400)
 
+    def test_control_paths_never_forwarded_even_with_gateway_prefix(self):
+        # /anthropic is stripped for Hermes; it must not smuggle /_x past the guard.
+        for path in ("/_usage", "/anthropic/_usage", "/anthropic/_x?y=1"):
+            with self.subTest(path=path), patch.object(proxy, "upstream") as upstream:
+                req = urllib.request.Request(self.url + path, data=b"{}", method="PUT")
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(req)
+                self.assertEqual(error.exception.code, 405)
+                upstream.assert_not_called()
+
     def test_usage_exposes_observability_fields(self):
         with urllib.request.urlopen(self.url + '/_usage') as response:
             payload = json.load(response)
