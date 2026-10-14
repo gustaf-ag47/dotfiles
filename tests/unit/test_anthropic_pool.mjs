@@ -48,17 +48,33 @@ test('opt-out registers nothing at all', () => {
   }
 });
 
-test('harness prompt moves into the first user message (string, blocks, empty)', () => {
+const harness = { type: 'text', text: 'harness prompt' };
+
+test('harness prompt becomes its own leading block of the first user message (string, blocks, empty, image)', () => {
   const s = moveHarnessPromptIntoFirstMessage(oauthPayload([{ role: 'user', content: 'hi' }]));
   assert.equal(s.system.length, 1);
-  assert.equal(s.messages[0].content, 'harness prompt\n\nhi');
+  assert.deepEqual(s.messages[0].content, [harness, { type: 'text', text: 'hi' }]);
   const b = moveHarnessPromptIntoFirstMessage(oauthPayload([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]));
-  assert.equal(b.messages[0].content[0].text, 'harness prompt\n\nhi');
+  assert.deepEqual(b.messages[0].content, [harness, { type: 'text', text: 'hi' }]);
   const e = moveHarnessPromptIntoFirstMessage(oauthPayload([]));
-  assert.deepEqual(e.messages, [{ role: 'user', content: 'harness prompt' }]);
+  assert.deepEqual(e.messages, [{ role: 'user', content: [harness] }]);
   const img = moveHarnessPromptIntoFirstMessage(oauthPayload([{ role: 'user', content: [{ type: 'image' }] }]));
-  assert.equal(img.messages[0].content, 'harness prompt');
-  assert.equal(img.messages.length, 2);
+  assert.deepEqual(img.messages[0].content, [harness, { type: 'image' }]);
+  assert.equal(img.messages.length, 1);
+  const asst = moveHarnessPromptIntoFirstMessage(oauthPayload([{ role: 'assistant', content: 'x' }]));
+  assert.deepEqual(asst.messages[0], { role: 'user', content: [harness] });
+});
+
+test('the harness block keeps the cache breakpoint (and TTL) pi put on the system block', () => {
+  const cc = { type: 'ephemeral', ttl: '1h' };
+  const payload = oauthPayload([{ role: 'user', content: [{ type: 'text', text: 'hi', cache_control: cc }] }]);
+  payload.system[1].cache_control = cc;
+  const out = moveHarnessPromptIntoFirstMessage(payload);
+  assert.deepEqual(out.messages[0].content[0], { ...harness, cache_control: cc });
+  assert.deepEqual(out.messages[0].content[1].cache_control, cc);
+  // Breakpoints are only moved, never added: system had 2 (identity + harness), now 1 + 1 in messages.
+  const count = JSON.stringify(out).split('cache_control').length - 1;
+  assert.equal(count, JSON.stringify(payload).split('cache_control').length - 1);
 });
 
 test('payloads that are not the OAuth shape are left alone, and the input is never mutated', () => {
@@ -70,6 +86,7 @@ test('payloads that are not the OAuth shape are left alone, and the input is nev
   moveHarnessPromptIntoFirstMessage(input);
   assert.equal(input.system.length, 2);
   assert.equal(input.messages[0].content, 'hi');
+  assert.equal(input.system[1].text, 'harness prompt');
 });
 
 test('before_provider_request only rewrites anthropic requests', () => {
