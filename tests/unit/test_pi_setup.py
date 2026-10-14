@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -122,6 +123,33 @@ class AdoptionTests(unittest.TestCase):
             (root / '.venv').mkdir()
             (root / '.venv/secret').write_text('exclude')
             self.assertEqual(list(setup.source_files(root)), [root / '_excalidraw/canvas.mjs'])
+
+
+class ManagedSettingsTests(unittest.TestCase):
+    def test_existing_settings_get_managed_keys_and_keep_the_rest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / 'agent'
+            agent.mkdir()
+            live = agent / 'settings.json'
+            live.write_text(json.dumps({'defaultModel': 'mine', 'lastChangelogVersion': '9',
+                                        'compaction': {'enabled': False}, 'unrelated': [1]}))
+            wanted = json.loads((setup.ROOT / 'config/pi/settings.example.json').read_text())
+            self.assertIn('compaction', setup.settings_drift(agent))
+            changed = setup.sync_settings(agent, root / 'state')
+            result = json.loads(live.read_text())
+            for key in setup.MANAGED_SETTINGS:
+                self.assertEqual(result[key], wanted[key])
+            self.assertEqual(result['defaultModel'], 'mine')
+            self.assertEqual(result['unrelated'], [1])
+            self.assertTrue((root / 'state/settings.json.bak').is_file())
+            self.assertTrue(changed)
+            self.assertEqual(setup.settings_drift(agent), [])
+            self.assertEqual(setup.sync_settings(agent, root / 'state'), [])
+
+    def test_unseeded_agent_dir_reports_no_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(setup.settings_drift(Path(directory)), [])
 
 
 if __name__ == '__main__':
