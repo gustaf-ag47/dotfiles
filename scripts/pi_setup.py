@@ -72,6 +72,42 @@ def plan(agent, private, binary):
     return operations
 
 
+# settings.json is Pi-owned live state (model picks, changelog marker), so it is
+# seeded once, never linked. These keys are fleet policy instead: cost tuning
+# from 2026-10-14 (operator notes: Dotfiles/agent-runs/pi-cost-creators-2026-10-14)
+# must reach machines whose settings.json already exists. --apply overwrites
+# exactly these keys from settings.example.json and leaves every other key alone.
+MANAGED_SETTINGS = ('compaction', 'defaultTools', 'showCacheMissNotices')
+
+
+def settings_drift(agent):
+    """Managed keys whose live value differs from the repo; [] when not seeded yet."""
+    target = agent / 'settings.json'
+    if not target.is_file():
+        return []
+    wanted = json.loads((ROOT / 'config/pi/settings.example.json').read_text())
+    live = json.loads(target.read_text())
+    return [key for key in MANAGED_SETTINGS if key in wanted and live.get(key) != wanted[key]]
+
+
+def sync_settings(agent, state):
+    drift = settings_drift(agent)
+    if not drift:
+        return []
+    target = agent / 'settings.json'
+    wanted = json.loads((ROOT / 'config/pi/settings.example.json').read_text())
+    live = json.loads(target.read_text())
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    shutil.copy2(target, state / 'settings.json.bak')
+    for key in drift:
+        live[key] = wanted[key]
+    temp = target.parent / '.pi-setup-settings.json'
+    temp.write_text(json.dumps(live, indent=2) + '\n')
+    os.replace(temp, target)
+    print(f"Updated managed settings: {', '.join(drift)} (backup: {state / 'settings.json.bak'})")
+    return drift
+
+
 def correct(source, target):
     return target.is_symlink() and target.resolve() == source.resolve()
 
@@ -143,7 +179,7 @@ def apply(operations, state):
             finally:
                 if temp.is_symlink() or temp.exists():
                     temp.unlink()
-        print(f'Installed {len(records)} resources. Existing settings, auth, sessions and proxy service were not changed.')
+        print(f'Installed {len(records)} resources. Auth, sessions, proxy service and unmanaged settings were not changed.')
         print(f'Rollback: pi-setup --rollback {manifest}')
     except Exception:
         print(f'Partial adoption; rollback manifest: {manifest}')
@@ -209,7 +245,10 @@ def main():
         pending = [(kind, src, dst) for kind, src, dst in operations if not (kind == 'link' and correct(src, dst))]
         for kind, _, target in pending:
             print(f'{kind}: {target}')
-        print(f'{len(pending)} pending changes; use --apply. Credentials and runtime state are excluded.')
+        drift = settings_drift(args.agent_dir.expanduser().absolute())
+        for key in drift:
+            print(f'setting: {key}')
+        print(f'{len(pending) + len(drift)} pending changes; use --apply. Credentials and runtime state are excluded.')
         upstreams(False)
         return
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -221,6 +260,7 @@ def main():
             agent = args.agent_dir.expanduser().absolute()
             prune_dangling(agent)
             apply(plan(agent, args.private_root.expanduser(), args.pi_bin), state)
+            sync_settings(agent, state)
 
 
 if __name__ == '__main__':
