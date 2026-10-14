@@ -39,3 +39,17 @@ class OAuthTransportTests(TestCase):
         self.assertIn("custom-beta", betas)
         # Anthropic gates models by claude-code version; a stale client UA must not pass through.
         self.assertEqual(sent["user-agent"], proxy.OAUTH_USER_AGENT)
+
+    def test_strip_anthropic_gateway_prefix(self):
+        self.assertEqual(proxy.strip_anthropic_gateway_prefix("/anthropic/v1/messages"), "/v1/messages")
+        self.assertEqual(
+            proxy.strip_anthropic_gateway_prefix("/anthropic/v1/messages?beta=true"),
+            "/v1/messages?beta=true",
+        )
+        self.assertEqual(proxy.strip_anthropic_gateway_prefix("/v1/messages"), "/v1/messages")
+        self.assertEqual(proxy.strip_anthropic_gateway_prefix("/anthropic"), "/")
+
+    def test_upstream_strips_hermes_anthropic_prefix(self):
+        with mock.patch.object(proxy.http.client, "HTTPSConnection") as connection:
+            proxy.upstream("POST", "/anthropic/v1/messages?beta=true", {}, b"{}", "pool-token")
+        self.assertEqual(connection.return_value.request.call_args.args[1], "/v1/messages?beta=true")

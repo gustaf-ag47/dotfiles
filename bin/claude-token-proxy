@@ -2262,8 +2262,20 @@ def ensure_claude_code_identity(body: bytes, reshape: bool = False) -> bytes:
     return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def strip_anthropic_gateway_prefix(path: str) -> str:
+    """Hermes only honours a custom Anthropic base_url when the path ends in
+    ``/anthropic`` (see hermes_cli.runtime_provider._detect_api_mode_for_url).
+    Pi talks to ``http://127.0.0.1:8788/v1/messages`` directly. Strip the
+    gateway prefix so both clients hit Anthropic's ``/v1/messages``."""
+    path_only, sep, query = path.partition("?")
+    if path_only == "/anthropic" or path_only.startswith("/anthropic/"):
+        path_only = path_only[len("/anthropic"):] or "/"
+    return path_only + ((sep + query) if sep else "")
+
+
 def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
     conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=timeout)
+    path = strip_anthropic_gateway_prefix(path)
     # This upstream always uses subscription OAuth, even when a client (e.g.
     # Hermes) classifies localhost as an API-key endpoint. Never forward its
     # x-api-key alongside the pool token or omit the required OAuth beta.
@@ -2357,6 +2369,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/_"):  # local control endpoints are read-only and never forwarded
             self._send_json(405, {"error": "method not allowed", "path": self.path.split("?", 1)[0]})
             return
+        self.path = strip_anthropic_gateway_prefix(self.path)
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         if self.command == "POST" and self.path.split("?", 1)[0] == "/v1/messages" and body:
