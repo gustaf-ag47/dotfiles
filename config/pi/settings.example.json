@@ -42,6 +42,30 @@
       "anthropic/claude-sonnet-5-5": {
         "reserveTokens": 800000,
         "keepRecentTokens": 40000
+      },
+      "openai-codex/gpt-6-astra": {
+        "reserveTokens": 800000,
+        "keepRecentTokens": 40000
+      },
+      "openai-codex/gpt-6-luna": {
+        "reserveTokens": 900000,
+        "keepRecentTokens": 40000
+      },
+      "deepseek/deepseek-v4-pro": {
+        "reserveTokens": 700000,
+        "keepRecentTokens": 40000
+      },
+      "deepseek/deepseek-v4-flash": {
+        "reserveTokens": 700000,
+        "keepRecentTokens": 40000
+      },
+      "deepseek/deepseek-flash": {
+        "reserveTokens": 700000,
+        "keepRecentTokens": 40000
+      },
+      "grok-build/grok-4.7": {
+        "reserveTokens": 76000,
+        "keepRecentTokens": 40000
       }
     }
   }
