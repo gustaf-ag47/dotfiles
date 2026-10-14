@@ -20,27 +20,27 @@
   "compaction": {
     "modelOverrides": {
       "anthropic/claude-opus-5-5": {
-        "reserveTokens": 700000,
+        "reserveTokens": 800000,
         "keepRecentTokens": 40000
       },
       "anthropic/claude-opus-5": {
-        "reserveTokens": 700000,
+        "reserveTokens": 800000,
         "keepRecentTokens": 40000
       },
       "anthropic/claude-fable-5": {
-        "reserveTokens": 700000,
+        "reserveTokens": 800000,
         "keepRecentTokens": 40000
       },
       "anthropic/claude-fable-5-1": {
-        "reserveTokens": 700000,
+        "reserveTokens": 800000,
         "keepRecentTokens": 40000
       },
       "anthropic/claude-sonnet-5": {
-        "reserveTokens": 700000,
+        "reserveTokens": 800000,
         "keepRecentTokens": 40000
       },
       "anthropic/claude-sonnet-5-5": {
-        "reserveTokens": 700000,
+        "reserveTokens": 800000,
         "keepRecentTokens": 40000
       }
     }

@@ -39,13 +39,18 @@ export function proxyOrigin(env: NodeJS.ProcessEnv = process.env): string | null
 	return new URL(env.PI_ANTHROPIC_PROXY_URL || `http://127.0.0.1:${env.CC_PROXY_PORT || "8788"}`).origin;
 }
 
-type SystemBlock = { type?: string; text?: string };
+type SystemBlock = { type?: string; text?: string; cache_control?: unknown };
 type Payload = { system?: SystemBlock[]; messages?: any[] };
 
 /**
- * Keep only the Claude Code identity in `system`; prepend the second system
- * block (pi's harness prompt) to the first user message. Returns null when the
- * payload is not the OAuth shape this workaround targets.
+ * Keep only the Claude Code identity in `system`; move the second system block
+ * (pi's harness prompt) into the first user message as its OWN leading text
+ * block, carrying the cache breakpoint pi had put on it. Concatenating it into
+ * the user's text (the pre-2026-10-14 behaviour) left no breakpoint after the
+ * harness, so every new session, sub-agent and compaction re-wrote the ~12k
+ * token harness prompt instead of reading it (measured: read 2.2k, write 11.8k
+ * for two sessions with identical prompts but different first messages).
+ * Returns null when the payload is not the OAuth shape this workaround targets.
  */
 export function moveHarnessPromptIntoFirstMessage(payload: unknown): Payload | null {
 	const p = payload as Payload;
@@ -55,17 +60,16 @@ export function moveHarnessPromptIntoFirstMessage(payload: unknown): Payload | n
 	if (typeof harness !== "string" || !harness.trim()) return null;
 
 	const next = structuredClone(p) as Required<Payload>;
+	const cacheControl = next.system[1]?.cache_control;
 	next.system = [next.system[0]];
-	const prefix = `${harness}\n\n`;
+	const block = { type: "text", text: harness, ...(cacheControl ? { cache_control: cacheControl } : {}) };
 	const first = next.messages[0];
-	if (!first) {
-		next.messages = [{ role: "user", content: prefix.trim() }];
-	} else if (typeof first.content === "string") {
-		first.content = prefix + first.content;
-	} else if (Array.isArray(first.content) && first.content[0]?.type === "text") {
-		first.content[0] = { ...first.content[0], text: prefix + (first.content[0].text || "") };
+	if (first?.role === "user" && typeof first.content === "string") {
+		first.content = [block, { type: "text", text: first.content }];
+	} else if (first?.role === "user" && Array.isArray(first.content)) {
+		first.content = [block, ...first.content];
 	} else {
-		next.messages.unshift({ role: "user", content: prefix.trim() });
+		next.messages.unshift({ role: "user", content: [block] });
 	}
 	return next;
 }
