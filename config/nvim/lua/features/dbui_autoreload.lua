@@ -1,4 +1,4 @@
--- DBUI auto-reload — watches $NOTES/db_ui/connections.json with libuv (vim.uv.new_fs_event)
+-- DBUI auto-reload — watches <db-ui root>/connections.json with libuv (vim.uv.new_fs_event)
 -- and transparently re-binds every open query buffer to the fresh URL whenever the
 -- file changes on disk (e.g. when the prod-db-token.service rotates the RDS IAM token).
 --
@@ -28,10 +28,6 @@ local last_mtime = {} ---@type table<string, integer>  -- per-path mtime guard
 -- Legacy single-path globals kept for backward compatibility with the older
 -- start()/status() callsites:
 local connections_path ---@type string?
-
-local function notes_dir()
-  return vim.env.NOTES or ((vim.env.SYNC or vim.env.HOME) .. '/Vault')
-end
 
 ---@return table<string,string>  name -> url
 local function read_connections()
@@ -261,12 +257,12 @@ function M.update_paths(paths)
 end
 
 function M.start()
-  -- Legacy startup: watch the default $NOTES/db_ui/connections.json. The
+  -- Legacy startup: watch the default <db-ui root>/connections.json. The
   -- project module (if loaded) will immediately overwrite via update_paths.
   if next(watchers) ~= nil then
     return
   end
-  local default = notes_dir() .. '/db_ui/connections.json'
+  local default = require 'features.dbui_root'() .. '/connections.json'
   M.update_paths { default }
 
   vim.api.nvim_create_autocmd('VimLeavePre', {

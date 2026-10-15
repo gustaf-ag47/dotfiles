@@ -66,8 +66,7 @@ function M.check()
   end
 
   -- Refresh script
-  local notes = vim.env.NOTES or ((vim.env.SYNC or vim.env.HOME) .. '/Vault')
-  local token_script = notes .. '/db_ui/prod-db-token.sh'
+  local token_script = require 'features.dbui_root'() .. '/prod-db-token.sh'
   if vim.fn.filereadable(token_script) == 1 then
     vim.health.ok 'Token refresh script: found'
   else

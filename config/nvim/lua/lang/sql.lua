@@ -322,7 +322,7 @@ M.setup_dadbod_ui = function()
   vim.g.db_ui_auto_execute_table_helpers = 1
 
   -- Note: g:db_ui_save_location is set in plugins/dadbod.lua (must be set before plugin loads)
-  -- Connections are loaded from $NOTES/db_ui/connections.json
+  -- Connections are loaded from <db-ui root>/connections.json (features/dbui_root.lua)
 
   -- Show database schemas in tree
   vim.g.db_ui_show_database_icon = 1
