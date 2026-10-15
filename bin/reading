@@ -1,0 +1,1122 @@
+#!/usr/bin/env python3
+"""reading - one tool for the reading flow (Kobo/KOReader <-> zathura/nvim <-> vault inbox).
+
+Subcommands:
+  md5 FILE...                  KOReader partial MD5 (the kosync / AnnotationSync document id)
+  index [--device-dir DIR | --device-ssh HOST]
+                               (re)build $SYNC/state/reading/books.json from the Calibre library,
+                               optionally mapping the Kobo's own copies (hash, then title/author)
+  list                         books in progress, newest first (TSV: id, label) for `read-book`
+  resolve ID                   JSON {file, page, note, title, ...} for `read-book` to open
+  progress get ID | put ID PAGE [--total N] [--device NAME] [--force]
+  watch                        zathura-kosync: follow every zathura over D-Bus, push progress
+  page [--note PATH]           current page (1-based) of the zathura showing this note's book
+  goto PAGE [--note PATH]      jump that zathura to PAGE (1-based)
+  search QUERY                 Calibre books matching QUERY (TSV: id, title, author)
+  note new ID                  create the zettel-literature note for book ID, print its path
+  ingest [--nickel DB] [--dry-run]
+                               highlights -> one inbox card per source in "$NOTES/00 Inbox"
+  fix-zathura-history          repoint stale zathura resume entries at the Calibre library
+
+Paths come from $SYNC/$NOTES; kosync credentials from ~/.config/kosync/env (never printed).
+Progress lives in kosync only: nothing here writes page numbers into literature notes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import shutil
+import socket
+import sqlite3
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HOME = Path.home()
+SYNC = Path(os.environ.get("SYNC", HOME / "sync"))
+NOTES = Path(os.environ.get("NOTES", SYNC / "Vault"))
+STATE = Path(os.environ.get("READING_STATE", SYNC / "state" / "reading"))
+CALIBRE = Path(os.environ.get("CALIBRE_LIBRARY", SYNC / "library" / "calibre"))
+KOSYNC_ENV = Path(os.environ.get("KOSYNC_ENV", HOME / ".config" / "kosync" / "env"))
+ZATHURA_DB = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local" / "share")) / "zathura" / "bookmarks.sqlite"
+
+INBOX_DIR = "00 Inbox"
+SOURCES_DIR = "30 Knowledge/Sources"
+TEMPLATE = "_templates/zettel-literature.md"
+BOOK_FORMATS = ("pdf", "epub")
+MIN_HIGHLIGHT_CHARS = 15
+ACCEPT = "application/vnd.koreader.v1+json"
+
+
+def books_json() -> Path:
+    return STATE / "books.json"
+
+
+def today() -> str:
+    return dt.date.today().isoformat()
+
+
+def normalize(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def short_title(title: str) -> str:
+    return re.split(r"[:_]\s", title or "", maxsplit=1)[0].strip() or title
+
+
+# ── document id ──────────────────────────────────────────────────────────────
+
+
+def partial_md5(path: str | os.PathLike) -> str:
+    """KOReader util.partialMD5: md5 over 1 KiB samples at 1024 << 2*i, i = -1..10.
+
+    LuaJIT's bit.lshift masks the shift count to 5 bits, so i = -1 shifts by 30
+    and overflows 32 bits to offset 0. Stops at the first empty read (EOF).
+    """
+    digest = hashlib.md5()
+    with open(path, "rb") as fh:
+        for i in range(-1, 11):
+            fh.seek(0 if i < 0 else 1024 << (2 * i))
+            sample = fh.read(1024)
+            if not sample:
+                break
+            digest.update(sample)
+    return digest.hexdigest()
+
+
+# Same algorithm in POSIX sh + busybox dd, for hashing files on the Kobo over SSH.
+DEVICE_HASH_SH = r"""
+find /mnt/onboard /mnt/onboard/.kobo/Kobo \( -path /mnt/onboard/.adds -o -path /mnt/onboard/.kobo \) -prune -o -type f \( -iname '*.pdf' -o -iname '*.epub' -o -iname '*.kepub.epub' \) -print |
+while IFS= read -r f; do
+  size=$(wc -c < "$f"); skip=0; i=0
+  h=$( (while [ $i -le 11 ]; do
+          [ $((skip * 1024)) -ge "$size" ] && break
+          dd if="$f" bs=1024 skip=$skip count=1 2>/dev/null
+          if [ $i -eq 0 ]; then skip=1; else skip=$((skip * 4)); fi; i=$((i + 1))
+        done) | md5sum | cut -d' ' -f1)
+  printf '%s\t%s\n' "$h" "$f"
+done
+"""
+
+
+# ── index (books.json) ───────────────────────────────────────────────────────
+
+
+def load_index() -> dict:
+    try:
+        return json.loads(books_json().read_text())
+    except (OSError, ValueError):
+        return {"version": 1, "books": {}}
+
+
+def save_index(index: dict) -> None:
+    books_json().parent.mkdir(parents=True, exist_ok=True)
+    tmp = books_json().with_suffix(".tmp")
+    tmp.write_text(json.dumps(index, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
+    tmp.replace(books_json())
+
+
+def calibre_books(library: Path) -> list[dict]:
+    """One row per (book, pdf/epub file) from Calibre's metadata.db, read-only."""
+    uri = f"file:{library / 'metadata.db'}?mode=ro&immutable=1"
+    db = sqlite3.connect(uri, uri=True)
+    rows = db.execute(
+        """
+        SELECT b.id, b.title, b.path, d.name, lower(d.format),
+               (SELECT group_concat(a.name, ' & ') FROM books_authors_link l
+                  JOIN authors a ON a.id = l.author WHERE l.book = b.id)
+        FROM books b JOIN data d ON d.book = b.id
+        WHERE lower(d.format) IN ('pdf', 'epub')
+        """
+    ).fetchall()
+    db.close()
+    out = []
+    for book_id, title, rel, name, fmt, author in rows:
+        out.append(
+            {
+                "calibre_id": book_id,
+                "title": title,
+                "author": author or "",
+                "file": library / rel / f"{name}.{fmt}",
+                "format": fmt,
+            }
+        )
+    return out
+
+
+def frontmatter(text: str) -> dict:
+    """Flat YAML frontmatter (scalars only) - enough for status/file_path/title."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    fields = {}
+    for line in text[3:end].splitlines():
+        m = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
+        if m:
+            fields[m.group(1)] = m.group(2).strip().strip("\"'")
+    return fields
+
+
+def source_notes(notes: Path) -> list[dict]:
+    out = []
+    folder = notes / SOURCES_DIR
+    for note in sorted(folder.glob("*.md")) if folder.is_dir() else []:
+        try:
+            fm = frontmatter(note.read_text(errors="replace")[:4000])
+        except OSError:
+            continue
+        out.append({"path": note, "stem": note.stem, "fm": fm})
+    return out
+
+
+def match_note(book: dict, notes: list[dict], sync: Path) -> Path | None:
+    rel = rel_to(book["file"], sync)
+    for n in notes:
+        if n["fm"].get("file_path") and n["fm"]["file_path"].strip("/") == rel:
+            return n["path"]
+    wanted = {normalize(book["title"]), normalize(short_title(book["title"]))}
+    for n in notes:
+        if normalize(n["stem"]) in wanted or normalize(n["fm"].get("title", "")) in wanted - {""}:
+            return n["path"]
+    return None
+
+
+def rel_to(path: Path | str, root: Path) -> str:
+    p, r = os.path.realpath(path), os.path.realpath(root)
+    return os.path.relpath(p, r) if p.startswith(r + os.sep) else str(path)
+
+
+def build_index(index: dict, library: Path, notes_root: Path, sync: Path) -> dict:
+    books = index.setdefault("books", {})
+    cache = {(b.get("path"), b.get("size"), b.get("mtime")): md5 for md5, b in books.items()}
+    notes = source_notes(notes_root)
+    seen = set()
+    for book in calibre_books(library):
+        f = book["file"]
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        rel = rel_to(f, sync)
+        key = (rel, st.st_size, int(st.st_mtime))
+        md5 = cache.get(key) or partial_md5(f)
+        seen.add(md5)
+        entry = books.setdefault(md5, {})
+        entry.update(
+            {
+                "calibre_id": book["calibre_id"],
+                "title": book["title"],
+                "author": book["author"],
+                "format": book["format"],
+                "path": rel,
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+                "partial_md5": md5,
+            }
+        )
+        note = match_note(book, notes, sync)
+        if note is not None:
+            entry["note"] = rel_to(note, notes_root)
+        elif entry.get("note") and not (notes_root / entry["note"]).exists():
+            entry.pop("note")
+    for md5, entry in books.items():  # Calibre file gone: keep the id, drop the path
+        if md5 not in seen and entry.get("calibre_id") and entry.get("path") and not (sync / entry["path"]).exists():
+            entry["missing"] = True
+    index["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    return index
+
+
+def parse_device_name(path: str) -> tuple[str, str]:
+    """'Author - Title (2019, Publisher) - libgen.li.pdf' -> (author, title)."""
+    name = re.sub(r"(\.kepub)?\.(pdf|epub)$", "", Path(path).name, flags=re.I)
+    name = re.sub(r"\s*-\s*libgen\.\w+(\(\d+\))?$", "", name)
+    author, _, title = name.partition(" - ")
+    if not title:
+        author, title = "", name
+    title = re.sub(r"\s*\([^()]*\)\s*$", "", title).replace("_", ":")
+    return author.strip(), title.strip()
+
+
+def map_device_files(index: dict, device_files: list[tuple[str, str]]) -> list[str]:
+    """Record Kobo copies: same hash -> on_device; else title/author -> device entry."""
+    books, report = index.setdefault("books", {}), []
+    by_title: dict[str, str] = {}
+    for md5, b in books.items():
+        if b.get("calibre_id") and b.get("path"):
+            by_title.setdefault(normalize(short_title(b.get("title", ""))), md5)
+    for md5, dev_path in device_files:
+        if md5 in books and books[md5].get("path"):
+            books[md5]["device_path"] = dev_path
+            report.append(f"hash  {md5}  {dev_path}")
+            continue
+        author, title = parse_device_name(dev_path)
+        match = by_title.get(normalize(short_title(title)))
+        entry = books.setdefault(md5, {})
+        entry.update({"partial_md5": md5, "device_path": dev_path, "title": entry.get("title") or title,
+                      "author": entry.get("author") or author, "device_only": True})
+        if match:
+            entry.update({"calibre_id": books[match]["calibre_id"], "match": "title", "calibre_md5": match})
+            if books[match].get("note"):
+                entry["note"] = books[match]["note"]
+            report.append(f"title {md5}  {dev_path}  -> calibre {books[match]['calibre_id']}")
+        else:
+            report.append(f"none  {md5}  {dev_path}")
+    return report
+
+
+def device_book_path(rel: Path) -> bool:
+    """Books on the Kobo: anywhere except hidden dirs, but .kobo/Kobo holds sideloads."""
+    parts = rel.parts[:-1]
+    if parts[:2] == (".kobo", "Kobo"):
+        return True
+    return not any(p.startswith(".") for p in parts)
+
+
+def cmd_index(args) -> int:
+    index = build_index(load_index(), CALIBRE, NOTES, SYNC)
+    device_files: list[tuple[str, str]] = []
+    if args.device_dir:
+        root = Path(args.device_dir)
+        for f in sorted(root.rglob("*")):
+            if f.is_file() and f.suffix.lower() in (".pdf", ".epub") and device_book_path(f.relative_to(root)):
+                device_files.append((partial_md5(f), "/mnt/onboard/" + str(f.relative_to(root))))
+    if args.device_ssh:
+        host, _, port = args.device_ssh.partition(":")
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        if args.ssh_key:
+            cmd += ["-i", args.ssh_key]
+        cmd += ["-p", port or "2222", host, DEVICE_HASH_SH]
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+        device_files += [tuple(line.split("\t", 1)) for line in out.splitlines() if "\t" in line]
+    for line in map_device_files(index, device_files):
+        print(line)
+    save_index(index)
+    n = len(index["books"])
+    with_note = sum(1 for b in index["books"].values() if b.get("note"))
+    print(f"books.json: {n} documents, {with_note} with a literature note -> {books_json()}")
+    return 0
+
+
+# ── kosync client ────────────────────────────────────────────────────────────
+
+
+def read_env(path: Path = None) -> dict:
+    path = path or KOSYNC_ENV
+    env = {}
+    try:
+        for line in path.read_text().splitlines():
+            m = re.match(r"^\s*([A-Z_][A-Z0-9_]*)=(.*)$", line)
+            if m:
+                env[m.group(1)] = m.group(2).strip().strip("\"'")
+    except OSError:
+        pass
+    return env
+
+
+def device_name() -> str:
+    return f"zathura@{socket.gethostname()}"
+
+
+class Kosync:
+    """KOReader Progress Sync protocol (koreader-sync-server)."""
+
+    def __init__(self, env: dict | None = None, timeout: float = 4.0):
+        env = env if env is not None else read_env()
+        self.user = env.get("KOSYNC_USER", "")
+        self.key = env.get("KOSYNC_KEY") or hashlib.md5(env.get("KOSYNC_PASSWORD", "").encode()).hexdigest()
+        self.urls = [u.rstrip("/") for u in (env.get("KOSYNC_URL"), env.get("KOSYNC_TAILNET_URL")) if u]
+        self.timeout = timeout
+        self._url = None
+        self.device_id = hashlib.md5(socket.gethostname().encode()).hexdigest().upper()
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.urls and self.user)
+
+    def _request(self, method: str, path: str, body: dict | None = None):
+        urls = [self._url] if self._url else self.urls
+        last = None
+        for url in urls:
+            req = urllib.request.Request(
+                url + path,
+                method=method,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers={"Accept": ACCEPT, "Content-Type": "application/json",
+                         "x-auth-user": self.user, "x-auth-key": self.key},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    self._url = url
+                    raw = resp.read()
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError:
+                self._url = url
+                raise
+            except (urllib.error.URLError, OSError) as exc:
+                last = exc
+        raise last or OSError("kosync not configured")
+
+    def get(self, doc: str) -> dict:
+        data = self._request("GET", f"/syncs/progress/{doc}")
+        return data if data.get("progress") is not None else {}
+
+    def put(self, doc: str, page: int, total: int | None, device: str | None = None) -> dict:
+        pct = round(page / total, 6) if total else 0.0
+        return self._request("PUT", "/syncs/progress", {
+            "document": doc, "progress": str(page), "percentage": pct,
+            "device": device or device_name(), "device_id": self.device_id,
+        })
+
+
+def remote_page(progress: dict) -> int | None:
+    """kosync progress for a PDF is the page number; EPUB xpointers have none."""
+    try:
+        return int(str(progress.get("progress", "")).strip())
+    except ValueError:
+        return None
+
+
+def should_push(page: int, total: int | None, remote: dict, my_device_id: str) -> str:
+    """'push', 'skip' (nothing new) or 'behind' (another device is further ahead)."""
+    rpage = remote_page(remote) if remote else None
+    if remote and rpage == page:
+        return "skip"
+    if not remote or remote.get("device_id") == my_device_id:
+        return "push"
+    rpct = float(remote.get("percentage") or 0)
+    pct = page / total if total else 0
+    ahead = (rpage is not None and rpage > page) or (rpage is None and rpct > pct + 0.001)
+    return "behind" if ahead else "push"
+
+
+# ── zathura (D-Bus via busctl) ───────────────────────────────────────────────
+
+ZPATH, ZIFACE = "/org/pwmt/zathura", "org.pwmt.zathura"
+
+
+def busctl(*args: str) -> str:
+    return subprocess.run(["busctl", "--user", *args], capture_output=True, text=True, timeout=5).stdout
+
+
+def zathura_instances() -> list[str]:
+    out = busctl("list", "--no-legend", "--no-pager")
+    return sorted({line.split()[0] for line in out.splitlines() if line.startswith("org.pwmt.zathura.PID-")})
+
+
+def parse_busctl_value(out: str):
+    out = out.strip()
+    if out.startswith("s "):
+        return json.loads(out[2:])
+    if out[:2] in ("u ", "i "):
+        return int(out[2:])
+    return None
+
+
+def zathura_state(name: str) -> dict | None:
+    try:
+        props = {p: parse_busctl_value(busctl("get-property", name, ZPATH, ZIFACE, p))
+                 for p in ("filename", "pagenumber", "numberofpages")}
+    except (subprocess.SubprocessError, ValueError):
+        return None
+    if not props["filename"] or props["pagenumber"] is None:
+        return None
+    return {"bus": name, "file": props["filename"], "page": props["pagenumber"] + 1,
+            "total": props["numberofpages"] or None,
+            "pid": int(name.rsplit("-", 1)[1]) if name.rsplit("-", 1)[1].isdigit() else None}
+
+
+def zathura_goto(name: str, page: int) -> None:
+    busctl("call", name, ZPATH, ZIFACE, "GotoPage", "u", str(max(page - 1, 0)))
+
+
+def lookup_by_file(index: dict, file: str) -> tuple[str | None, dict | None]:
+    rel = rel_to(file, SYNC)
+    for md5, b in index.get("books", {}).items():
+        if b.get("path") == rel:
+            return md5, b
+    return None, None
+
+
+def notify(summary: str, body: str = "", actions: list[str] | None = None) -> str:
+    if not shutil.which("notify-send"):
+        return ""
+    cmd = ["notify-send", "-a", "reading", summary, body]
+    for a in actions or []:
+        cmd[1:1] = ["-A", a]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120 if actions else 5).stdout.strip()
+    except subprocess.SubprocessError:
+        return ""
+
+
+class Watcher:
+    """zathura-kosync: push zathura pages to kosync, debounced and on close."""
+
+    def __init__(self, client: Kosync, debounce: float = 20.0, now=time.monotonic):
+        self.client, self.debounce, self.now = client, debounce, now
+        self.seen: dict[str, dict] = {}  # bus name -> {md5, page, total, changed, pushed, held}
+        self.index = load_index()
+        self.index_mtime = 0.0
+
+    def reload_index(self):
+        try:
+            m = books_json().stat().st_mtime
+        except OSError:
+            return
+        if m != self.index_mtime:
+            self.index, self.index_mtime = load_index(), m
+
+    def push(self, st: dict, final: bool = False) -> str:
+        try:
+            remote = self.client.get(st["md5"])
+        except (OSError, urllib.error.HTTPError) as exc:
+            print(f"kosync get failed: {exc}", file=sys.stderr)
+            return "error"
+        verdict = should_push(st["page"], st["total"], remote, self.client.device_id)
+        if verdict == "behind" and not st.get("forced"):
+            if not st.get("held"):
+                st["held"] = True
+                self._ask(st, remote)
+            return verdict
+        if verdict in ("push", "behind"):
+            try:
+                self.client.put(st["md5"], st["page"], st["total"])
+            except (OSError, urllib.error.HTTPError) as exc:
+                print(f"kosync put failed: {exc}", file=sys.stderr)
+                return "error"
+            print(f"pushed {st['title']!r} p.{st['page']}/{st['total']}{' (close)' if final else ''}", flush=True)
+            st["pushed"] = st["page"]
+            return "push"
+        st["pushed"] = st["page"]
+        return verdict
+
+    def _ask(self, st: dict, remote: dict):
+        """Never push backwards silently: ask, in the background."""
+        rpage = remote_page(remote)
+        title, dev = st["title"], remote.get("device") or "another device"
+
+        def ask():
+            choice = notify(f"{title}: {dev} is at p. {rpage}",
+                            f"zathura is at p. {st['page']}. Keep {dev}'s position?",
+                            ["goto=Jump to p. %s" % rpage, "push=Use zathura's page"])
+            if choice == "goto" and st.get("bus") and rpage:
+                zathura_goto(st["bus"], rpage)
+            elif choice == "push":
+                st["forced"] = True
+                st["held"] = False
+                st["changed"] = self.now() - self.debounce
+
+        import threading
+        threading.Thread(target=ask, daemon=True).start()
+
+    def on_open(self, st: dict):
+        """Pull on open: jump forward if another device is ahead."""
+        try:
+            remote = self.client.get(st["md5"])
+        except (OSError, urllib.error.HTTPError):
+            return
+        rpage = remote_page(remote)
+        if remote and remote.get("device_id") != self.client.device_id and rpage and rpage > st["page"]:
+            zathura_goto(st["bus"], rpage)
+            st["page"] = st["pushed"] = rpage
+            notify(f"{st['title']}", f"Jumped to p. {rpage} from {remote.get('device', 'kosync')}")
+
+    def tick(self, states: list[dict]):
+        self.reload_index()
+        now = self.now()
+        current = {s["bus"]: s for s in states}
+        for bus, st in list(self.seen.items()):
+            if bus not in current:  # closed: final push of the last known page
+                if st["md5"] and st["page"] != st.get("pushed"):
+                    self.push(st, final=True)
+                del self.seen[bus]
+        for bus, z in current.items():
+            st = self.seen.get(bus)
+            if st is None or st["file"] != z["file"]:
+                md5, book = lookup_by_file(self.index, z["file"])
+                st = {"bus": bus, "file": z["file"], "md5": md5, "title": (book or {}).get("title", ""),
+                      "page": z["page"], "total": z["total"], "changed": now, "pushed": z["page"]}
+                self.seen[bus] = st
+                if md5:
+                    self.on_open(st)
+                continue
+            if not st["md5"]:
+                continue
+            if z["page"] != st["page"]:
+                st.update(page=z["page"], total=z["total"] or st["total"], changed=now)
+            if st["page"] != st.get("pushed") and now - st["changed"] >= self.debounce:
+                self.push(st)
+
+
+def cmd_watch(args) -> int:
+    client = Kosync()
+    if not client.configured:
+        print(f"kosync not configured ({KOSYNC_ENV} missing)", file=sys.stderr)
+        return 1
+    watcher = Watcher(client, debounce=args.debounce)
+    while True:
+        states = [s for s in (zathura_state(n) for n in zathura_instances()) if s]
+        watcher.tick(states)
+        time.sleep(args.interval)
+
+
+# ── launcher support ─────────────────────────────────────────────────────────
+
+
+def zathura_local_pages() -> dict[str, tuple[int, str]]:
+    """realpath -> (1-based page, last time) from zathura's own history."""
+    if not ZATHURA_DB.exists():
+        return {}
+    try:
+        db = sqlite3.connect(f"file:{ZATHURA_DB}?mode=ro", uri=True)
+        rows = db.execute("SELECT file, page, time FROM fileinfo").fetchall()
+        db.close()
+    except sqlite3.Error:
+        return {}
+    return {os.path.realpath(f): (int(p or 0) + 1, str(t or "")) for f, p, t in rows}
+
+
+def note_status(note_rel: str | None) -> str:
+    if not note_rel:
+        return ""
+    try:
+        return frontmatter((NOTES / note_rel).read_text(errors="replace")[:4000]).get("status", "")
+    except OSError:
+        return ""
+
+
+def candidates(index: dict) -> dict[str, dict]:
+    local = zathura_local_pages()
+    out = {}
+    for md5, b in index.get("books", {}).items():
+        if not b.get("path") and not b.get("device_path"):
+            continue
+        real = os.path.realpath(SYNC / b["path"]) if b.get("path") else None
+        why = []
+        if note_status(b.get("note")) == "reading":
+            why.append("note")
+        if b.get("device_path"):
+            why.append("kobo")
+        if real and real in local:
+            why.append("zathura")
+        if why:
+            out[md5] = dict(b, local=local.get(real) if real else None)
+    return out
+
+
+def ago(ts: float | None) -> str:
+    if not ts:
+        return ""
+    s = max(0, time.time() - ts)
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= n:
+            return f"{int(s // n)}{unit} ago"
+    return "just now"
+
+
+def cmd_list(args) -> int:
+    index = load_index()
+    cands = candidates(index)
+    client = Kosync()
+    remote: dict[str, dict] = {}
+    if client.configured and cands:
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            futs = {pool.submit(client.get, md5): md5 for md5 in cands}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    remote[futs[fut]] = fut.result()
+                except Exception:  # noqa: BLE001 - offline kosync still lists local books
+                    remote[futs[fut]] = {}
+    rows = []
+    for md5, b in cands.items():
+        r = remote.get(md5) or {}
+        lpage, ltime = b.get("local") or (None, "")
+        rpage = remote_page(r)
+        page = max([p for p in (rpage, lpage) if p] or [0])
+        pct = float(r.get("percentage") or 0)
+        ts = r.get("timestamp") or 0
+        try:
+            lts = dt.datetime.fromisoformat(ltime).replace(tzinfo=dt.timezone.utc).timestamp() if ltime else 0
+        except ValueError:
+            lts = 0
+        when = max(ts, lts)
+        dev = r.get("device") if ts >= lts else "zathura"
+        bits = [f"p. {page}" if page else "", f"{pct:.0%}" if pct else "", dev or "", ago(when)]
+        label = f"{b.get('title', '?')}  ·  " + "  ·  ".join(x for x in bits if x)
+        if not b.get("note"):
+            label += "  ·  (no note)"
+        rows.append((when, md5, label))
+    for _, md5, label in sorted(rows, reverse=True):
+        print(f"{md5}\t{label}")
+    return 0
+
+
+def cmd_resolve(args) -> int:
+    index = load_index()
+    b = index.get("books", {}).get(args.id)
+    if not b:
+        print(f"unknown book id {args.id}", file=sys.stderr)
+        return 1
+    if b.get("device_only") and b.get("calibre_md5"):
+        b = dict(index["books"][b["calibre_md5"]], note=b.get("note") or index["books"][b["calibre_md5"]].get("note"))
+    file = SYNC / b["path"] if b.get("path") else None
+    lpage = (zathura_local_pages().get(os.path.realpath(file)) or (None,))[0] if file else None
+    rpage, rdev = None, None
+    client = Kosync()
+    if client.configured:
+        try:
+            r = client.get(args.id)
+            rpage, rdev = remote_page(r), r.get("device")
+        except Exception:  # noqa: BLE001
+            pass
+    page = max([p for p in (rpage, lpage) if p] or [1])
+    print(json.dumps({"id": args.id, "title": b.get("title"), "file": str(file) if file else None,
+                      "page": page, "kosync_page": rpage, "kosync_device": rdev, "local_page": lpage,
+                      "note": str(NOTES / b["note"]) if b.get("note") else None}))
+    return 0
+
+
+def cmd_progress(args) -> int:
+    client = Kosync()
+    if args.action == "get":
+        print(json.dumps(client.get(args.id)))
+        return 0
+    remote = client.get(args.id)
+    verdict = should_push(args.page, args.total, remote, client.device_id)
+    if verdict == "behind" and not args.force:
+        print(f"refusing to move backwards: {remote.get('device')} is at {remote.get('progress')} (use --force)", file=sys.stderr)
+        return 3
+    client.put(args.id, args.page, args.total, args.device)
+    print(json.dumps(client.get(args.id)))
+    return 0
+
+
+def zathura_for_note(note: str | None) -> dict | None:
+    states = [s for s in (zathura_state(n) for n in zathura_instances()) if s]
+    if not states:
+        return None
+    if note:
+        want = None
+        real_note = os.path.realpath(note)
+        for b in load_index().get("books", {}).values():
+            if b.get("note") and os.path.realpath(NOTES / b["note"]) == real_note and b.get("path"):
+                want = os.path.realpath(SYNC / b["path"])
+                break
+        fp = frontmatter(Path(note).read_text(errors="replace")[:4000]).get("file_path") if Path(note).exists() else None
+        if fp and not want:
+            want = os.path.realpath(SYNC / fp)
+        if want:  # the note names its book: only that zathura will do
+            return next((s for s in states if os.path.realpath(s["file"]) == want), None)
+    return states[0] if len(states) == 1 else None
+
+
+def cmd_page(args) -> int:
+    s = zathura_for_note(args.note)
+    if not s:
+        print("no zathura showing this note's book", file=sys.stderr)
+        return 1
+    print(s["page"])
+    return 0
+
+
+def cmd_goto(args) -> int:
+    s = zathura_for_note(args.note)
+    if not s:
+        print("no zathura showing this note's book", file=sys.stderr)
+        return 1
+    zathura_goto(s["bus"], args.page)
+    return 0
+
+
+def cmd_search(args) -> int:
+    q = normalize(args.query)
+    for md5, b in sorted(load_index().get("books", {}).items(), key=lambda kv: kv[1].get("title", "")):
+        if b.get("path") and (q in normalize(b.get("title", "")) or q in normalize(b.get("author", ""))):
+            print(f"{md5}\t{b.get('title')}\t{b.get('author', '')}")
+    return 0
+
+
+# ── literature notes ─────────────────────────────────────────────────────────
+
+
+def safe_filename(title: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r'[\\/:#*?"<>|\[\]^]', " ", title)).strip()[:120]
+
+
+def render_literature_note(template: str, title: str, book: dict) -> str:
+    """zettel-literature, with the Templater prompts answered from Calibre.
+
+    Progress fields stay empty: reading progress lives in kosync, not in notes.
+    """
+    body = template.split("\n---", 1)[1].split("\n", 1)[1] if template.startswith("---") else template
+    body = body.replace("<% tp.file.title %>", title)
+    note_id = re.sub(r"[^a-zA-Z0-9-]", "", re.sub(r"\s+", "-", title)).lower()
+    fm = [
+        "---",
+        f"id: {note_id}",
+        f"created: {dt.datetime.now():%Y-%m-%d %H:%M}",
+        "tags:",
+        "  - zettel/literature",
+        "type: book",
+        f"title: {json.dumps(title, ensure_ascii=False)}",
+        f"author: {json.dumps(book.get('author', ''), ensure_ascii=False)}",
+        "year:",
+        "status: reading",
+        f"anki_deck: \"Zettelkasten::Sources::{title}\"",
+        f"file_path: {json.dumps(book.get('path', ''), ensure_ascii=False)}",
+        "current_page:",
+        "total_pages:",
+        "last_read:",
+        "---",
+    ]
+    return "\n".join(fm) + "\n" + body
+
+
+def cmd_note(args) -> int:
+    index = load_index()
+    b = index.get("books", {}).get(args.id)
+    if not b:
+        print(f"unknown book id {args.id}", file=sys.stderr)
+        return 1
+    if b.get("note") and (NOTES / b["note"]).exists():
+        print(NOTES / b["note"])
+        return 0
+    title = short_title(b.get("title", "")) or "Untitled"
+    path = NOTES / SOURCES_DIR / f"{safe_filename(title)}.md"
+    if not path.exists():
+        template = (NOTES / TEMPLATE).read_text()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_literature_note(template, title, b))
+    b["note"] = rel_to(path, NOTES)
+    save_index(index)
+    print(path)
+    return 0
+
+
+# ── ingest: highlights -> inbox cards ────────────────────────────────────────
+
+
+def load_ledger() -> dict:
+    try:
+        return json.loads((STATE / "ingest-state.json").read_text())
+    except (OSError, ValueError):
+        return {"sources": {}}
+
+
+def save_ledger(ledger: dict) -> None:
+    p = STATE / "ingest-state.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(ledger, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
+    tmp.replace(p)
+
+
+def koreader_sources(folder: Path, index: dict, report: dict) -> list[dict]:
+    """AnnotationSync files: <partial_md5>.json = {key: KOReader annotation}."""
+    out = []
+    for f in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        if f.name.endswith(".progress.json") or not re.fullmatch(r"[0-9a-f]{32}\.json", f.name):
+            continue
+        md5 = f.stem
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            report["errors"].append(f"unreadable {f.name}")
+            continue
+        book = index.get("books", {}).get(md5)
+        if not book:
+            report["unmapped"].append(md5)
+            continue
+        hls = []
+        for key, a in (data.items() if isinstance(data, dict) else []):
+            if not isinstance(a, dict) or a.get("deleted") or not a.get("pos0") or not (a.get("text") or "").strip():
+                continue
+            hls.append({"id": f"koreader:{md5}:{key}", "text": a["text"].strip(), "note": (a.get("note") or "").strip(),
+                        "page": a.get("pageno") or (a.get("page") if isinstance(a.get("page"), int) else None),
+                        "chapter": a.get("chapter") or "", "date": str(a.get("datetime") or "")[:10]})
+        ref = f"calibre:{book['calibre_id']}" if book.get("calibre_id") else f"koreader:{md5}"
+        out.append({"key": ref, "kind": "book", "ref": ref, "title": book.get("title") or md5,
+                    "author": book.get("author", ""), "note": book.get("note"), "device": "Kobo (KOReader)", "highlights": hls})
+    return out
+
+
+def nickel_sources(db_path: Path, index: dict, report: dict) -> list[dict]:
+    """One-off backfill from a KoboReader.sqlite snapshot (stock Nickel highlights)."""
+    db = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    rows = db.execute(
+        """
+        SELECT b.BookmarkID, b.VolumeID, b.Text, b.Annotation, b.DateCreated, b.ChapterProgress,
+               c.Title, c.Attribution
+        FROM Bookmark b LEFT JOIN content c ON c.ContentID = b.VolumeID AND c.ContentType = 6
+        WHERE b.Type = 'highlight' AND coalesce(b.Hidden, 'false') != 'true'
+        ORDER BY b.VolumeID, b.DateCreated
+        """
+    ).fetchall()
+    db.close()
+    by_title = {}
+    for md5, b in index.get("books", {}).items():
+        if b.get("calibre_id") and b.get("path"):
+            by_title.setdefault(normalize(short_title(b.get("title", ""))), b)
+    groups: dict[str, dict] = {}
+    for bid, vol, text, note, created, chap, title, attribution in rows:
+        dev_author, dev_title = parse_device_name(vol)
+        title = title or dev_title
+        text = re.sub(r"\s+", " ", text or "").strip()
+        if len(text) < MIN_HIGHLIGHT_CHARS and not (note or "").strip():
+            report["junk"].append(f"{short_title(title)}: {text!r}")
+            continue
+        book = by_title.get(normalize(short_title(title)))
+        ref = f"calibre:{book['calibre_id']}" if book else "kobo:" + Path(vol).name
+        g = groups.setdefault(ref, {"key": ref, "kind": "book", "ref": ref, "title": (book or {}).get("title") or title,
+                                    "author": (book or {}).get("author") or attribution or dev_author,
+                                    "note": (book or {}).get("note"), "device": "Kobo (Nickel)", "highlights": []})
+        g["highlights"].append({"id": f"nickel:{bid}", "text": text, "note": (note or "").strip(), "page": None,
+                                "chapter": "", "date": (created or "")[:10]})
+    return list(groups.values())
+
+
+def snipd_sources(folder: Path, report: dict) -> list[dict]:
+    """Snipd Official plugin output: one Markdown file per episode. Cards link to it."""
+    out = []
+    for f in sorted(folder.rglob("*.md")) if folder.is_dir() else []:
+        text = f.read_text(errors="replace")
+        fm = frontmatter(text)
+        title = fm.get("title") or fm.get("episode_title") or f.stem
+        ref = fm.get("episode_url") or fm.get("url") or fm.get("snipd_url") or f"snipd:{f.stem}"
+        snips = re.findall(r"^#{2,4} .+$", text, flags=re.M) or [f.stem]
+        digest = hashlib.sha1(text.encode()).hexdigest()[:12]
+        link = rel_to(f, NOTES)
+        out.append({"key": f"snipd:{f.stem}", "kind": "podcast", "ref": ref, "title": title, "author": fm.get("show", ""),
+                    "note": None, "device": "Snipd", "link": link,
+                    "highlights": [{"id": f"snipd:{f.stem}:{digest}", "text": f"{len(snips)} snip(s) - see [[{link[:-3]}]]",
+                                    "note": "", "page": None, "chapter": "", "date": today()}]})
+    return out
+
+
+def card_name(title: str) -> str:
+    return f"Reading - {safe_filename(short_title(title))}.md"
+
+
+def render_highlight(h: dict) -> str:
+    lines = ["> " + line for line in h["text"].splitlines()] or [">"]
+    where = []
+    if h.get("page"):
+        where.append(f"p. {h['page']}")
+    if h.get("chapter"):
+        where.append(h["chapter"])
+    if h.get("date"):
+        where.append(h["date"])
+    out = "\n".join(lines)
+    if where:
+        out += "\n> — " + " · ".join(where)
+    if h.get("note"):
+        out += "\n\n" + h["note"]
+    return out + f"\n<!-- hl:{h['id']} -->\n"
+
+
+def new_card(src: dict, hls: list[dict]) -> str:
+    last = max((h.get("date") or "" for h in hls), default="") or today()
+    fm = ["---", "type: capture", f"created: {today()}", "author: agent", "tags: [inbox]",
+          f"source_kind: {src['kind']}", f"source_ref: {json.dumps(src['ref'], ensure_ascii=False)}",
+          f"highlights: {len(hls)}", f"last_highlight: {last}", "---", ""]
+    head = [f"# {src['title']}", ""]
+    meta = []
+    if src.get("author"):
+        meta.append(src["author"])
+    if src.get("note"):
+        meta.append(f"literature note: [[{Path(src['note']).with_suffix('').as_posix()}]]")
+    if src.get("link"):
+        meta.append(f"snips: [[{src['link'][:-3]}]]")
+    if meta:
+        head += [" · ".join(meta), ""]
+    return "\n".join(fm + head) + section(src, hls)
+
+
+def section(src: dict, hls: list[dict]) -> str:
+    n = len(hls)
+    out = f"\n## {today()} — {n} new highlight{'s' if n != 1 else ''} ({src['device']})\n\n"
+    return out + "\n".join(render_highlight(h) for h in hls)
+
+
+def bump_frontmatter(text: str, added: int, last: str) -> str:
+    """Update only the tool-owned counters, line by line; leave everything else byte-identical."""
+    if not text.startswith("---"):
+        return text
+    end = text.find("\n---", 3)
+    head, rest = text[:end], text[end:]
+
+    def inc(m):
+        try:
+            return f"{m.group(1)}{int(m.group(2)) + added}"
+        except ValueError:
+            return m.group(0)
+
+    head = re.sub(r"(?m)^(highlights:\s*)(\d+)\s*$", inc, head)
+    head = re.sub(r"(?m)^(last_highlight:\s*)(\S*)\s*$", lambda m: m.group(1) + max(m.group(2), last), head)
+    return head + rest
+
+
+def ingest(sources: list[dict], inbox: Path, ledger: dict, dry_run: bool = False) -> dict:
+    stats = {"new_cards": [], "appended": {}, "highlights": 0}
+    for src in sources:
+        state = ledger["sources"].setdefault(src["key"], {"ids": [], "card": None})
+        known = set(state["ids"])
+        card = Path(state["card"]) if state.get("card") else None
+        if card and card.exists():  # markers in the card count too (survive a lost ledger)
+            known |= set(re.findall(r"<!-- hl:(\S+) -->", card.read_text(errors="replace")))
+        if card and card.parent != inbox:  # processed/moved out of the inbox: never write there
+            card = None
+        fresh, seen = [], set()
+        for h in src["highlights"]:
+            if h["id"] not in known and h["id"] not in seen:
+                fresh.append(h)
+                seen.add(h["id"])
+        if not fresh:
+            continue
+        stats["highlights"] += len(fresh)
+        last = max((h.get("date") or "" for h in fresh), default="") or today()
+        if card is not None and card.exists():
+            if not dry_run:
+                text = card.read_text()
+                text = bump_frontmatter(text, len(fresh), last)
+                if not text.endswith("\n"):
+                    text += "\n"
+                card.write_text(text + section(src, fresh))
+            stats["appended"][card.name] = len(fresh)
+        else:
+            card = inbox / card_name(src["title"])
+            n = 2
+            while card.exists():  # a different source (or a processed card) owns that name
+                text = card.read_text(errors="replace")
+                if f"source_ref: {json.dumps(src['ref'], ensure_ascii=False)}" in text:
+                    break
+                card = inbox / card_name(f"{short_title(src['title'])} ({n})")
+                n += 1
+            if card.exists():
+                if not dry_run:
+                    text = bump_frontmatter(card.read_text(), len(fresh), last)
+                    card.write_text(text.rstrip("\n") + "\n" + section(src, fresh))
+                stats["appended"][card.name] = len(fresh)
+            else:
+                if not dry_run:
+                    inbox.mkdir(parents=True, exist_ok=True)
+                    card.write_text(new_card(src, fresh))
+                stats["new_cards"].append(card.name)
+        state["card"] = str(card)
+        state["ids"] = sorted(known | {h["id"] for h in fresh})
+    return stats
+
+
+def cmd_ingest(args) -> int:
+    index = load_index()
+    report = {"junk": [], "unmapped": [], "errors": []}
+    sources = koreader_sources(STATE / "koreader", index, report)
+    if args.nickel:
+        sources += nickel_sources(Path(args.nickel), index, report)
+    for folder in (STATE / "snipd", NOTES / "_raw" / "reading" / "snipd"):
+        sources += snipd_sources(folder, report)
+    ledger = load_ledger()
+    stats = ingest(sources, NOTES / INBOX_DIR, ledger, dry_run=args.dry_run)
+    if not args.dry_run:
+        save_ledger(ledger)
+    summary = {"time": dt.datetime.now().isoformat(timespec="seconds"), "dry_run": args.dry_run,
+               "sources": len(sources), **stats, **report}
+    if not args.dry_run:
+        with open(STATE / "ingest.log", "a") as log:
+            log.write(json.dumps(summary, ensure_ascii=False) + "\n")
+    print(f"sources {len(sources)}  new cards {len(stats['new_cards'])}  "
+          f"appended {sum(stats['appended'].values())} to {len(stats['appended'])} card(s)  "
+          f"new highlights {stats['highlights']}  junk dropped {len(report['junk'])}  unmapped {len(report['unmapped'])}")
+    for name in stats["new_cards"]:
+        print(f"  new card: {name}")
+    for line in report["junk"]:
+        print(f"  junk (<{MIN_HIGHLIGHT_CHARS} chars): {line}")
+    for md5 in report["unmapped"]:
+        print(f"  unmapped KOReader document {md5} (run `reading index --device-ssh ...`)")
+    for e in report["errors"]:
+        print(f"  error: {e}")
+    return 0
+
+
+# ── zathura history repair ───────────────────────────────────────────────────
+
+
+def cmd_fix_zathura_history(args) -> int:
+    if not ZATHURA_DB.exists():
+        return 0
+    index = load_index()
+    by_tail = {}
+    for b in index.get("books", {}).values():
+        if b.get("path"):
+            by_tail[Path(b["path"]).parent.name + "/" + Path(b["path"]).name] = SYNC / b["path"]
+    db = sqlite3.connect(ZATHURA_DB)
+    rows = db.execute("SELECT file FROM fileinfo").fetchall()
+    fixes = []
+    for (f,) in rows:
+        if os.path.exists(f):
+            continue
+        tail = Path(f).parent.name + "/" + Path(f).name
+        new = by_tail.get(tail)
+        if new and new.exists():
+            fixes.append((f, str(new)))
+    if fixes and not args.dry_run:
+        shutil.copy2(ZATHURA_DB, ZATHURA_DB.with_suffix(f".sqlite.bak-{dt.date.today():%Y%m%d}"))
+        for old, new in fixes:
+            db.execute("UPDATE OR IGNORE fileinfo SET file=? WHERE file=?", (new, old))
+            db.execute("UPDATE OR IGNORE bookmarks SET file=? WHERE file=?", (new, old))
+            db.execute("UPDATE jumplist SET file=? WHERE file=?", (new, old))
+        db.commit()
+    db.close()
+    for old, new in fixes:
+        print(f"{old}\n  -> {new}")
+    print(f"{len(fixes)} zathura entr{'y' if len(fixes) == 1 else 'ies'} {'would be ' if args.dry_run else ''}repointed")
+    return 0
+
+
+def cmd_md5(args) -> int:
+    for f in args.files:
+        print(f"{partial_md5(f)}  {f}")
+    return 0
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(prog="reading", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("md5"); s.add_argument("files", nargs="+"); s.set_defaults(fn=cmd_md5)
+    s = sub.add_parser("index")
+    s.add_argument("--device-dir"); s.add_argument("--device-ssh", help="root@<kobo-ip>[:2222]")
+    s.add_argument("--ssh-key", default=str(HOME / ".ssh" / "kobo-koreader")); s.set_defaults(fn=cmd_index)
+    s = sub.add_parser("list"); s.set_defaults(fn=cmd_list)
+    s = sub.add_parser("resolve"); s.add_argument("id"); s.set_defaults(fn=cmd_resolve)
+    s = sub.add_parser("progress"); s.add_argument("action", choices=["get", "put"]); s.add_argument("id")
+    s.add_argument("page", nargs="?", type=int); s.add_argument("--total", type=int)
+    s.add_argument("--device"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_progress)
+    s = sub.add_parser("watch"); s.add_argument("--interval", type=float, default=3.0)
+    s.add_argument("--debounce", type=float, default=20.0); s.set_defaults(fn=cmd_watch)
+    s = sub.add_parser("page"); s.add_argument("--note"); s.set_defaults(fn=cmd_page)
+    s = sub.add_parser("goto"); s.add_argument("page", type=int); s.add_argument("--note"); s.set_defaults(fn=cmd_goto)
+    s = sub.add_parser("search"); s.add_argument("query"); s.set_defaults(fn=cmd_search)
+    s = sub.add_parser("note"); s.add_argument("action", choices=["new"]); s.add_argument("id"); s.set_defaults(fn=cmd_note)
+    s = sub.add_parser("ingest"); s.add_argument("--nickel"); s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_ingest)
+    s = sub.add_parser("fix-zathura-history"); s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_fix_zathura_history)
+    args = p.parse_args(argv)
+    if args.cmd == "progress" and args.action == "put" and args.page is None:
+        p.error("progress put needs PAGE")
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

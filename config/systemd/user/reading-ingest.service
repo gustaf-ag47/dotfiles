@@ -1,0 +1,8 @@
+[Unit]
+Description=reading-ingest: refresh books.json and turn new highlights into inbox cards
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/test -x %h/.local/bin/reading
+ExecStart=%h/.local/bin/reading index
+ExecStart=%h/.local/bin/reading ingest
