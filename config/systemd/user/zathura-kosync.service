@@ -1,0 +1,16 @@
+[Unit]
+Description=zathura-kosync: push zathura reading positions to kosync (bin/reading watch)
+
+[Service]
+Type=simple
+# Polls zathura's D-Bus props (filename/pagenumber); pushes debounced (~20 s)
+# and on close, only for books in $SYNC/state/reading/books.json. Credentials
+# are read from ~/.config/kosync/env inside the process, never put in argv.
+ExecCondition=/usr/bin/test -x %h/.local/bin/reading
+ExecCondition=/usr/bin/test -r %h/.config/kosync/env
+ExecStart=%h/.local/bin/reading watch
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

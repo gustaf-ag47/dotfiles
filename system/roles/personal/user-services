@@ -1,0 +1,3 @@
+# role: personal -- systemd --user units enabled on every machine with this role.
+# Format: <enable|disable> <unit>
+enable zathura-kosync.service

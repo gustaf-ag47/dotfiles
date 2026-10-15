@@ -1,0 +1,10 @@
+[Unit]
+Description=reading-ingest every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=reading-ingest.service
+
+[Install]
+WantedBy=timers.target

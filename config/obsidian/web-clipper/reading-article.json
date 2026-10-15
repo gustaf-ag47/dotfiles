@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "0.1.0",
+  "name": "Reading - Article",
+  "behavior": "create",
+  "noteNameFormat": "Reading - {{title|safe_name}}",
+  "path": "00 Inbox",
+  "noteContentFormat": "# {{title}}\n\n{{author}} · [{{domain}}]({{url}})\n\n## {{date|date:\"YYYY-MM-DD\"}} — {{highlights|length}} highlights (Web Clipper)\n\n{{highlights|map:item => item.text|join:\"\\n\\n\"|blockquote}}\n",
+  "properties": [
+    { "name": "type", "value": "capture", "type": "text" },
+    { "name": "created", "value": "{{date|date:\"YYYY-MM-DD\"}}", "type": "date" },
+    { "name": "author", "value": "agent", "type": "text" },
+    { "name": "tags", "value": "inbox", "type": "multitext" },
+    { "name": "source_kind", "value": "article", "type": "text" },
+    { "name": "source_ref", "value": "{{url}}", "type": "text" },
+    { "name": "highlights", "value": "{{highlights|length}}", "type": "number" },
+    { "name": "last_highlight", "value": "{{date|date:\"YYYY-MM-DD\"}}", "type": "date" }
+  ],
+  "triggers": []
+}

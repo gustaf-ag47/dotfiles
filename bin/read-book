@@ -1,0 +1,73 @@
+#!/bin/bash
+# read-book - pick a book you're reading; open it in zathura (left) at the furthest
+# page (kosync or zathura's own), with its literature note in nvim (right).
+#
+# Usage:
+#   read-book     picker (fzf in a terminal, wofi/rofi from a keybind)
+#   read-book ID  open book ID (partial MD5 from $SYNC/state/reading/books.json)
+#
+# Books in progress = literature notes with status: reading, books on the
+# Kobo, and books zathura has opened. Data and progress: `reading` (bin/reading).
+set -euo pipefail
+
+NOTES="${NOTES:-${SYNC:-$HOME/sync}/Vault}"
+WS="name:reading"
+
+pick() {
+	local prompt="$1"
+	if [[ -t 0 && -t 1 ]]; then
+		fzf --prompt="$prompt> " --with-nth=2.. --delimiter=$'\t' --no-sort
+	elif [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wofi >/dev/null; then
+		wofi --dmenu -i --prompt="$prompt" --cache-file=/dev/null
+	else
+		rofi -dmenu -i -p "$prompt"
+	fi
+}
+
+say() { notify-send -a read-book "read-book" "$1" 2>/dev/null || echo "$1" >&2; }
+
+id="${1:-}"
+if [[ -z "$id" ]]; then
+	list="$(reading list)"
+	[[ -z "$list" ]] && { say "No books in progress (status: reading notes, Kobo or zathura history)."; exit 0; }
+	if [[ -t 0 && -t 1 ]]; then
+		id="$(pick Read <<<"$list" | cut -f1)" || exit 0
+	else
+		sel="$(cut -f2 <<<"$list" | pick Read)" || exit 0
+		id="$(awk -F'\t' -v s="$sel" '$2 == s { print $1; exit }' <<<"$list")"
+	fi
+	[[ -z "$id" ]] && exit 0
+fi
+
+info="$(reading resolve "$id")"
+file="$(jq -r '.file // empty' <<<"$info")"
+page="$(jq -r '.page // 1' <<<"$info")"
+note="$(jq -r '.note // empty' <<<"$info")"
+[[ -n "$file" && -f "$file" ]] || { say "No local file for $(jq -r .title <<<"$info")"; exit 1; }
+
+if [[ -z "$note" ]]; then
+	choice="$(printf 'Create literature note\nOpen without a note\n' | pick "No note")" || exit 0
+	[[ "$choice" == Create* ]] && note="$(reading note new "$id")"
+fi
+
+open_zathura() { zathura -P "$page" "$file" >/dev/null 2>&1 & }
+open_note() { (cd "$NOTES" && terminal --class reading-notes -e nvim "$note" >/dev/null 2>&1 &); }
+
+if ! command -v hyprctl >/dev/null || [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+	open_zathura
+	[[ -n "$note" ]] && open_note
+	exit 0
+fi
+
+hyprctl -q dispatch workspace "$WS"
+before="$(hyprctl clients -j | jq '[.[] | select(.class == "org.pwmt.zathura")] | length')"
+hyprctl -q dispatch exec "[workspace $WS] zathura -P $page $(printf '%q' "$file")"
+for _ in $(seq 50); do  # wait for the zathura window so the note splits to its right
+	now="$(hyprctl clients -j | jq '[.[] | select(.class == "org.pwmt.zathura")] | length')"
+	((now > before)) && break
+	sleep 0.1
+done
+if [[ -n "$note" ]]; then
+	hyprctl -q dispatch layoutmsg preselect r
+	hyprctl -q dispatch exec "[workspace $WS] cd $(printf '%q' "$NOTES") && terminal --class reading-notes -e nvim $(printf '%q' "$note")"
+fi
