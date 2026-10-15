@@ -857,9 +857,10 @@ def nickel_sources(db_path: Path, index: dict, report: dict) -> list[dict]:
     rows = db.execute(
         """
         SELECT b.BookmarkID, b.VolumeID, b.Text, b.Annotation, b.DateCreated, b.ChapterProgress,
-               c.Title, c.Attribution
+               c.Title, c.Attribution, b.Type,
+               (SELECT s.Title FROM content s WHERE s.ContentID = b.ContentID AND s.ContentID != b.VolumeID)
         FROM Bookmark b LEFT JOIN content c ON c.ContentID = b.VolumeID AND c.ContentType = 6
-        WHERE b.Type = 'highlight' AND coalesce(b.Hidden, 'false') != 'true'
+        WHERE b.Type IN ('highlight', 'dogear') AND coalesce(b.Hidden, 'false') != 'true'
         ORDER BY b.VolumeID, b.DateCreated
         """
     ).fetchall()
@@ -869,11 +870,16 @@ def nickel_sources(db_path: Path, index: dict, report: dict) -> list[dict]:
         if b.get("calibre_id") and b.get("path"):
             by_title.setdefault(normalize(short_title(b.get("title", ""))), b)
     groups: dict[str, dict] = {}
-    for bid, vol, text, note, created, chap, title, attribution in rows:
+    for bid, vol, text, note, created, chap, title, attribution, kind, section in rows:
         dev_author, dev_title = parse_device_name(vol)
         title = title or dev_title
         text = re.sub(r"\s+", " ", text or "").strip()
-        if len(text) < MIN_HIGHLIGHT_CHARS and not (note or "").strip():
+        if kind == "dogear":  # a page bookmark: "come back here", no text
+            where = section or "bookmarked page"
+            if chap:
+                where += f" ({round(float(chap) * 100)}% in)"
+            text = f"Bookmarked: {where}"
+        elif len(text) < MIN_HIGHLIGHT_CHARS and not (note or "").strip():
             report["junk"].append(f"{short_title(title)}: {text!r}")
             continue
         book = by_title.get(normalize(short_title(title)))
@@ -882,7 +888,7 @@ def nickel_sources(db_path: Path, index: dict, report: dict) -> list[dict]:
                                     "author": (book or {}).get("author") or attribution or dev_author,
                                     "note": (book or {}).get("note"), "device": "Kobo (Nickel)", "highlights": []})
         g["highlights"].append({"id": f"nickel:{bid}", "text": text, "note": (note or "").strip(), "page": None,
-                                "chapter": "", "date": (created or "")[:10]})
+                                "chapter": "", "date": (created or "")[:10], "bookmark": kind == "dogear"})
     return list(groups.values())
 
 
@@ -904,11 +910,22 @@ def snipd_sources(folder: Path, report: dict) -> list[dict]:
     return out
 
 
+def card_title(title: str) -> str:
+    """Main title without the subtitle, unless that leaves something too generic ("Unit Testing")."""
+    short = short_title(title)
+    if len(short.split()) >= 3 or short == title:
+        return short
+    return re.sub(r"[:_]\s", " - ", title, count=1).strip()
+
+
 def card_name(title: str) -> str:
-    return f"Reading - {safe_filename(short_title(title))}.md"
+    return f"Reading - {safe_filename(card_title(title))}.md"
 
 
 def render_highlight(h: dict) -> str:
+    if h.get("bookmark"):
+        date = f" · {h['date']}" if h.get("date") else ""
+        return f"- {h['text']}{date}\n<!-- hl:{h['id']} -->\n"
     lines = ["> " + line for line in h["text"].splitlines()] or [">"]
     where = []
     if h.get("page"):
@@ -1001,7 +1018,7 @@ def ingest(sources: list[dict], inbox: Path, ledger: dict, dry_run: bool = False
                 text = card.read_text(errors="replace")
                 if f"source_ref: {json.dumps(src['ref'], ensure_ascii=False)}" in text:
                     break
-                card = inbox / card_name(f"{short_title(src['title'])} ({n})")
+                card = inbox / f"Reading - {safe_filename(card_title(src['title']))} ({n}).md"
                 n += 1
             if card.exists():
                 if not dry_run:

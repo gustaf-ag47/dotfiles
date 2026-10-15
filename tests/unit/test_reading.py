@@ -279,6 +279,15 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(stats["new_cards"], ["Reading - Code That Fits in Your Head (2).md"])
 
 
+class CardNameTest(unittest.TestCase):
+    def test_subtitle_kept_only_when_main_title_is_generic(self):
+        self.assertEqual(reading.card_name("Code That Fits in Your Head: Heuristics for Software Engineering"),
+                         "Reading - Code That Fits in Your Head.md")
+        self.assertEqual(reading.card_name("Unit Testing: Principles, Practices, and Patterns"),
+                         "Reading - Unit Testing - Principles, Practices, and Patterns.md")
+        self.assertEqual(reading.card_name("Refactoring"), "Reading - Refactoring.md")
+
+
 class SourcesTest(unittest.TestCase):
     def test_koreader_annotation_sync_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -304,20 +313,26 @@ class SourcesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp, "k.sqlite")
             db = sqlite3.connect(db_path)
-            db.execute("CREATE TABLE Bookmark (BookmarkID, VolumeID, Text, Annotation, DateCreated, ChapterProgress, Type, Hidden)")
+            db.execute("CREATE TABLE Bookmark (BookmarkID, VolumeID, ContentID, Text, Annotation, DateCreated, "
+                       "ChapterProgress, Type, Hidden)")
             db.execute("CREATE TABLE content (ContentID, ContentType, Title, Attribution)")
             vol = "file:///mnt/onboard/.kobo/Kobo/Mark Seemann - Code That Fits in Your Head (2021, AW).epub"
-            db.executemany("INSERT INTO Bookmark VALUES (?,?,?,?,?,?,?,?)", [
-                ("b1", vol, "a long enough highlight here", None, "2026-02-20T10:00:00", 0.1, "highlight", "false"),
-                ("b2", vol, "you may", None, "2026-02-20T10:00:00", 0.1, "highlight", "false"),
-                ("b3", vol, None, None, "2026-02-20T10:00:00", 0.1, "dogear", "false"),
+            ch4 = vol + "#(29)OEBPS/C05_ch04.xhtml#ch4lev3"
+            db.executemany("INSERT INTO Bookmark VALUES (?,?,?,?,?,?,?,?,?)", [
+                ("b1", vol, ch4, "a long enough highlight here", None, "2026-02-20T10:00:00", 0.1, "highlight", "false"),
+                ("b2", vol, ch4, "you may", None, "2026-02-20T10:00:00", 0.1, "highlight", "false"),
+                ("b3", vol, ch4, None, None, "2026-02-21T10:00:00", 0.244, "dogear", "false"),
             ])
             db.execute("INSERT INTO content VALUES (?, 6, 'Code That Fits in Your Head', 'Mark Seemann')", (vol,))
+            db.execute("INSERT INTO content VALUES (?, 9, '4.3 Outside-in', '')", (ch4,))
             db.commit()
             db.close()
             report = {"junk": [], "unmapped": [], "errors": []}
             [s] = reading.nickel_sources(db_path, {"books": {}}, report)
-            self.assertEqual([h["id"] for h in s["highlights"]], ["nickel:b1"])
+            self.assertEqual([h["id"] for h in s["highlights"]], ["nickel:b1", "nickel:b3"])
+            self.assertEqual(s["highlights"][1]["text"], "Bookmarked: 4.3 Outside-in (24% in)")
+            self.assertEqual(reading.render_highlight(s["highlights"][1]),
+                             "- Bookmarked: 4.3 Outside-in (24% in) · 2026-02-21\n<!-- hl:nickel:b3 -->\n")
             self.assertEqual(len(report["junk"]), 1)
 
 
