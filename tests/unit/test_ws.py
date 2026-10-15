@@ -140,6 +140,55 @@ class CmdUpCreatesProjectSessionTest(unittest.TestCase):
             )
 
 
+PORTABLE = """
+env:
+  SYNC: /home/skrubben-user/sync
+  NOTES: $SYNC/Vault
+  WORKTREES: /mnt/skrubben/scratch
+areas:
+  - name: dotfiles
+    session: Dotfiles
+    cwd: $SYNC/src/dotfiles
+    runs: ${NOTES}/Dotfiles/agent-runs
+  - name: scratch
+    session: Scratch
+    cwd: ~/scratch
+    runs: $UNSET_WS_VAR/runs
+"""
+
+
+class PortablePathsTest(unittest.TestCase):
+    """workspace.yaml is synced to every machine; paths must resolve per host."""
+
+    def load(self, environ):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workspace.yaml"
+            path.write_text(PORTABLE)
+            with mock.patch.dict(os.environ, environ, clear=True):
+                return ws.load_workspace(path)
+
+    def test_host_environment_wins_over_file_env(self):
+        doc = self.load({"HOME": "/home/laptop", "SYNC": "/home/laptop/sync",
+                         "NOTES": "/home/laptop/sync/Vault"})
+        self.assertEqual(doc["env"]["SYNC"], "/home/laptop/sync")
+        route = ws.resolve_route(doc, "dotfiles")
+        self.assertEqual(route["cwd"], "/home/laptop/sync/src/dotfiles")
+        self.assertEqual(route["runs"], "/home/laptop/sync/Vault/Dotfiles/agent-runs")
+
+    def test_file_env_is_the_fallback(self):
+        doc = self.load({"HOME": "/home/other"})
+        self.assertEqual(doc["env"]["NOTES"], "/home/skrubben-user/sync/Vault")
+        self.assertEqual(doc["env"]["WORKTREES"], "/mnt/skrubben/scratch")
+        self.assertEqual(ws.resolve_route(doc, "dotfiles")["cwd"],
+                         "/home/skrubben-user/sync/src/dotfiles")
+
+    def test_tilde_expands_and_unknown_vars_stay_visible(self):
+        route = ws.resolve_route(self.load({"HOME": "/home/laptop"}), "scratch")
+        self.assertEqual(route["cwd"], "/home/laptop/scratch")
+        # Never blank an unknown variable into a path rooted at '/'.
+        self.assertEqual(route["runs"], "$UNSET_WS_VAR/runs")
+
+
 class RouteCliTest(unittest.TestCase):
     def test_route_subcommand_prints_four_fields(self):
         with tempfile.TemporaryDirectory() as tmp:

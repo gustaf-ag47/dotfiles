@@ -20,11 +20,34 @@ DEFAULT_WORKSPACE_YAML = Path(
 REQUIRED_ENV = ["SYNC", "NOTES", "DOTFILES", "SRC", "WORKTREES"]
 
 
+VAR_REF = re.compile(r"\$(?:\{(\w+)\}|(\w+))")
+
+
+def expand_paths(value, env):
+    """Expand ~ and $VAR/${VAR} in every string; unknown variables stay as-is."""
+    if isinstance(value, dict):
+        return {key: expand_paths(item, env) for key, item in value.items()}
+    if isinstance(value, list):
+        return [expand_paths(item, env) for item in value]
+    if not isinstance(value, str):
+        return value
+    value = VAR_REF.sub(lambda m: env.get(m.group(1) or m.group(2), m.group(0)), value)
+    return os.path.expanduser(value) if value.startswith("~") else value
+
+
 def load_workspace(path):
     if not path.exists():
         raise SystemExit(f"ws: workspace file not found: {path}")
     doc = ws_yaml.load_path(path)
     doc.setdefault("env", {})
+    # workspace.yaml is synced to every machine, so the host's environment
+    # (.zshenv: SYNC, NOTES, ...) wins and the file's env is only a fallback.
+    env = {key: str(val) for key, val in os.environ.items()}
+    for key, val in doc["env"].items():
+        if not os.environ.get(key):
+            env[key] = expand_paths(str(val), env)
+    doc["env"] = {key: env[key] for key in doc["env"]}
+    doc = {key: (val if key == "env" else expand_paths(val, env)) for key, val in doc.items()}
     doc.setdefault("areas", [])
     doc.setdefault("projects", [])
     doc.setdefault("repos", [])
