@@ -4,6 +4,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -308,6 +309,40 @@ class SourcesTest(unittest.TestCase):
             self.assertEqual([h["id"] for h in s["highlights"]], [f"koreader:{md5}:k1"])
             self.assertEqual(s["highlights"][0]["page"], 46)
             self.assertEqual(report["unmapped"], ["ffffffffffffffffffffffffffffffff"])
+
+    def test_koreader_page_bookmark_becomes_inbox_bookmark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            md5 = "e404b03cf1f174617e4f3a354cec9b07"
+            (folder / f"{md5}.json").write_text(json.dumps({
+                "BOOKMARK|/body/DocFragment[6]/body/h1/text().0": {
+                    "chapter": "HOW TO READ THE TEXT", "text": "in HOW TO READ THE TEXT",
+                    "datetime": "2026-10-15 17:15:59", "pageno": 6, "page": "/body/DocFragment[6]/body/h1/text().0"},
+                "k9": {"text": "no position, not a bookmark key", "pageno": 2},
+            }))
+            report = {"junk": [], "unmapped": [], "errors": []}
+            index = {"books": {md5: {"title": "Meditations", "author": "Descartes", "device_only": True}}}
+            [s] = reading.koreader_sources(folder, index, report)
+            self.assertEqual(s["ref"], f"koreader:{md5}")
+            [h] = s["highlights"]
+            self.assertTrue(h["bookmark"])
+            self.assertEqual(h["text"], "Bookmarked: HOW TO READ THE TEXT (p. 6)")
+            self.assertEqual(reading.render_highlight(h),
+                             f"- Bookmarked: HOW TO READ THE TEXT (p. 6) · 2026-10-15\n<!-- hl:koreader:{md5}:BOOKMARK|/body/DocFragment[6]/body/h1/text().0 -->\n")
+
+    def test_auto_device_index_only_when_a_device_answers(self):
+        self.assertFalse(reading.auto_device_index({"books": {}}, []))
+        self.assertFalse(reading.ssh_reachable("root@127.0.0.1:1", timeout=0.2))
+        old, old_dir = reading.read_env, os.environ.get("READING_DEVICE_DIR")
+        reading.read_env = lambda: {"READING_DEVICE_SSH": "root@127.0.0.1:1"}
+        os.environ["READING_DEVICE_DIR"] = "/nonexistent/KOBOeReader"
+        try:
+            self.assertFalse(reading.auto_device_index({"books": {}}, ["e404b03cf1f174617e4f3a354cec9b07"]))
+        finally:
+            reading.read_env = old
+            os.environ.pop("READING_DEVICE_DIR", None)
+            if old_dir is not None:
+                os.environ["READING_DEVICE_DIR"] = old_dir
 
     def test_nickel_drops_short_fragments(self):
         with tempfile.TemporaryDirectory() as tmp:

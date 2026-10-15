@@ -1,0 +1,10 @@
+[Unit]
+Description=reading: index + ingest whenever the Kobo is plugged in as USB storage
+
+[Path]
+# udisks creates/removes /run/media/<user>/KOBOeReader on plug/unplug; the service checks it is the Kobo
+PathChanged=/run/media/%u
+Unit=reading-kobo-usb.service
+
+[Install]
+WantedBy=default.target

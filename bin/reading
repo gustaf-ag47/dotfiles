@@ -15,7 +15,10 @@ Subcommands:
   search QUERY                 Calibre books matching QUERY (TSV: id, title, author)
   note new ID                  create the zettel-literature note for book ID, print its path
   ingest [--nickel DB] [--dry-run]
-                               highlights -> one inbox card per source in "$NOTES/00 Inbox"
+                               highlights -> one inbox card per source in "$NOTES/00 Inbox";
+                               unknown KOReader documents are mapped by hashing the Kobo over USB
+                               (mounted at /run/media/$USER/KOBOeReader) or over SSH when
+                               READING_DEVICE_SSH (root@<ip>:2222, in ~/.config/kosync/env) answers
   fix-zathura-history          repoint stale zathura resume entries at the Calibre library
 
 Paths come from $SYNC/$NOTES; kosync credentials from ~/.config/kosync/env (never printed).
@@ -98,6 +101,7 @@ DEVICE_HASH_SH = r"""
 find /mnt/onboard /mnt/onboard/.kobo/Kobo \( -path /mnt/onboard/.adds -o -path /mnt/onboard/.kobo \) -prune -o -type f \( -iname '*.pdf' -o -iname '*.epub' -o -iname '*.kepub.epub' \) -print |
 while IFS= read -r f; do
   size=$(wc -c < "$f"); skip=0; i=0
+  [ "$size" -gt 0 ] || continue
   h=$( (while [ $i -le 11 ]; do
           [ $((skip * 1024)) -ge "$size" ] && break
           dd if="$f" bs=1024 skip=$skip count=1 2>/dev/null
@@ -208,6 +212,8 @@ def build_index(index: dict, library: Path, notes_root: Path, sync: Path) -> dic
             st = f.stat()
         except OSError:
             continue
+        if st.st_size == 0:  # a broken copy: every empty file has the same hash
+            continue
         rel = rel_to(f, sync)
         key = (rel, st.st_size, int(st.st_mtime))
         md5 = cache.get(key) or partial_md5(f)
@@ -289,7 +295,7 @@ def cmd_index(args) -> int:
     if args.device_dir:
         root = Path(args.device_dir)
         for f in sorted(root.rglob("*")):
-            if f.is_file() and f.suffix.lower() in (".pdf", ".epub") and device_book_path(f.relative_to(root)):
+            if f.is_file() and f.suffix.lower() in (".pdf", ".epub") and f.stat().st_size and device_book_path(f.relative_to(root)):
                 device_files.append((partial_md5(f), "/mnt/onboard/" + str(f.relative_to(root))))
     if args.device_ssh:
         host, _, port = args.device_ssh.partition(":")
@@ -840,11 +846,23 @@ def koreader_sources(folder: Path, index: dict, report: dict) -> list[dict]:
             continue
         hls = []
         for key, a in (data.items() if isinstance(data, dict) else []):
-            if not isinstance(a, dict) or a.get("deleted") or not a.get("pos0") or not (a.get("text") or "").strip():
+            if not isinstance(a, dict) or a.get("deleted"):
                 continue
-            hls.append({"id": f"koreader:{md5}:{key}", "text": a["text"].strip(), "note": (a.get("note") or "").strip(),
-                        "page": a.get("pageno") or (a.get("page") if isinstance(a.get("page"), int) else None),
-                        "chapter": a.get("chapter") or "", "date": str(a.get("datetime") or "")[:10]})
+            page = a.get("pageno") or (a.get("page") if isinstance(a.get("page"), int) else None)
+            h = {"id": f"koreader:{md5}:{key}", "note": (a.get("note") or "").strip(), "page": page,
+                 "chapter": a.get("chapter") or "", "date": str(a.get("datetime") or "")[:10]}
+            if not a.get("pos0"):  # a page bookmark (KOReader's dog-ear): "come back here", no selected text
+                if not str(key).startswith("BOOKMARK|"):
+                    continue
+                where = a.get("chapter") or "bookmarked page"
+                if page:
+                    where += f" (p. {page})"
+                h.update({"text": f"Bookmarked: {where}", "bookmark": True})
+            elif not (a.get("text") or "").strip():
+                continue
+            else:
+                h["text"] = a["text"].strip()
+            hls.append(h)
         ref = f"calibre:{book['calibre_id']}" if book.get("calibre_id") else f"koreader:{md5}"
         out.append({"key": ref, "kind": "book", "ref": ref, "title": book.get("title") or md5,
                     "author": book.get("author", ""), "note": book.get("note"), "device": "Kobo (KOReader)", "highlights": hls})
@@ -1035,10 +1053,51 @@ def ingest(sources: list[dict], inbox: Path, ledger: dict, dry_run: bool = False
     return stats
 
 
+def usb_device_dir() -> Path | None:
+    """The Kobo mounted as USB mass storage (udisks), if it is plugged in right now."""
+    p = Path(os.environ.get("READING_DEVICE_DIR") or Path("/run/media") / os.environ.get("USER", "") / "KOBOeReader")
+    return p if (p / ".kobo").is_dir() else None
+
+
+def ssh_reachable(spec: str, timeout: float = 2.0) -> bool:
+    host, _, port = spec.partition(":")
+    host = host.rpartition("@")[2]
+    try:
+        with socket.create_connection((host, int(port or 2222)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def auto_device_index(index: dict, unmapped: list[str]) -> bool:
+    """Map unknown KOReader documents without a manual `reading index --device-...`:
+    hash the Kobo over USB if it is mounted, else over SSH if READING_DEVICE_SSH answers on its port."""
+    if not unmapped:
+        return False
+    env = read_env()
+    usb, ssh = usb_device_dir(), env.get("READING_DEVICE_SSH", "")
+    if usb is None and not (ssh and ssh_reachable(ssh)):
+        return False
+    args = argparse.Namespace(device_dir=str(usb) if usb else None, device_ssh=None if usb else ssh,
+                              ssh_key=env.get("READING_DEVICE_SSH_KEY") or str(HOME / ".ssh" / "kobo-koreader"))
+    print(f"indexing the Kobo over {'USB ' + str(usb) if usb else 'SSH ' + ssh} to map {len(unmapped)} document(s)")
+    try:
+        cmd_index(args)
+    except (subprocess.CalledProcessError, OSError) as e:
+        print(f"  device index failed: {e}")
+        return False
+    index.clear()
+    index.update(load_index())
+    return True
+
+
 def cmd_ingest(args) -> int:
     index = load_index()
     report = {"junk": [], "unmapped": [], "errors": []}
     sources = koreader_sources(STATE / "koreader", index, report)
+    if report["unmapped"] and not args.dry_run and auto_device_index(index, report["unmapped"]):
+        report = {"junk": [], "unmapped": [], "errors": []}
+        sources = koreader_sources(STATE / "koreader", index, report)
     if args.nickel:
         sources += nickel_sources(Path(args.nickel), index, report)
     for folder in (STATE / "snipd", NOTES / "_raw" / "reading" / "snipd"):
@@ -1060,7 +1119,7 @@ def cmd_ingest(args) -> int:
     for line in report["junk"]:
         print(f"  junk (<{MIN_HIGHLIGHT_CHARS} chars): {line}")
     for md5 in report["unmapped"]:
-        print(f"  unmapped KOReader document {md5} (run `reading index --device-ssh ...`)")
+        print(f"  unmapped KOReader document {md5} (plug the Kobo in over USB, or set READING_DEVICE_SSH and run `reading ingest`)")
     for e in report["errors"]:
         print(f"  error: {e}")
     return 0

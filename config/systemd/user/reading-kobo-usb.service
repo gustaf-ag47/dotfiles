@@ -1,0 +1,9 @@
+[Unit]
+Description=reading: map the Kobo's books over USB, then ingest highlights
+ConditionPathExists=/run/media/%u/KOBOeReader/.kobo/Kobo
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/test -x %h/.local/bin/reading
+ExecStart=%h/.local/bin/reading index --device-dir /run/media/%u/KOBOeReader
+ExecStart=%h/.local/bin/reading ingest
