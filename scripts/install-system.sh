@@ -13,6 +13,11 @@
 # Each layer may hold:
 #   packages      one pacman package per line ('#' comments)
 #   packages.aur  AUR packages, built with paru as the invoking (sudo) user
+#   packages.select  (hosts/<profile>/ only, written by bin/pkgpick) one entry
+#              per line: "-pkg" drops a package a ROLE brings (common, gpu
+#              and host packages always stay: they are the hardware layer);
+#              "+pkg" adds one from a role not in PROFILE_ROLES (installed
+#              from the AUR if that role lists it in packages.aur)
 #   services   "<enable|disable|mask> <unit>" per line
 #   files/     a tree mirrored onto /. Mode comes from the repo (+x -> 0755,
 #              else 0644). The token @DOTFILES@ is replaced with the repo path.
@@ -128,6 +133,43 @@ if command -v pacman >/dev/null 2>&1; then
 fi
 is_installed() { [ -n "${INSTALLED[$1]+x}" ]; }
 
+# --- per-host package selection (hosts/<profile>/packages.select) -------------
+declare -A SEL_OFF=() SEL_ON=()
+SELECT_FILE="$SYSTEM_DIR/hosts/$PROFILE/packages.select"
+while IFS= read -r line; do
+	case "$line" in
+	-?*) SEL_OFF[${line#-}]=1 ;;
+	+?*) SEL_ON[${line#+}]=1 ;;
+	*) echo "warning: ${SELECT_FILE#"$DOTFILES/"}: ignoring '$line' (want +pkg or -pkg)" >&2 ;;
+	esac
+done < <(list_entries "$SELECT_FILE")
+is_role_layer() { [[ $1 == "$SYSTEM_DIR/roles/"* ]]; }
+# effective_entries <layer> <packages|packages.aur>: the layer's list minus
+# what packages.select deselects (role layers only).
+effective_entries() {
+	local p
+	while IFS= read -r p; do
+		is_role_layer "$1" && [ -n "${SEL_OFF[$p]+x}" ] && continue
+		printf '%s\n' "$p"
+	done < <(list_entries "$1/$2")
+	return 0
+}
+# selected_extra <packages|packages.aur>: the "+pkg" picks of that kind.
+declare -A ROLE_AUR=()
+for f in "$SYSTEM_DIR"/roles/*/packages.aur; do
+	while IFS= read -r p; do ROLE_AUR[$p]=1; done < <(list_entries "$f")
+done
+selected_extra() {
+	local p
+	for p in "${!SEL_ON[@]}"; do
+		if [ -n "${ROLE_AUR[$p]+x}" ]; then
+			[ "$1" = packages.aur ] && printf '%s\n' "$p"
+		else
+			[ "$1" = packages ] && printf '%s\n' "$p"
+		fi
+	done | sort || true # never fail the caller (set -e + pipefail)
+}
+
 # --- review modes (read-only, no root) ----------------------------------------
 if [ "$MODE" = list ]; then
 	echo "Packages for profile $PROFILE (roles: ${PROFILE_ROLES:-none}, gpu: ${PROFILE_GPU:-none})"
@@ -135,25 +177,43 @@ if [ "$MODE" = list ]; then
 	total=0
 	for l in "${layers[@]}"; do
 		for kind in packages packages.aur; do
-			mapfile -t pk < <(list_entries "$l/$kind")
-			[ ${#pk[@]} -gt 0 ] || continue
+			mapfile -t pk < <(effective_entries "$l" "$kind")
+			dropped=$(($(list_entries "$l/$kind" | wc -l) - ${#pk[@]}))
+			[ ${#pk[@]} -gt 0 ] || [ "$dropped" -gt 0 ] || continue
 			total=$((total + ${#pk[@]}))
 			echo
-			printf '%s/%s (%d)\n' "${l#"$SYSTEM_DIR/"}" "$kind" "${#pk[@]}"
+			printf '%s/%s (%d)' "${l#"$SYSTEM_DIR/"}" "$kind" "${#pk[@]}"
+			[ "$dropped" -gt 0 ] && printf ', %d deselected in packages.select' "$dropped"
+			echo
 			head -1 "$l/$kind" | grep '^#' | sed 's/^/  /' || true
 			for p in "${pk[@]}"; do
 				if is_installed "$p"; then printf '  [x] %s\n' "$p"; else printf '  [ ] %s\n' "$p"; fi
 			done
 		done
 	done
+	for kind in packages packages.aur; do
+		mapfile -t pk < <(selected_extra "$kind")
+		[ ${#pk[@]} -gt 0 ] || continue
+		total=$((total + ${#pk[@]}))
+		echo
+		printf 'hosts/%s/packages.select +%s (%d)\n' "$PROFILE" "$kind" "${#pk[@]}"
+		for p in "${pk[@]}"; do
+			if is_installed "$p"; then printf '  [x] %s\n' "$p"; else printf '  [ ] %s\n' "$p"; fi
+		done
+	done
 	echo
-	echo "$total packages. Edit system/roles/<role>/packages*, or PROFILE_ROLES in profiles/$PROFILE.env."
+	echo "$total packages. Pick interactively: pkgpick $PROFILE (or edit PROFILE_ROLES in profiles/$PROFILE.env)."
 	exit 0
 fi
 
 if [ "$MODE" = undeclared ]; then
 	command -v pacman >/dev/null 2>&1 || { echo "needs pacman" >&2; exit 1; }
-	declared="$(for l in "${layers[@]}"; do list_entries "$l/packages"; list_entries "$l/packages.aur"; done | sort -u)"
+	declared="$(
+		for l in "${layers[@]}"; do effective_entries "$l" packages; effective_entries "$l" packages.aur; done
+		selected_extra packages
+		selected_extra packages.aur
+	)"
+	declared="$(printf '%s\n' "$declared" | sort -u)"
 	mapfile -t extra < <(comm -23 <(pacman -Qeq | sort) <(printf '%s\n' "$declared"))
 	echo "Explicitly installed on this machine but declared by no layer of profile $PROFILE:"
 	if [ ${#extra[@]} -eq 0 ]; then
@@ -193,8 +253,9 @@ run() {
 # --- packages ----------------------------------------------------------------
 packages=()
 for l in "${layers[@]}"; do
-	while IFS= read -r p; do packages+=("$p"); done < <(list_entries "$l/packages")
+	while IFS= read -r p; do packages+=("$p"); done < <(effective_entries "$l" packages)
 done
+while IFS= read -r p; do packages+=("$p"); done < <(selected_extra packages)
 
 echo "-- packages (${#packages[@]} declared)"
 if [ ${#packages[@]} -gt 0 ]; then
@@ -229,8 +290,9 @@ fi
 # --- AUR packages ------------------------------------------------------------
 aur=()
 for l in "${layers[@]}"; do
-	while IFS= read -r p; do aur+=("$p"); done < <(list_entries "$l/packages.aur")
+	while IFS= read -r p; do aur+=("$p"); done < <(effective_entries "$l" packages.aur)
 done
+while IFS= read -r p; do aur+=("$p"); done < <(selected_extra packages.aur)
 echo "-- AUR packages (${#aur[@]} declared)"
 if [ ${#aur[@]} -gt 0 ]; then
 	aur_missing=()
