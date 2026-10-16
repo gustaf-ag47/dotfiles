@@ -31,6 +31,9 @@ import tempfile
 from pathlib import Path
 
 DOTFILES = Path(os.environ.get("DOTFILES") or Path(__file__).resolve().parents[1])
+# Roles every machine gets: their row cannot be switched off (single packages
+# inside them still can).
+LOCKED_ROLES = {"base"}
 SELECT_HEADER = (
     "# Managed by `pkgpick {host}` (edit by hand if you like).\n"
     "# -pkg drops a package an enabled role brings; +pkg adds one from a role\n"
@@ -90,6 +93,9 @@ class State:
     def __init__(self, roles, enabled, off=(), on=()):
         self.roles = roles  # {role: [(pkg, kind)]}
         self.enabled = [r for r in enabled if r in roles]
+        for r in sorted(LOCKED_ROLES & set(roles)):
+            if r not in self.enabled:
+                self.enabled.insert(0, r)
         self.off, self.on = set(off), set(on)
         self.normalize()
 
@@ -119,6 +125,8 @@ class State:
         self.normalize()
 
     def toggle_role(self, role):
+        if role in LOCKED_ROLES:
+            return  # always on
         if role in self.enabled:
             self.enabled.remove(role)
         else:
@@ -148,7 +156,8 @@ def render(state):
     for role, pkgs in state.roles.items():
         on = role in state.enabled
         n_on = sum(1 for p, _ in pkgs if state.is_on(p))
-        lines.append(f"role\t{role}\t{'■' if on else '□'} {role.upper():<10} {n_on}/{len(pkgs)} on")
+        lock = "  (always on)" if role in LOCKED_ROLES else ""
+        lines.append(f"role\t{role}\t{'■' if on else '□'} {role.upper():<10} {n_on}/{len(pkgs)} on{lock}")
         for p, kind in pkgs:
             mark = "✔" if state.is_on(p) else "·"
             note = ""

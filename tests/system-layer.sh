@@ -121,8 +121,8 @@ for env in profiles/*.env; do
 done
 
 echo "-- review modes"
-check "--list prints every layer of xps14" \
-	bash -c "bash scripts/install-system.sh --profile xps14 --list | grep -q '^roles/personal/packages.aur'"
+check "--list prints every layer of arch" \
+	bash -c "bash scripts/install-system.sh --profile arch --list | grep -q '^roles/personal/packages.aur'"
 check "--list counts packages" \
 	bash -c "bash scripts/install-system.sh --profile xps14 --list | grep -qE '^[0-9]+ packages\\.'"
 if command -v pacman >/dev/null 2>&1; then
