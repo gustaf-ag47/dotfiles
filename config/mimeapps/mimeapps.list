@@ -30,4 +30,3 @@ x-scheme-handler/mailto=org.mozilla.Thunderbird.desktop;
 x-scheme-handler/mid=org.mozilla.Thunderbird.desktop;
 message/rfc822=org.mozilla.Thunderbird.desktop;
 x-scheme-handler/net.thunderbird=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/slack=slack.desktop;
