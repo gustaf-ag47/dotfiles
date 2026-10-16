@@ -257,6 +257,10 @@ link_config "$DOTFILES/config/gui/dunst" "$XDG_CONFIG_HOME/dunst"
 link_config "$DOTFILES/config/gui/alacritty" "$XDG_CONFIG_HOME/alacritty"
 link_config "$DOTFILES/config/gui/zathura" "$XDG_CONFIG_HOME/zathura"
 link_config "$DOTFILES/config/gui/gtk-3.0" "$XDG_CONFIG_HOME/gtk-3.0"
+link_config "$DOTFILES/config/gui/gtk-4.0" "$XDG_CONFIG_HOME/gtk-4.0"
+link_config "$DOTFILES/config/fontconfig" "$XDG_CONFIG_HOME/fontconfig"
+link_config "$DOTFILES/config/qt5ct" "$XDG_CONFIG_HOME/qt5ct"
+link_config "$DOTFILES/config/qt6ct" "$XDG_CONFIG_HOME/qt6ct"
 link_config "$DOTFILES/config/gui/gtk-2.0" "$XDG_CONFIG_HOME/gtk-2.0"
 # GTK2 reads ~/.gtkrc-2.0 by default, not ~/.config/gtk-2.0/gtkrc.
 link_config "$DOTFILES/config/gui/gtk-2.0/gtkrc" "$HOME/.gtkrc-2.0"
@@ -436,6 +440,9 @@ fi
 if command -v pi >/dev/null 2>&1; then
     "$DOTFILES/bin/pi-setup" --apply || echo "  warning: pi-setup reported problems" >&2
 fi
+
+# Desktop theme into gsettings (GTK4/libadwaita, portals). No-op without a session bus.
+"$DOTFILES/bin/theme-apply" || true
 
 # Last of the link steps: every ExecStart target now exists.
 enable_user_units

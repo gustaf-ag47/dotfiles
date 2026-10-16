@@ -1,0 +1,31 @@
+#!/bin/bash
+# Push the desktop theme (Tokyo Night: see config/gui/gtk-3.0/settings.ini) into
+# the places that do not read settings.ini: gsettings/dconf (GTK4, libadwaita,
+# xdg-desktop-portal-gtk's dark-mode answer) and the Hyprland cursor.
+# Run at Hyprland start (exec-once) and by scripts/install.sh. Idempotent.
+set -euo pipefail
+
+THEME="Tokyonight-Dark"
+ICONS="Papirus-Dark"
+CURSOR="Bibata-Modern-Ice"
+CURSOR_SIZE=24
+FONT="Inter 11"
+MONO="JetBrainsMono Nerd Font 11"
+
+if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}${XDG_RUNTIME_DIR:-}" ]; then
+	s() { gsettings set org.gnome.desktop.interface "$@" 2>/dev/null || true; }
+	s gtk-theme "$THEME"
+	s icon-theme "$ICONS"
+	s cursor-theme "$CURSOR"
+	s cursor-size "$CURSOR_SIZE"
+	s font-name "$FONT"
+	s document-font-name "$FONT"
+	s monospace-font-name "$MONO"
+	s color-scheme "prefer-dark"
+	s font-antialiasing "rgba"
+	s font-hinting "slight"
+fi
+
+if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null 2>&1; then
+	hyprctl setcursor "$CURSOR" "$CURSOR_SIZE" >/dev/null 2>&1 || true
+fi

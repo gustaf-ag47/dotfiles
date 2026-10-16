@@ -1,7 +1,7 @@
-gtk-theme-name="Adwaita-dark"
-gtk-icon-theme-name="Adwaita"
-gtk-font-name="JetBrainsMono Nerd Font 11"
-gtk-cursor-theme-name="Adwaita"
+gtk-theme-name="Tokyonight-Dark"
+gtk-icon-theme-name="Papirus-Dark"
+gtk-font-name="Inter 11"
+gtk-cursor-theme-name="Bibata-Modern-Ice"
 gtk-cursor-theme-size=24
 
 gtk-toolbar-style=GTK_TOOLBAR_BOTH
@@ -14,5 +14,5 @@ gtk-enable-input-feedback-sounds=0
 
 gtk-xft-antialias=1
 gtk-xft-hinting=1
-gtk-xft-hintstyle="hintfull"
+gtk-xft-hintstyle="hintslight"
 gtk-xft-rgba="rgb"
