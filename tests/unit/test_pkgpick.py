@@ -54,6 +54,14 @@ class StateTest(unittest.TestCase):
         st.toggle_role("personal")
         self.assertFalse(st.is_on("docker"))
 
+    def test_base_role_is_always_on(self):
+        st = pkgpick.State(ROLES, ["dev"])  # profile forgot base
+        self.assertIn("base", st.enabled)
+        st.toggle_role("base")
+        self.assertIn("base", st.enabled)
+        st.toggle_pkg("zsh")  # single packages inside base can still go
+        self.assertFalse(st.is_on("zsh"))
+
     def test_effective_is_sorted_and_deduplicated(self):
         st = pkgpick.State(ROLES, ["dev", "personal"])
         names = [p for p, _ in st.effective()]
@@ -70,6 +78,10 @@ class RoundTripAndInstallSystemTest(unittest.TestCase):
         for d in ("system", "profiles", "scripts"):
             shutil.copytree(ROOT / d, self.tmp / d)
         self.host = "xps14"
+        # Fixed roles for the test, independent of what the real profile picks.
+        prof = self.tmp / "profiles" / f"{self.host}.env"
+        prof.write_text(re.sub(r"^PROFILE_ROLES=.*$", 'PROFILE_ROLES="base desktop dev work personal"',
+                               prof.read_text(), flags=re.M))
 
     def tearDown(self):
         shutil.rmtree(self.tmp)

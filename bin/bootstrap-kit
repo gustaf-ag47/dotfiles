@@ -179,8 +179,24 @@ cmd_unlock() {
 	mapfile -t dargs < <(adapter_decrypt_args "$adapter")
 
 	mkdir -p "$dest"
+	if [ "$adapter" = yubikey ]; then
+		info "YubiKey: enter its PIN when asked, then TOUCH the key when it blinks (within ~15 s)."
+	fi
+	# Decrypt first, unpack second: piping age into tar turned every decrypt
+	# failure (a missed touch, the wrong key) into tar's misleading "This does
+	# not look like a tar archive".
+	local plain
+	plain=$(mktemp "$dest/.kit.XXXXXX")
+	if ! age -d "${dargs[@]}" -o "$plain" "$kit"; then
+		rm -f "$plain"
+		case "$adapter" in
+		yubikey) die "could not decrypt the kit with the YubiKey. Touch it when it blinks, check it is key A or B (ykman info), and run again" ;;
+		*) die "could not decrypt the kit with the '$adapter' adapter" ;;
+		esac
+	fi
 	# -p preserves modes: ssh keys must land 0600 or ssh refuses them.
-	age -d "${dargs[@]}" "$kit" | tar -C "$dest" -xpf -
+	tar -C "$dest" -xpf "$plain"
+	rm -f "$plain"
 	info "unlocked into $dest"
 }
 

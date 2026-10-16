@@ -13,6 +13,7 @@ make install-system                      # dry run: root-side drift for this mac
 sudo scripts/install-system.sh --apply   # apply system/ (packages, /etc, kernel params, services, DKMS)
 scripts/install-system.sh --profile <host> --list   # a machine's apps
 pkgpick <host>                           # toggle roles/packages interactively (fzf)
+sudo luks-yubikey status|enroll|recovery|require   # YubiKey (FIDO2) disk unlock
 make test                                # python + node unit tests (tests/unit/)
 make test-install / test-system / test-bootstrap     # installer, system layer, bootstrap kit
 make lint                                # shellcheck, luacheck, yamllint, stylua, ruff
