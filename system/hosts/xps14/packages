@@ -2,6 +2,9 @@
 linux
 linux-firmware
 linux-headers
+# CPU microcode. install-arch pacstraps it (by CPU vendor) before grub-mkconfig,
+# so GRUB loads it as an early initrd; listed here so drift shows if removed.
+intel-ucode
 # Audio: SOF + SoundWire (4x Cirrus CS35L57 amps, SDCA jack codec).
 sof-firmware
 alsa-ucm-conf
