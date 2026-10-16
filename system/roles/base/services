@@ -1,0 +1,3 @@
+# <action> <unit>   action: enable | disable | mask
+# Remote access over Tailscale (hardening: files/etc/ssh/sshd_config.d/10-dotfiles.conf)
+enable sshd.service
