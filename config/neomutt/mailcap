@@ -1,4 +1,11 @@
+# Order matters. <Enter> in the attachment menu uses the FIRST matching entry
+# (desktop app via mail-open, when there is a display); auto_view uses the
+# first `copiousoutput` entry (text dump inside the pager). Over SSH the
+# display tests fail and the terminal entries take over.
+text/html; mail-open %s; nametemplate=%s.html; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
 text/html; w3m -I %{charset} -T text/html -dump -o display_link_number=1; copiousoutput; nametemplate=%s.html
-text/html; xdg-open %s; nametemplate=%s.html; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
-application/pdf; zathura %s; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
-image/*; xdg-open %s; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
+application/pdf; mail-open %s; nametemplate=%s.pdf; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
+application/pdf; pdftotext -layout %s -; copiousoutput
+image/*; mail-open %s; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
+image/*; chafa %s; needsterminal
+application/*; mail-open %s; test=test -n "$WAYLAND_DISPLAY$DISPLAY"

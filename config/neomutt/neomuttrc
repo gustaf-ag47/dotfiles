@@ -87,6 +87,12 @@ macro index,pager ga "<change-folder>=Archive<enter>" "archive"
 macro index,pager gu "<change-folder>Unread<enter>" "unread (notmuch)"
 macro index S "<shell-escape>mail-sync<enter>" "sync now"
 macro index,pager \Cb "<pipe-message>urlscan<enter>" "urls"
+# Open the message's HTML part in the browser (mailcap -> mail-open).
+macro index,pager \Ch "<view-attachments><search>text/html<enter><view-mailcap><exit>" "html in browser"
+
+# --- attachments (v): <Enter> open, s save, | pipe ---------------------------
+set attach_save_dir = "~/Downloads"
+set attach_format = "%u%D%I %t%4n %T%.40d%> [%.7m/%.10M, %.6e%?C?, %C?, %s] "
 
 # --- colours (terminal palette) ------------------------------------------------
 color normal       default default

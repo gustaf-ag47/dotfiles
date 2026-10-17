@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MAIL_PASS = ROOT / 'bin/mail-pass'
 MAIL_SYNC = ROOT / 'bin/mail-sync'
+MAIL_OPEN = ROOT / 'bin/mail-open'
 
 
 def write_exe(path, body):
@@ -112,6 +113,29 @@ class MailSyncTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('already running', result.stderr)
         self.assertFalse(self.log.exists())
+
+
+class MailOpenTests(unittest.TestCase):
+    def test_copy_outlives_neomutt_temp_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src = tmp / 'att.html'
+            src.write_text('<p>hi</p>')
+            opener = tmp / 'opener'
+            record = tmp / 'opened'
+            write_exe(opener, f'echo "$1" > {record}\n')
+            env = {'PATH': '/usr/bin:/bin', 'XDG_RUNTIME_DIR': str(tmp),
+                   'MAIL_OPEN_CMD': str(opener)}
+            subprocess.run([str(MAIL_OPEN), str(src)], env=env, check=True)
+            src.unlink()  # what neomutt does when the mailcap command returns
+            for _ in range(50):
+                if record.exists() and record.read_text().strip():
+                    break
+                subprocess.run(['sleep', '0.05'])
+            opened = Path(record.read_text().strip())
+            self.assertEqual(opened.parent, tmp / 'mail-open')
+            self.assertTrue(opened.name.endswith('-att.html'))
+            self.assertEqual(opened.read_text(), '<p>hi</p>')
 
 
 if __name__ == '__main__':
