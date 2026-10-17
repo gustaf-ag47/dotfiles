@@ -31,3 +31,27 @@ Expunge Both
 Remove None
 SyncState *
 CopyArrivalDate yes
+
+# --- iCloud archive (append-only) --------------------------------------------
+# A second copy that only ever gains mail: new server messages are pulled,
+# but server deletions, flag changes and moves are never applied here. The
+# `icloud` mirror above follows the server (deleting there deletes here), so
+# this is the copy to keep. Not indexed by notmuch; browse with
+# `neomutt -f ~/.local/share/mail-archive/icloud/<folder>`. Seeded with
+# hardlinks from the mirror (mail-archive-seed), so it costs no extra disk
+# until the two diverge.
+MaildirStore icloud-archive-local
+SubFolders Verbatim
+Path ~/.local/share/mail-archive/icloud/
+Inbox ~/.local/share/mail-archive/icloud/INBOX
+
+Channel icloud-archive
+Far :icloud-remote:
+Near :icloud-archive-local:
+Patterns *
+Create Near
+Sync PullNew
+Expunge None
+Remove None
+SyncState *
+CopyArrivalDate yes

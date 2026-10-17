@@ -1,0 +1,37 @@
+#!/bin/bash
+# mail-archive-seed -- create the append-only archive (mbsync channel
+# icloud-archive) from the synced mirror without downloading anything again.
+# Mail files are hardlinked: Maildir messages are immutable, and a rename or
+# unlink in one tree leaves the other's link in place. mbsync state files are
+# real copies, because mbsync appends to its journal in place.
+# Refuses to touch an archive that already exists.
+set -euo pipefail
+
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+src="$data/mail/icloud"
+dst="$data/mail-archive/icloud"
+lock="${XDG_RUNTIME_DIR:-/tmp}/mail-sync.lock"
+
+if [[ ! -d "$src/INBOX/cur" ]]; then
+	echo "mail-archive-seed: no synced mirror at $src (run mail-sync first)" >&2
+	exit 1
+fi
+if [[ -e "$dst" ]]; then
+	echo "mail-archive-seed: $dst already exists, leaving it alone" >&2
+	exit 1
+fi
+
+exec 9>"$lock"
+flock 9 # wait for any running mail-sync; nothing may change $src mid-copy
+
+tmp="$dst.seeding"
+rm -rf "$tmp"
+mkdir -p "$(dirname "$dst")"
+cp -al "$src" "$tmp"
+# Replace hardlinked state files with independent copies.
+find "$tmp" -type f \( -name '.mbsyncstate*' -o -name '.uidvalidity' \) -print0 |
+	while IFS= read -r -d '' f; do
+		cp --remove-destination -- "$src/${f#"$tmp"/}" "$f"
+	done
+mv "$tmp" "$dst"
+echo "mail-archive-seed: seeded $dst ($(find "$dst" -path '*/cur/*' -type f | wc -l) messages)"

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MAIL_PASS = ROOT / 'bin/mail-pass'
 MAIL_SYNC = ROOT / 'bin/mail-sync'
 MAIL_OPEN = ROOT / 'bin/mail-open'
+MAIL_SEED = ROOT / 'bin/mail-archive-seed'
 
 
 def write_exe(path, body):
@@ -89,8 +90,10 @@ class MailSyncTests(unittest.TestCase):
     def test_parallel_mode_syncs_each_box_once(self):
         subprocess.run([str(MAIL_SYNC), '-j', '2'], env=self.env, check=True)
         calls = self.log.read_text().splitlines()
-        self.assertCountEqual(calls[:2], ['mbsync icloud:INBOX', 'mbsync icloud:Sent Messages'])
-        self.assertEqual(calls[2:], ['notmuch new --quiet'])
+        self.assertCountEqual(calls[:4], [
+            'mbsync icloud:INBOX', 'mbsync icloud:Sent Messages',
+            'mbsync icloud-archive:INBOX', 'mbsync icloud-archive:Sent Messages'])
+        self.assertEqual(calls[4:], ['notmuch new --quiet'])
 
     def test_rejects_bad_job_count(self):
         result = subprocess.run([str(MAIL_SYNC), '-j', '0'], env=self.env,
@@ -136,6 +139,53 @@ class MailOpenTests(unittest.TestCase):
             self.assertEqual(opened.parent, tmp / 'mail-open')
             self.assertTrue(opened.name.endswith('-att.html'))
             self.assertEqual(opened.read_text(), '<p>hi</p>')
+
+
+class MailArchiveSeedTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.src = self.dir / 'data/mail/icloud'
+        self.dst = self.dir / 'data/mail-archive/icloud'
+        box = self.src / 'INBOX'
+        for sub in ('cur', 'new', 'tmp'):
+            (box / sub).mkdir(parents=True)
+        (box / 'cur/1.host,U=1:2,S').write_text('mail')
+        (box / '.mbsyncstate').write_text('state')
+        (box / '.uidvalidity').write_text('1')
+        self.env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.dir),
+                    'XDG_DATA_HOME': str(self.dir / 'data'),
+                    'XDG_RUNTIME_DIR': str(self.dir)}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def seed(self):
+        return subprocess.run([str(MAIL_SEED)], env=self.env, capture_output=True, text=True)
+
+    def test_mail_hardlinked_state_copied(self):
+        self.assertEqual(self.seed().returncode, 0)
+        mail = self.dst / 'INBOX/cur/1.host,U=1:2,S'
+        self.assertEqual(mail.stat().st_ino, (self.src / 'INBOX/cur/1.host,U=1:2,S').stat().st_ino)
+        for name in ('.mbsyncstate', '.uidvalidity'):
+            copy = self.dst / 'INBOX' / name
+            self.assertNotEqual(copy.stat().st_ino, (self.src / 'INBOX' / name).stat().st_ino)
+            self.assertEqual(copy.read_text(), (self.src / 'INBOX' / name).read_text())
+        # Deleting from the mirror must not touch the archive.
+        (self.src / 'INBOX/cur/1.host,U=1:2,S').unlink()
+        self.assertEqual(mail.read_text(), 'mail')
+
+    def test_refuses_existing_archive(self):
+        self.dst.mkdir(parents=True)
+        result = self.seed()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('already exists', result.stderr)
+
+    def test_requires_synced_mirror(self):
+        (self.src / 'INBOX/cur/1.host,U=1:2,S').unlink()
+        (self.src / 'INBOX/cur').rmdir()
+        self.assertEqual(self.seed().returncode, 1)
+        self.assertFalse(self.dst.exists())
 
 
 if __name__ == '__main__':

@@ -9,9 +9,9 @@
 # runs over disjoint boxes are safe.
 set -euo pipefail
 
-maildir="${XDG_DATA_HOME:-$HOME/.local/share}/mail"
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
 lock="${XDG_RUNTIME_DIR:-/tmp}/mail-sync.lock"
-channels=(icloud)
+channels=(icloud icloud-archive)
 
 jobs=1
 if [[ "${1:-}" == -j ]]; then
@@ -29,9 +29,7 @@ if ! flock -n 9; then
 	exit 0
 fi
 
-for channel in "${channels[@]}"; do
-	mkdir -p "$maildir/$channel"
-done
+mkdir -p "$data/mail/icloud" "$data/mail-archive/icloud"
 
 if ((jobs > 1)) && [[ $# -eq 0 ]]; then
 	status=0
