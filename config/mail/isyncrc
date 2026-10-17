@@ -1,0 +1,33 @@
+# mbsync (isync) -- IMAP <-> local Maildir. Linked to ~/.config/isyncrc.
+# Maildir lives in $XDG_DATA_HOME/mail, never in $SYNC: mbsync keeps per-folder
+# UID state next to the mail, and Syncthing replicas of it corrupt each other.
+# Passwords: bin/mail-pass (private overlay or pass), never in this public repo.
+
+# --- iCloud ---------------------------------------------------------------
+# https://support.apple.com/en-us/102525 -- IMAP only (no POP), app-specific
+# password, IMAP login is the bare local part.
+IMAPAccount icloud
+Host imap.mail.me.com
+Port 993
+User gustaf.silver
+PassCmd "mail-pass icloud"
+TLSType IMAPS
+CertificateFile /etc/ssl/certs/ca-certificates.crt
+
+IMAPStore icloud-remote
+Account icloud
+
+MaildirStore icloud-local
+SubFolders Verbatim
+Path ~/.local/share/mail/icloud/
+Inbox ~/.local/share/mail/icloud/INBOX
+
+Channel icloud
+Far :icloud-remote:
+Near :icloud-local:
+Patterns *
+Create Both
+Expunge Both
+Remove None
+SyncState *
+CopyArrivalDate yes

@@ -241,6 +241,11 @@ mkdir -p "$XDG_CONFIG_HOME/transmission-daemon"
 link_config "$DOTFILES/config/transmission/settings.json" "$XDG_CONFIG_HOME/transmission-daemon/settings.json"
 link_config "$DOTFILES/config/newsboat" "$XDG_CONFIG_HOME/newsboat"
 link_config "$DOTFILES/config/pulsemixer" "$XDG_CONFIG_HOME/pulsemixer"
+# Terminal mail: mbsync -> Maildir -> notmuch/neomutt, msmtp to send.
+link_config "$DOTFILES/config/neomutt" "$XDG_CONFIG_HOME/neomutt"
+link_config "$DOTFILES/config/mail/isyncrc" "$XDG_CONFIG_HOME/isyncrc"
+link_config "$DOTFILES/config/mail/msmtprc" "$XDG_CONFIG_HOME/msmtp/config"
+link_config "$DOTFILES/config/notmuch" "$XDG_CONFIG_HOME/notmuch"
 
 # Link tmuxp configs from local directory (project/work-specific sessions)
 if [ -d "$LOCAL_CONFIG/config/tmuxp" ]; then

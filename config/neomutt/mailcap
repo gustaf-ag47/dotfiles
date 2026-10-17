@@ -1,0 +1,4 @@
+text/html; w3m -I %{charset} -T text/html -dump -o display_link_number=1; copiousoutput; nametemplate=%s.html
+text/html; xdg-open %s; nametemplate=%s.html; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
+application/pdf; zathura %s; test=test -n "$WAYLAND_DISPLAY$DISPLAY"
+image/*; xdg-open %s; test=test -n "$WAYLAND_DISPLAY$DISPLAY"

@@ -18,6 +18,11 @@ inkscape
 obs-studio
 calcurse
 neomutt
+isync
+msmtp
+notmuch
+notmuch-mutt
+w3m
 newsboat
 mpd
 ncmpcpp

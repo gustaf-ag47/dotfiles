@@ -1,0 +1,25 @@
+#!/bin/bash
+# mail-pass <account> -- print a mail account's password for mbsync/msmtp.
+# Lookup order: the private overlay ($DOTFILES/local/env/mail/<account>, mode
+# 0600, gitignored) then `pass show email/<account>`. Never stored in this repo.
+set -euo pipefail
+
+account=${1:-}
+if [[ -z "$account" || "$account" == */* || "$account" == .* ]]; then
+	echo "usage: mail-pass <account>" >&2
+	exit 2
+fi
+
+dotfiles=${DOTFILES:-$HOME/sync/src/dotfiles}
+file="${MAIL_PASS_DIR:-$dotfiles/local/env/mail}/$account"
+
+if [[ -r "$file" ]]; then
+	head -n1 "$file"
+	exit 0
+fi
+if command -v pass >/dev/null 2>&1 && pass show "email/$account" >/dev/null 2>&1; then
+	pass show "email/$account" | head -n1
+	exit 0
+fi
+echo "mail-pass: no password for '$account' (looked in $file and pass email/$account)" >&2
+exit 1

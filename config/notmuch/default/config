@@ -1,0 +1,19 @@
+# notmuch -- full-text index over the mbsync Maildir. Linked to
+# ~/.config/notmuch/default/config; database in ~/.local/share/notmuch/default.
+[database]
+# Relative paths resolve against $HOME.
+path=.local/share/mail
+
+[user]
+name=Gustaf Silver
+primary_email=gustaf.silver@icloud.com
+
+[new]
+tags=unread;inbox;
+ignore=.mbsyncstate;.uidvalidity;.mbsyncstate.journal;.mbsyncstate.new;.mbsyncstate.lock
+
+[search]
+exclude_tags=deleted;spam;
+
+[maildir]
+synchronize_flags=true
