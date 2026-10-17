@@ -1,0 +1,81 @@
+#!/bin/bash
+# hypr-power-profile -- trim Hyprland's GPU-hungry effects on battery, restore
+# them on AC. Blur and shadows are Hyprland's own first answer to "least power
+# on a laptop"; animations are already off globally. Only runtime keywords are
+# touched, so `hyprctl reload` restores the config and --watch re-applies.
+#
+#   hypr-power-profile            apply once for the current power source
+#   hypr-power-profile --watch    apply, then re-apply whenever AC state flips
+#   hypr-power-profile --status   print ac|battery and exit
+#
+# Started by config/gui/Wayland/hypr/hosts/<laptop>.conf (exec-once). Research:
+# $NOTES/Homelab/dotfiles/runs/2026-10-17-xps14-battery/
+set -euo pipefail
+
+POWER_SUPPLY_DIR="${POWER_SUPPLY_DIR:-/sys/class/power_supply}"
+POLL_SECS="${HYPR_POWER_PROFILE_POLL_SECS:-10}"
+
+# First mains adapter by type (AC on Dell, ADP1/ACAD elsewhere); scope=Device
+# is a peripheral's own supply, not the machine's.
+find_mains() {
+	local d
+	for d in "$POWER_SUPPLY_DIR"/*; do
+		[[ -r "$d/type" && "$(<"$d/type")" == Mains ]] || continue
+		[[ -r "$d/scope" && "$(<"$d/scope")" == Device ]] && continue
+		echo "$d"
+		return 0
+	done
+	return 1
+}
+
+# ac when plugged in or when there is no adapter at all (desktop, VM).
+current_profile() {
+	local mains
+	mains=$(find_mains) || { echo ac; return; }
+	if [[ "$(<"$mains/online")" == 1 ]]; then echo ac; else echo battery; fi
+}
+
+apply_profile() {
+	case "$1" in
+	battery)
+		hyprctl --batch "keyword decoration:blur:enabled false; keyword decoration:shadow:enabled false" >/dev/null
+		;;
+	ac)
+		hyprctl --batch "keyword decoration:blur:enabled true; keyword decoration:shadow:enabled true" >/dev/null
+		;;
+	*)
+		echo "hypr-power-profile: unknown profile '$1'" >&2
+		return 1
+		;;
+	esac
+}
+
+# Live blur state as Hyprland reports it (0/1), empty if hyprctl is unreachable.
+live_blur() {
+	hyprctl getoption decoration:blur:enabled 2>/dev/null | awk '/^int:/ { print $2 }'
+}
+
+# Re-apply on an AC flip, and whenever the live value disagrees with the
+# profile: `hyprctl reload` re-reads hyprland.conf and turns blur back on.
+watch() {
+	local now want
+	while true; do
+		now=$(current_profile)
+		case "$now" in battery) want=0 ;; *) want=1 ;; esac
+		if [[ "$(live_blur)" != "$want" ]]; then
+			apply_profile "$now" || true
+		fi
+		sleep "$POLL_SECS"
+	done
+}
+
+case "${1:-}" in
+"") apply_profile "$(current_profile)" ;;
+--watch) watch ;;
+--status) current_profile ;;
+-h | --help) sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0" ;;
+*)
+	echo "hypr-power-profile: unknown argument '$1'" >&2
+	exit 2
+	;;
+esac

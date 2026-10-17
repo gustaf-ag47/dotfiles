@@ -15,6 +15,9 @@ iw
 # software ISP in userspace; apps reach it through the PipeWire camera portal.
 libcamera
 pipewire-libcamera
-# Dell ships BIOS/firmware through LVFS.
+# Battery: TLP with host overrides in files/etc/tlp.d/10-xps14.conf.
 tlp
 tlp-rdw
+# Power diagnostics (turbostat: PkgWatt/C-states; powertop: wakeups, tunables).
+powertop
+turbostat

@@ -1,3 +1,6 @@
 enable intel-cvs-late.service
 enable tlp.service
 enable fwupd-refresh.timer
+# fwupd's LAN metadata-sharing daemon (pulls in avahi): a multicast listener
+# with no peers to serve; fwupd falls back to plain HTTP.
+mask passim.service
