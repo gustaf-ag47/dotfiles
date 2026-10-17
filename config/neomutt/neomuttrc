@@ -19,14 +19,16 @@ set spoolfile  = "+INBOX"
 set record     = "+Sent Messages"
 set postponed  = "+Drafts"
 set trash      = "+Deleted Messages"
-mailboxes =INBOX "=Sent Messages" =Drafts =Archive =Junk "=Deleted Messages" =Orders
-# Any other folder: `c` then `?` in the folder browser.
+# Every synced folder (iCloud keeps old mail in Archive/<year> and
+# Archives/<year>, not INBOX), INBOX first, the rest sorted; re-read at start.
+mailboxes =INBOX
+mailboxes `find ~/.local/share/mail/icloud -mindepth 2 -name cur -type d -printf '%h\n' 2>/dev/null | sed 's|.*/mail/icloud/||' | grep -vx INBOX | sort | sed 's/.*/"=&"/' | tr '\n' ' '`
 
 # --- notmuch (full-text search across every folder) -------------------------
 set nm_default_url = "notmuch://$HOME/.local/share/mail"
 set nm_query_type  = threads
 set nm_record      = no
-virtual-mailboxes "Unread" "notmuch://?query=tag:unread"
+virtual-mailboxes "All mail" "notmuch://?query=*" "Unread" "notmuch://?query=tag:unread"
 macro index \\ "<vfolder-from-query>" "notmuch search"
 macro index,pager A "<save-message>=Archive<enter>" "archive"
 
@@ -85,6 +87,7 @@ macro index,pager gs "<change-folder>=Sent Messages<enter>" "sent"
 macro index,pager gd "<change-folder>=Drafts<enter>" "drafts"
 macro index,pager ga "<change-folder>=Archive<enter>" "archive"
 macro index,pager gu "<change-folder>Unread<enter>" "unread (notmuch)"
+macro index,pager gA "<change-folder>All mail<enter>" "all mail, every folder (notmuch)"
 macro index S "<shell-escape>mail-sync<enter>" "sync now"
 macro index,pager \Cb "<pipe-message>urlscan<enter>" "urls"
 # Open the message's HTML part in the browser (mailcap -> mail-open).
