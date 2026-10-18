@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""tmux-pi-panes: keep pi sessions attached to tmux panes across a restore.
+
+  tmux-pi-panes save <snapshot>   tmux-resurrect post-save-layout hook: write
+                                  <snapshot>.pi, one line per pane running pi:
+                                  session<TAB>window<TAB>pane<TAB>session-file
+  tmux-pi-panes restore           tmux-resurrect post-restore-all hook: in each
+                                  pane listed in the sidecar of the snapshot
+                                  "last" points at, run `pi --session <file>`
+
+resurrect only records a pane's command as "pi", which resumes nothing. The
+pane -> session file mapping comes from the tmux-pane-session pi extension,
+which writes $XDG_STATE_HOME/pi-panes/<pid> on every session_start: pi does
+not keep its .jsonl open, so /proc/<pid>/fd cannot tell.
+"""
+import importlib.util
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SHELLS = {"zsh", "bash", "sh", "fish"}
+SIDECAR_SUFFIX = ".pi"
+
+
+def load_ws():
+    spec = importlib.util.spec_from_file_location("ws", ROOT / "scripts/ws.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def state_dir():
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local/state")
+    return Path(base) / "pi-panes"
+
+
+def tmux(*args):
+    return subprocess.run(["tmux", *args], capture_output=True, text=True)
+
+
+def session_file_for_pid(pid, directory=None):
+    try:
+        path = ((directory or state_dir()) / str(pid)).read_text().strip()
+    except OSError:
+        return None
+    return path or None
+
+
+def sessions_root():
+    return Path.home() / ".pi/agent/sessions"
+
+
+def session_dir_for_cwd(cwd, root=None):
+    # pi's layout: /a/b -> <root>/--a-b--/
+    return (root or sessions_root()) / ("-" + cwd.replace("/", "-") + "--")
+
+
+def process_start_time(pid, proc=Path("/proc")):
+    try:
+        boot = next(int(line.split()[1]) for line in (proc / "stat").read_text().splitlines()
+                    if line.startswith("btime "))
+        fields = (proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+        return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, StopIteration, IndexError, ValueError):
+        return None
+
+
+def guess_session_file(pid, claimed, proc=Path("/proc"), root=None):
+    """Fallback for a pi started before the tmux-pane-session extension was
+    installed (no state file, argv overwritten, no fd on the .jsonl): the
+    session lives under the dir derived from its cwd and is written (mtime)
+    after the process started. Only a unique candidate counts; a guess that
+    resumes the wrong transcript is worse than no resume."""
+    try:
+        cwd = os.readlink(proc / str(pid) / "cwd")
+    except OSError:
+        return None
+    start = process_start_time(pid, proc)
+    if start is None:
+        return None
+    candidates = []
+    try:
+        for file in session_dir_for_cwd(cwd, root).glob("*.jsonl"):
+            if str(file) in claimed:
+                continue
+            if file.stat().st_mtime >= start:
+                candidates.append(str(file))
+    except OSError:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def format_rows(rows):
+    return "".join("\t".join(str(field) for field in row) + "\n" for row in rows)
+
+
+def parse_rows(text):
+    rows = []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 4 and all(parts):
+            rows.append(tuple(parts))
+    return rows
+
+
+def resurrect_dir():
+    value = tmux("show-option", "-gqv", "@resurrect-dir").stdout.strip()
+    value = value or "$HOME/.tmux/resurrect"
+    return Path(os.path.expandvars(os.path.expanduser(value)))
+
+
+def cmd_save(snapshot):
+    ws = load_ws()
+    listing = tmux(
+        "list-panes", "-a", "-F",
+        "#{pane_pid}\t#{session_name}\t#{window_index}\t#{pane_index}",
+    )
+    ps_text = subprocess.run(["ps", "-eo", "pid,ppid,comm"], capture_output=True, text=True).stdout
+    panes = []
+    for line in listing.stdout.splitlines():
+        pane_pid, session, window, pane = line.split("\t")
+        pi_pid = ws.find_pi_pid(pane_pid, ps_text=ps_text)
+        panes.append((session, window, pane, pi_pid, session_file_for_pid(pi_pid) if pi_pid else None))
+    # Files known to belong to a live pi are not candidates for a guess.
+    claimed = {known for *_, known in panes if known}
+    rows = []
+    pi_less = set()
+    for session, window, pane, pi_pid, session_file in panes:
+        if pi_pid and not session_file:
+            session_file = guess_session_file(pi_pid, claimed)
+            if session_file:
+                claimed.add(session_file)
+        if session_file:
+            rows.append((session, window, pane, session_file))
+        else:
+            pi_less.add((session, window, pane))
+    if system_stopping():
+        previous = previous_sidecar(Path(snapshot))
+        if previous:
+            rows = carry_forward(rows, parse_rows(previous.read_text()), pi_less)
+    Path(snapshot + SIDECAR_SUFFIX).write_text(format_rows(rows))
+    prune(Path(snapshot).parent)
+    prune_dead_pids()
+
+
+def system_stopping():
+    # The final save runs from tmux.service ExecStop while systemd stops the
+    # pane scopes in parallel, so pi may already be gone from its pane.
+    result = subprocess.run(["systemctl", "is-system-running"], capture_output=True, text=True)
+    return result.stdout.strip() == "stopping"
+
+
+def previous_sidecar(snapshot):
+    sidecars = sorted(snapshot.parent.glob("tmux_resurrect_*.txt" + SIDECAR_SUFFIX))
+    earlier = [s for s in sidecars if s.name < snapshot.name + SIDECAR_SUFFIX]
+    return earlier[-1] if earlier else None
+
+
+def carry_forward(rows, previous_rows, pi_less):
+    # Keep a previous pane -> session row when that pane still exists but no
+    # longer shows pi (killed by shutdown, not exited by the user).
+    have = {row[:3] for row in rows}
+    kept = [row for row in previous_rows if row[:3] in pi_less and row[:3] not in have]
+    return rows + kept
+
+
+def prune(directory):
+    for sidecar in directory.glob("tmux_resurrect_*.txt" + SIDECAR_SUFFIX):
+        if not sidecar.with_suffix("").exists():
+            sidecar.unlink(missing_ok=True)
+
+
+def prune_dead_pids():
+    for entry in state_dir().glob("*"):
+        if entry.name.isdigit() and not Path(f"/proc/{entry.name}").exists():
+            entry.unlink(missing_ok=True)
+
+
+def live_session_files(ws):
+    """Return session files currently represented by live pi panes."""
+    listing = tmux(
+        "list-panes", "-a", "-F",
+        "#{pane_pid}\t#{pane_current_command}",
+    )
+    ps_text = subprocess.run(["ps", "-eo", "pid,ppid,comm"], capture_output=True, text=True).stdout
+    files = set()
+    for line in listing.stdout.splitlines():
+        pane_pid, command = line.split("\t", 1)
+        if command != "pi":
+            continue
+        pid = ws.find_pi_pid(pane_pid, ps_text=ps_text)
+        path = (session_file_for_pid(pid) or guess_session_file(pid, files)) if pid else None
+        if path:
+            files.add(path)
+    return files
+
+
+def cmd_restore():
+    last = resurrect_dir() / "last"
+    sidecar = Path(str(last.resolve()) + SIDECAR_SUFFIX)
+    try:
+        rows = parse_rows(sidecar.read_text())
+    except OSError:
+        return
+    ws = load_ws()
+    already_open = live_session_files(ws)
+    for session, window, pane, session_file in rows:
+        if session_file in already_open:
+            continue
+        target = f"{session}:{window}.{pane}"
+        command = tmux("display-message", "-p", "-t", target, "#{pane_current_command}")
+        if command.returncode != 0 or command.stdout.strip() not in SHELLS:
+            continue
+        # pi only writes its .jsonl at the first message; a pane that held a
+        # fresh, unused pi still gets pi back, just without --session.
+        if Path(session_file).exists():
+            resume = f"pi --session {shlex.quote(session_file)}"
+        else:
+            resume = "pi"
+        tmux("send-keys", "-t", target, "-l", "--", resume)
+        tmux("send-keys", "-t", target, "Enter")
+        already_open.add(session_file)
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "save" and len(argv) == 3:
+        cmd_save(argv[2])
+    elif len(argv) == 2 and argv[1] == "restore":
+        cmd_restore()
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

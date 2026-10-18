@@ -1,0 +1,45 @@
+#!/bin/bash
+# tmux-boot-restore: restore the last tmux-resurrect snapshot into the server
+# tmux.service just started. Runs as tmux.service ExecStartPost, so the restore
+# has finished before ws-up.service (After=tmux.service) inspects sessions.
+#
+# Replaces tmux-continuum's auto-restore, which ran in the background (racing
+# ws-up) and only if tpm loaded at all - on 2026-10-15 it did not, and a crash
+# lost an 85-window server although the snapshot on disk was 5 minutes old.
+set -euo pipefail
+
+RESTORE_SCRIPT="$HOME/.config/tmux/plugins/tmux-resurrect/scripts/restore.sh"
+
+resurrect_dir="$(tmux show-option -gqv @resurrect-dir 2>/dev/null || true)"
+resurrect_dir="${resurrect_dir:-$HOME/.tmux/resurrect}"
+resurrect_dir="$(eval echo "$resurrect_dir")"  # expand $HOME in the option value
+last="$resurrect_dir/last"
+
+if [ ! -e "$last" ] || ! grep -q '^pane' "$last"; then
+    echo "tmux-boot-restore: no usable snapshot at $last, nothing to restore"
+    exit 0
+fi
+
+# Only restore into a fresh server: every session must be a bare numeric
+# default with one window. Anything else is live work that a restore would
+# interleave with.
+live=$(tmux list-sessions -F '#{session_name} #{session_windows}' 2>/dev/null \
+    | grep -cvE '^[0-9]+ 1$' || true)
+if [ "$live" -ne 0 ]; then
+    echo "tmux-boot-restore: server already has $live named session(s), not restoring"
+    exit 0
+fi
+
+if [ ! -x "$RESTORE_SCRIPT" ]; then
+    echo "tmux-boot-restore: $RESTORE_SCRIPT missing (tpm plugins not installed?)" >&2
+    exit 1
+fi
+
+# restore.sh finds the server through $TMUX ("socket,pid,idx" | cut -d, -f1).
+# Under systemd ExecStartPost it is unset, so every new-session went to
+# `tmux -S ""` and failed. Point it at the server we are restoring into.
+socket_path="$(tmux display-message -p '#{socket_path}')"
+export TMUX="${socket_path},0,0"
+
+echo "tmux-boot-restore: restoring $(readlink -f "$last")"
+"$RESTORE_SCRIPT"

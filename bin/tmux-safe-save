@@ -44,6 +44,14 @@ if [ -L "$resurrect_dir/last" ]; then
     prev_panes=$(grep -c '^pane' "$prev_file" 2>/dev/null || echo 0)
 fi
 
+# save.sh overwrites the single pane_contents.tar.gz in place, so a skeleton
+# save would destroy the scrollback of the good snapshot "last" is kept on.
+contents="$resurrect_dir/pane_contents.tar.gz"
+contents_backup="$resurrect_dir/.pane_contents.prev.tar.gz"
+if [ -f "$contents" ]; then
+    cp -p "$contents" "$contents_backup"
+fi
+
 # Run the actual save script
 if [ -x "$RESURRECT_SCRIPT" ]; then
     "$RESURRECT_SCRIPT"
@@ -62,6 +70,9 @@ if [ -n "$prev_file" ] && [ "$prev_panes" -ge 10 ] && [ -L "$resurrect_dir/last"
         new_panes=$(grep -c '^pane' "$new_file" 2>/dev/null || echo 0)
         if [ "$new_panes" -lt "$((prev_panes / 2))" ]; then
             ln -sf "$(basename "$prev_file")" "$resurrect_dir/last"
+            if [ -f "$contents_backup" ]; then
+                cp -p "$contents_backup" "$contents"
+            fi
             echo "WARNING: new save has $new_panes panes vs previous $prev_panes;" \
                  "kept 'last' -> $(basename "$prev_file") (new save retained as $(basename "$new_file"))"
         fi

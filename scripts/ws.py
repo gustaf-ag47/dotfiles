@@ -803,6 +803,13 @@ def cmd_check(args):
         lines.append(f"sessions: all {len(declared_sessions)} declared sessions are open")
 
     windows = tmux_windows()
+    persistence_warning = tmux_persistence_warning()
+    if persistence_warning:
+        ok = False
+        lines.append(f"tmux persistence: WARNING {persistence_warning}")
+        notify_tmux_persistence(persistence_warning)
+    else:
+        lines.append("tmux persistence: snapshot and Pi sidecar are fresh")
     unmanaged_sessions = sorted(sessions - declared_sessions)
     if unmanaged_sessions:
         lines.append(f"sessions: unmanaged (not in workspace.yaml) {', '.join(unmanaged_sessions)}")
@@ -900,8 +907,16 @@ def cmd_up(args):
             actions.append(f"env: {name} is not set in this shell; source config/zsh/.zshenv or re-login")
 
     sessions = set(tmux_sessions())
+    # Declared sessions only seed an empty server (a new machine, or no
+    # snapshot). A restored server is the truth about which sessions existed:
+    # topping it up re-created sessions the user had closed, and when the
+    # restore failed it replaced the real set with the declared one
+    # (2026-10-15).
+    seed_sessions = not has_named_session(sessions)
+    if not seed_sessions:
+        actions.append("sessions: tmux already has named sessions, not seeding declared ones")
     for session, cwd in declared_sessions_with_cwd(doc).items():
-        if session in sessions:
+        if session in sessions or not seed_sessions:
             continue
         actions.append(f"session: create {session!r} at {cwd}")
         if not args.dry_run:
@@ -947,6 +962,62 @@ def cmd_up(args):
     else:
         print("\n".join(actions))
     return 0
+
+
+def tmux_persistence_warning(now=None):
+    """Return a stale-save warning if tmux is live but its restore point is unsafe."""
+    if not tmux_sessions():
+        return None
+    now = now or datetime.datetime.now().timestamp()
+    resurrect_dir = os.path.expandvars(os.path.expanduser(
+        tmux(["show-option", "-gqv", "@resurrect-dir"]).stdout.strip()
+        or "$HOME/.tmux/resurrect"
+    ))
+    last = Path(resurrect_dir) / "last"
+    try:
+        snapshot = last.resolve(strict=True)
+        age = now - snapshot.stat().st_mtime
+    except OSError:
+        return f"no readable snapshot at {last}"
+    warnings = []
+    if age > 600:
+        warnings.append(f"newest snapshot is {int(age // 60)} minutes old")
+    panes = tmux(["list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}"])
+    live_pi = {line.split("\t", 1)[0] for line in panes.stdout.splitlines()
+               if line.endswith("\tpi")}
+    sidecar = Path(str(snapshot) + ".pi")
+    try:
+        saved_pi = {"%s:%s.%s" % tuple(row[:3]) for row in
+                    (line.split("\t") for line in sidecar.read_text().splitlines()) if len(row) == 4}
+    except OSError:
+        saved_pi = set()
+    if live_pi - saved_pi:
+        warnings.append(f"Pi sidecar misses {len(live_pi - saved_pi)} live Pi pane(s)")
+    if live_pi and not saved_pi:
+        warnings.append("newest Pi sidecar is empty while Pi panes exist")
+    return "; ".join(warnings) or None
+
+
+def notify_tmux_persistence(message):
+    stamp = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "ws-tmux-persistence-alert"
+    try:
+        if datetime.datetime.now().timestamp() - stamp.stat().st_mtime < 3600:
+            return
+    except OSError:
+        pass
+    subprocess.run(["notify-send", "tmux persistence warning", message], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+    except OSError:
+        pass
+
+
+def has_named_session(sessions):
+    # tmux.service's `new-session -d` creates a numbered default session; it
+    # does not count as restored work.
+    return any(not name.isdigit() for name in sessions)
 
 
 def reopen_lane(lane):
