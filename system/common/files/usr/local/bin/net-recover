@@ -1,0 +1,60 @@
+#!/bin/bash
+# net-recover: undo a WireGuard/wg-quick takeover and bring the normal network
+# back. Written after skrubben vanished from LAN *and* Tailscale when a
+# wg-quick tunnel failed half-way (2026-10-18): it had already installed the
+# 0.0.0.0/0 route in table 51820 plus the fwmark policy rules, so every packet
+# went into a dead tunnel.
+#
+# Safe to run repeatedly. Used by hand (sudo net-recover), as the default revert
+# of bin/netchange, and by net-watchdog on skrubben.
+#
+#   net-recover            tear down, restore, verify
+#   net-recover --dry-run  print what would run
+set -uo pipefail
+
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+log() { echo "net-recover: $*"; logger -t net-recover -- "$*" 2>/dev/null || true; }
+run() {
+	if [ "$DRY" = 1 ]; then echo "  would: $*"; else "$@" 2>/dev/null; fi
+}
+
+if [ "$DRY" = 0 ] && [ "$(id -u)" != 0 ]; then
+	echo "net-recover: needs root (sudo net-recover)" >&2
+	exit 1
+fi
+
+log "step 1: stop wg-quick / wireguard units so nothing re-creates the tunnel"
+for u in $(systemctl list-units --all --plain --no-legend 'wg-quick@*' 'wireguard*' 2>/dev/null | awk '{print $1}'); do
+	run systemctl disable --now "$u"
+done
+
+log "step 2: remove wireguard interfaces"
+for ifc in $(ip -o link show type wireguard 2>/dev/null | awk -F': ' '{print $2}'); do
+	run wg-quick down "$ifc"
+	run ip link del "$ifc"
+done
+
+log "step 3: remove wg-quick's policy routing (fwmark 51820) if left behind"
+run ip rule del not fwmark 51820 table 51820
+run ip rule del table main suppress_prefixlength 0
+run ip -6 rule del not fwmark 51820 table 51820
+run ip -6 rule del table main suppress_prefixlength 0
+run ip route flush table 51820
+run ip -6 route flush table 51820
+
+log "step 4: restart the normal network path"
+for s in NetworkManager systemd-networkd iwd; do
+	if [ "$DRY" = 1 ] || systemctl is-enabled "$s" &>/dev/null; then run systemctl restart "$s"; fi
+done
+run systemctl restart tailscaled
+
+[ "$DRY" = 1 ] && exit 0
+
+log "step 5: verify"
+sleep 5
+ok=1
+gw=$(ip route show default | awk '{print $3; exit}')
+if [ -n "$gw" ] && ping -c1 -W3 "$gw" >/dev/null 2>&1; then log "gateway $gw reachable"; else log "gateway unreachable"; ok=0; fi
+if ping -c1 -W3 100.100.100.100 >/dev/null 2>&1; then log "tailscale reachable"; else log "tailscale not (yet) reachable"; fi
+[ "$ok" = 1 ]

@@ -1,1 +1,2 @@
 enable zram-swap.service
+enable net-watchdog.timer

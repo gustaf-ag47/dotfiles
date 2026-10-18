@@ -1,0 +1,7 @@
+[Unit]
+Description=Self-heal when the network is cut off (runs net-recover)
+Documentation=file:///usr/local/bin/net-watchdog
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/net-watchdog
