@@ -11,11 +11,7 @@ borg
 restic
 rclone
 transmission-cli
-transmission-gtk
-discord
-gimp
-inkscape
-obs-studio
+# Images: imagemagick (dev role) + nsxiv/imv. Screen recording: wf-recorder (desktop).
 calcurse
 neomutt
 isync

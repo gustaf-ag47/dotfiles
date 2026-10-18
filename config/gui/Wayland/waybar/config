@@ -146,8 +146,8 @@
       "car": "󰄋",
       "default": ["󰕿", "󰖀", "󰕾"]
     },
-    "on-click": "pulsemixer",
-    "on-click-right": "pavucontrol",
+    "on-click": "terminal -e pulsemixer",
+    "on-click-right": "terminal -e wiremix",
     "scroll-step": 5,
     "smooth-scrolling-threshold": 1
   },

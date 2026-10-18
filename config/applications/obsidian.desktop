@@ -1,5 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Obsidian
-Exec=obsidian %u
-MimeType=x-scheme-handler/obsidian;

@@ -14,19 +14,8 @@ video/mp4=video.desktop
 video/x-matroska=video.desktop
 x-scheme-handler/http=firefox.desktop
 x-scheme-handler/https=firefox.desktop
-x-scheme-handler/jetbrains=jetbrains-toolbox.desktop
 x-scheme-handler/magnet=torrent.desktop;
-x-scheme-handler/mailto=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/obsidian=obsidian.desktop
-x-scheme-handler/postman=postman.desktop
+x-scheme-handler/mailto=email.desktop;
 x-scheme-handler/claude-cli=claude-code-url-handler.desktop
-message/rfc822=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/mid=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/net.thunderbird=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/slack=slack.desktop
-
-[Added Associations]
-x-scheme-handler/mailto=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/mid=org.mozilla.Thunderbird.desktop;
-message/rfc822=org.mozilla.Thunderbird.desktop;
-x-scheme-handler/net.thunderbird=org.mozilla.Thunderbird.desktop;
+message/rfc822=email.desktop;
+x-scheme-handler/slack=slack-web.desktop

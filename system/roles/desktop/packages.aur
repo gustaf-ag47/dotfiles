@@ -1,6 +1,8 @@
 # role: desktop -- AUR packages, built with paru as the invoking user.
 pyprland
-yubico-authenticator-bin
-yubikey-manager-qt
+# Readability extractor for bin/readurl (articles in the terminal).
+rdrview
+# Static pandoc: the repo pandoc-cli drags in ~100 versioned haskell-* libs.
+pandoc-bin
 tokyonight-gtk-theme-git
 bibata-cursor-theme-bin

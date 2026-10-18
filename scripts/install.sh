@@ -272,8 +272,6 @@ link_config "$DOTFILES/config/gui/gtk-2.0/gtkrc" "$HOME/.gtkrc-2.0"
 link_config "$DOTFILES/config/gui/jetbrains/ideavim" "$XDG_CONFIG_HOME/ideavim"
 
 link_config "$DOTFILES/config/gui/Wayland/hypr" "$XDG_CONFIG_HOME/hypr"
-# Arch's chromium wrapper reads ~/.config/chromium-flags.conf (Wayland, VA-API).
-link_config "$DOTFILES/config/gui/chromium-flags.conf" "$XDG_CONFIG_HOME/chromium-flags.conf"
 link_config "$DOTFILES/config/gui/Wayland/waybar" "$XDG_CONFIG_HOME/waybar"
 link_config "$DOTFILES/config/gui/Wayland/wofi" "$XDG_CONFIG_HOME/wofi"
 

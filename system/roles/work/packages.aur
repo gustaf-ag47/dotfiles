@@ -1,8 +1,6 @@
 # role: work -- AUR packages, built with paru as the invoking user.
 aws-session-manager-plugin
 google-cloud-cli
-slack-desktop
-postman-bin
-phpstorm
-phpstorm-jre
-lens-bin
+# Slack: web client (config/applications/slack-web.desktop); no Electron app.
+# HTTP: hurl. Kubernetes: k9s. PHP: nvim + phpactor. The GUI IDEs/clients
+# (slack-desktop, postman-bin, phpstorm, lens-bin) were dropped 2026-10.

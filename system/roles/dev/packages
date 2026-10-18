@@ -30,9 +30,6 @@ stern
 minikube
 terraform
 opentofu
-code
-intellij-idea-oss
-pycharm-community-edition
 hurl
 markdownlint
 yamllint
