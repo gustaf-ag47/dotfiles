@@ -23,6 +23,9 @@ set trash      = "+Deleted Messages"
 # Archives/<year>, not INBOX), INBOX first, the rest sorted; re-read at start.
 mailboxes =INBOX
 mailboxes `find ~/.local/share/mail/icloud -mindepth 2 -name cur -type d -printf '%h\n' 2>/dev/null | sed 's|.*/mail/icloud/||' | grep -vx INBOX | sort | sed 's/.*/"=&"/' | tr '\n' ' '`
+# Mail recovered from Thunderbird's cache on arch (deleted from iCloud, and the
+# old KTH account); read-only history, hardlinked from mail-archive/thunderbird.
+mailboxes `find ~/.local/share/mail/thunderbird -mindepth 2 -name cur -type d -printf '"%h" ' 2>/dev/null`
 
 # --- notmuch (full-text search across every folder) -------------------------
 set nm_default_url = "notmuch://$HOME/.local/share/mail"
