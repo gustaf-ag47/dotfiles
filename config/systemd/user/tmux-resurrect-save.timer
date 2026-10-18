@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodically save tmux sessions (backstop for continuum)
+Description=Save tmux sessions every five minutes (continuum replacement)
 
 [Timer]
 OnBootSec=5min

@@ -1,6 +1,9 @@
 [Unit]
 Description=tmux default session (detached)
 Documentation=man:tmux(1)
+# tmux.conf and its plugins are symlinks into ~/sync (encrypted NVMe); a server
+# started before the mount comes up without config, plugins or snapshots.
+RequiresMountsFor=%h/sync
 
 [Service]
 Type=forking
@@ -20,6 +23,10 @@ Environment=DISPLAY=:0
 #   - KillMode=none so cgroup teardown on stop/restart cannot SIGTERM a server
 ExecCondition=/bin/sh -c '! /usr/bin/tmux has-session 2>/dev/null'
 ExecStart=/usr/bin/tmux new-session -d
+# Restore the last snapshot synchronously, so ws-up.service (After=tmux.service)
+# sees the restored sessions instead of racing a background restore.
+ExecStartPost=%h/sync/src/dotfiles/bin/tmux-boot-restore
+TimeoutStartSec=300
 ExecStop=%h/sync/src/dotfiles/bin/tmux-safe-save
 KillMode=none
 RestartSec=2
