@@ -129,7 +129,7 @@ class CmdUpCreatesProjectSessionTest(unittest.TestCase):
             workspace = Path(tmp) / "workspace.yaml"
             workspace.write_text(PROJECT_SESSION_FIXTURE)
             args = argparse.Namespace(workspace=str(workspace), dry_run=False, non_interactive=True)
-            with mock.patch.object(ws, "tmux_sessions", return_value=["Dotfiles"]), \
+            with mock.patch.object(ws, "tmux_sessions", return_value=["0"]), \
                  mock.patch.object(ws, "tmux") as tmux_mock, \
                  mock.patch.object(ws, "tmux_windows", return_value=[]), \
                  mock.patch.object(ws, "open_lanes", return_value=[]):
@@ -138,6 +138,56 @@ class CmdUpCreatesProjectSessionTest(unittest.TestCase):
             tmux_mock.assert_any_call(
                 ["new-session", "-d", "-s", "Fleet-State", "-c", "/home/example/sync/src/fleet-state"]
             )
+
+
+class TmuxPersistenceWarningTest(unittest.TestCase):
+    def test_warns_on_stale_snapshot_and_unmapped_live_pi(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "tmux_resurrect_old.txt"
+            snapshot.write_text("pane\n")
+            (Path(tmp) / "last").symlink_to(snapshot.name)
+            (Path(str(snapshot) + ".pi")).write_text("")
+            now = snapshot.stat().st_mtime + 601
+
+            def fake_tmux(args, check=False):
+                if args[0] == "show-option":
+                    return subprocess.CompletedProcess(args, 0, tmp, "")
+                if args[0] == "list-panes":
+                    return subprocess.CompletedProcess(args, 0, "A:1.0\tpi\n", "")
+                return subprocess.CompletedProcess(args, 0, "A\n", "")
+
+            with mock.patch.object(ws, "tmux", side_effect=fake_tmux), \
+                 mock.patch.object(ws, "tmux_sessions", return_value=["A"]):
+                warning = ws.tmux_persistence_warning(now)
+            self.assertIn("10 minutes old", warning)
+            self.assertIn("sidecar misses 1 live Pi pane", warning)
+            self.assertIn("sidecar is empty", warning)
+
+
+class CmdUpNeverTopsUpRestoredServerTest(unittest.TestCase):
+    # 2026-10-15: after a crash ws-up replaced the real session set with the
+    # declared one. A server with any named session was restored (or is live);
+    # declared sessions only seed a server holding just numbered defaults.
+    def run_up(self, existing):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace.yaml"
+            workspace.write_text(PROJECT_SESSION_FIXTURE)
+            args = argparse.Namespace(workspace=str(workspace), dry_run=False, non_interactive=True)
+            with mock.patch.object(ws, "tmux_sessions", return_value=existing), \
+                 mock.patch.object(ws, "tmux") as tmux_mock, \
+                 mock.patch.object(ws, "tmux_windows", return_value=[]), \
+                 mock.patch.object(ws, "open_lanes", return_value=[]), \
+                 mock.patch("sys.stdout"):
+                tmux_mock.return_value = subprocess.CompletedProcess([], 0, "", "")
+                ws.cmd_up(args)
+        return [c.args[0] for c in tmux_mock.call_args_list if c.args[0][0] == "new-session"]
+
+    def test_named_session_present_creates_nothing(self):
+        self.assertEqual(self.run_up(["Hermes"]), [])
+
+    def test_only_numbered_default_sessions_seeds_every_declared_session(self):
+        created = {call[3] for call in self.run_up(["0", "1"])}
+        self.assertEqual(created, {"Dotfiles", "Fleet-State"})
 
 
 PORTABLE = """

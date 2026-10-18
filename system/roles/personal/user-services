@@ -1,3 +1,6 @@
 # role: personal -- systemd --user units enabled on every machine with this role.
 # Format: <enable|disable> <unit>
 enable zathura-kosync.service
+enable mail-sync.timer
+enable mail-backup.timer
+enable mail-backup-verify.timer

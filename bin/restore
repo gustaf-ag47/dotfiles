@@ -77,7 +77,6 @@ fi
 restore_dir ssh-keys "$HOME/.ssh" 600 700
 restore_dir gnupg "$HOME/.gnupg" 600 700
 restore_dir firefox-data "$HOME/.mozilla/firefox"
-restore_dir thunderbird-data "$HOME/.thunderbird"
 restore_dir tmuxp-sessions "${XDG_CONFIG_HOME:-$HOME/.config}/tmuxp"
 restore_file zhistory "${ZDOTDIR:-$HOME}/.zhistory" 600
 

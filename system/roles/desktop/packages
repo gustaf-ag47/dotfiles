@@ -30,8 +30,9 @@ alacritty
 brightnessctl
 playerctl
 pamixer
-pavucontrol
 pulsemixer
+# PipeWire-native TUI mixer (routing, profiles; replaced pavucontrol).
+wiremix
 pipewire
 pipewire-alsa
 pipewire-audio
@@ -41,17 +42,18 @@ easyeffects
 lsp-plugins
 bluez
 bluez-utils
-blueman
 bluetui
 noto-fonts-emoji
 otf-font-awesome
 ttf-hack-nerd
 ttf-firacode-nerd
 ttf-jetbrains-mono-nerd
+inter-font
+noto-fonts
+papirus-icon-theme
+qt5ct
+qt6ct
 firefox
-chromium
-nemo
-doublecmd-qt6
 imv
 nsxiv
 mpv
@@ -59,11 +61,10 @@ ffmpegthumbnailer
 zathura-pdf-mupdf
 gammastep
 geoclue
-gnome-tweaks
-obsidian
-thunderbird
-remmina
+# xfreerdp (CLI) for RDP; remmina gone.
 freerdp
-libreoffice-still
+# Office documents: pandoc (pandoc-bin, packages.aur) to/from docx/odt, nvim for
+# the text. LibreOffice is installed on demand the rare time a .docx must be
+# edited in place.
 alsa-utils
 fuse2

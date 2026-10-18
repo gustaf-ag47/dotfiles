@@ -44,12 +44,38 @@ if [ -L "$resurrect_dir/last" ]; then
     prev_panes=$(grep -c '^pane' "$prev_file" 2>/dev/null || echo 0)
 fi
 
+# save.sh overwrites the single pane_contents.tar.gz in place, so a skeleton
+# save would destroy the scrollback of the good snapshot "last" is kept on.
+contents="$resurrect_dir/pane_contents.tar.gz"
+contents_backup="$resurrect_dir/.pane_contents.prev.tar.gz"
+if [ -f "$contents" ]; then
+    cp -p "$contents" "$contents_backup"
+fi
+
+save_started="$(mktemp)"
+trap 'rm -f "$save_started"' EXIT
+
 # Run the actual save script
 if [ -x "$RESURRECT_SCRIPT" ]; then
     "$RESURRECT_SCRIPT"
 else
     echo "Error: tmux-resurrect save script not found at $RESURRECT_SCRIPT"
     exit 1
+fi
+
+# save.sh deletes a new snapshot identical to "last", but only after the
+# post-save-layout hook wrote its pi sidecar (<snapshot>.pi). Adopt that
+# sidecar for "last": the layout is unchanged, the pane -> pi session map may
+# not be. Touch "last" too, so its mtime says when state was last saved.
+if [ -L "$resurrect_dir/last" ]; then
+    for sidecar in "$resurrect_dir"/tmux_resurrect_*.txt.pi; do
+        if [ ! -f "$sidecar" ] || [ ! "$sidecar" -nt "$save_started" ] || [ -e "${sidecar%.pi}" ]; then
+            continue
+        fi
+        current="$(readlink -f "$resurrect_dir/last")"
+        mv -f "$sidecar" "$current.pi"
+        touch "$current"
+    done
 fi
 
 # Shrink guard: if the new snapshot has fewer than half the panes of the
@@ -62,6 +88,9 @@ if [ -n "$prev_file" ] && [ "$prev_panes" -ge 10 ] && [ -L "$resurrect_dir/last"
         new_panes=$(grep -c '^pane' "$new_file" 2>/dev/null || echo 0)
         if [ "$new_panes" -lt "$((prev_panes / 2))" ]; then
             ln -sf "$(basename "$prev_file")" "$resurrect_dir/last"
+            if [ -f "$contents_backup" ]; then
+                cp -p "$contents_backup" "$contents"
+            fi
             echo "WARNING: new save has $new_panes panes vs previous $prev_panes;" \
                  "kept 'last' -> $(basename "$prev_file") (new save retained as $(basename "$new_file"))"
         fi

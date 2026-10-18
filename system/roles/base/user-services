@@ -5,6 +5,7 @@ enable claude-token-proxy.service
 enable google-code-assist-proxy.service
 enable llm-alert.timer
 enable llm-schedule.timer
+enable tmux.service
 enable tmux-resurrect-save.timer
 enable git-bundle-backup.timer
 enable host-pressure-alert.timer

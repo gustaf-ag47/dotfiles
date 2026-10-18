@@ -1,0 +1,51 @@
+#!/bin/bash
+# netchange: dead-man's switch for risky network changes (VPN up, route or
+# firewall edits) on a machine you might lose access to.
+#
+#   netchange up [-t 5m] [-r "<revert cmd>"] -- <command ...>
+#       Schedules the revert (default: net-recover) to run as root after the
+#       timeout, THEN runs <command>. If you still have access afterwards:
+#   netchange keep        cancel the pending revert (the change stays)
+#   netchange status      show the pending revert, if any
+#
+# If the command cut you off, the revert fires on its own and the machine comes
+# back. Born from skrubben disappearing behind a failed wg-quick (2026-10-18).
+set -euo pipefail
+
+UNIT=netchange-revert
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+up)
+	timeout=5m revert="/usr/local/bin/net-recover"
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		-t) timeout="$2"; shift 2 ;;
+		-r) revert="$2"; shift 2 ;;
+		--) shift; break ;;
+		*) echo "netchange: unknown option $1" >&2; usage 1 ;;
+		esac
+	done
+	[ $# -gt 0 ] || { echo "netchange: no command after --" >&2; usage 1; }
+	if systemctl is-active --quiet "$UNIT.timer" 2>/dev/null; then
+		echo "netchange: a revert is already pending; run 'netchange keep' first" >&2; exit 1
+	fi
+	sudo systemd-run --quiet --unit="$UNIT" --on-active="$timeout" \
+		--description="netchange: auto-revert ($revert)" /bin/sh -c "$revert"
+	echo "netchange: revert '$revert' armed for $timeout. Run 'netchange keep' to cancel it."
+	"$@"
+	;;
+keep)
+	if sudo systemctl stop "$UNIT.timer" 2>/dev/null; then
+		echo "netchange: revert cancelled, change kept."
+	else
+		echo "netchange: nothing pending." >&2; exit 1
+	fi
+	;;
+status)
+	systemctl list-timers --all --no-pager "$UNIT.timer" 2>/dev/null | sed -n '1,2p'
+	;;
+-h|--help|"") usage ;;
+*) echo "netchange: unknown subcommand $cmd" >&2; usage 1 ;;
+esac

@@ -1,0 +1,12 @@
+[Unit]
+Description=Verify mail backups: restic check (rotating 1/12) and a restore test
+Documentation=file://%h/sync/src/dotfiles/bin/mail-backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/mail-backup verify
+TimeoutStartSec=4h

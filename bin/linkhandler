@@ -1,5 +1,12 @@
 #!/bin/sh
+# linkhandler [-r] [URL]: route a URL (default: clipboard) to the right program.
+# -r: read a web page in the terminal (bin/readurl) instead of the browser.
 
+reader=0
+if [ "$1" = "-r" ]; then
+	reader=1
+	shift
+fi
 if [ -z "$1" ]; then
 	url="$(wl-paste)"
 else
@@ -22,6 +29,8 @@ case "$url" in
 *)
 	if [ -f "$url" ]; then
 		setsid -f "$DOTFILES/bin/terminal" -e "$EDITOR" "$url" >/dev/null 2>&1
+	elif [ "$reader" = 1 ]; then
+		setsid -f "$DOTFILES/bin/terminal" -e "$DOTFILES/bin/readurl" "$url" >/dev/null 2>&1
 	else
 		setsid -f "$DOTFILES/bin/browser-launcher" "$url" >/dev/null 2>&1
 	fi

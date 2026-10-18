@@ -53,7 +53,6 @@ backup_item "/var/lib/bluetooth" "$BACKUP_FOLDER/bluetooth" "600" "700"
 backup_item "/etc/NetworkManager/system-connections" "$BACKUP_FOLDER/network-connections" "600" "700"
 backup_item "$HOME/.ssh" "$BACKUP_FOLDER/ssh-keys" "600" "700"
 backup_item "$HOME/.mozilla/firefox" "$BACKUP_FOLDER/firefox-data"
-backup_item "$HOME/.thunderbird" "$BACKUP_FOLDER/thunderbird-data"
 backup_item "$HOME/.gnupg" "$BACKUP_FOLDER/gnupg" "600" "700"
 
 cp /etc/fstab "$BACKUP_FOLDER/fstab" && chmod 644 "$BACKUP_FOLDER/fstab"

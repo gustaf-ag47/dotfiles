@@ -241,6 +241,11 @@ mkdir -p "$XDG_CONFIG_HOME/transmission-daemon"
 link_config "$DOTFILES/config/transmission/settings.json" "$XDG_CONFIG_HOME/transmission-daemon/settings.json"
 link_config "$DOTFILES/config/newsboat" "$XDG_CONFIG_HOME/newsboat"
 link_config "$DOTFILES/config/pulsemixer" "$XDG_CONFIG_HOME/pulsemixer"
+# Terminal mail: mbsync -> Maildir -> notmuch/neomutt, msmtp to send.
+link_config "$DOTFILES/config/neomutt" "$XDG_CONFIG_HOME/neomutt"
+link_config "$DOTFILES/config/mail/isyncrc" "$XDG_CONFIG_HOME/isyncrc"
+link_config "$DOTFILES/config/mail/msmtprc" "$XDG_CONFIG_HOME/msmtp/config"
+link_config "$DOTFILES/config/notmuch" "$XDG_CONFIG_HOME/notmuch"
 
 # Link tmuxp configs from local directory (project/work-specific sessions)
 if [ -d "$LOCAL_CONFIG/config/tmuxp" ]; then
@@ -252,11 +257,30 @@ link_config "$DOTFILES/config/tmux" "$XDG_CONFIG_HOME/tmux"
 # gitignored config/tmux/plugins/), so tpm must be cloned there.
 [ ! -d "$XDG_CONFIG_HOME/tmux/plugins/tpm" ] &&
 	git clone https://github.com/tmux-plugins/tpm "$XDG_CONFIG_HOME/tmux/plugins/tpm"
+# Fetch the @plugin list headlessly (idempotent: present plugins are skipped).
+# Without this a fresh machine has tpm but no tmux-resurrect, so every save
+# fails and nothing comes back after a reboot (xps14, 2026-10-18).
+if [ -x "$XDG_CONFIG_HOME/tmux/plugins/tpm/bin/install_plugins" ]; then
+	"$XDG_CONFIG_HOME/tmux/plugins/tpm/bin/install_plugins" >/dev/null 2>&1 ||
+		echo "  warning: tpm install_plugins failed (offline?); run prefix+I in tmux"
+fi
+
+# Session persistence: the user systemd instance (tmux.service, the save
+# timer) must exist from boot and survive logout, like a server (skrubben).
+if command -v loginctl >/dev/null 2>&1 &&
+	[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+	loginctl enable-linger "$USER" 2>/dev/null && echo "  linger: enabled for $USER" ||
+		echo "  warning: could not enable linger for $USER (run: sudo loginctl enable-linger $USER)"
+fi
 
 link_config "$DOTFILES/config/gui/dunst" "$XDG_CONFIG_HOME/dunst"
 link_config "$DOTFILES/config/gui/alacritty" "$XDG_CONFIG_HOME/alacritty"
 link_config "$DOTFILES/config/gui/zathura" "$XDG_CONFIG_HOME/zathura"
 link_config "$DOTFILES/config/gui/gtk-3.0" "$XDG_CONFIG_HOME/gtk-3.0"
+link_config "$DOTFILES/config/gui/gtk-4.0" "$XDG_CONFIG_HOME/gtk-4.0"
+link_config "$DOTFILES/config/fontconfig" "$XDG_CONFIG_HOME/fontconfig"
+link_config "$DOTFILES/config/qt5ct" "$XDG_CONFIG_HOME/qt5ct"
+link_config "$DOTFILES/config/qt6ct" "$XDG_CONFIG_HOME/qt6ct"
 link_config "$DOTFILES/config/gui/gtk-2.0" "$XDG_CONFIG_HOME/gtk-2.0"
 # GTK2 reads ~/.gtkrc-2.0 by default, not ~/.config/gtk-2.0/gtkrc.
 link_config "$DOTFILES/config/gui/gtk-2.0/gtkrc" "$HOME/.gtkrc-2.0"
@@ -436,6 +460,9 @@ fi
 if command -v pi >/dev/null 2>&1; then
     "$DOTFILES/bin/pi-setup" --apply || echo "  warning: pi-setup reported problems" >&2
 fi
+
+# Desktop theme into gsettings (GTK4/libadwaita, portals). No-op without a session bus.
+"$DOTFILES/bin/theme-apply" || true
 
 # Last of the link steps: every ExecStart target now exists.
 enable_user_units

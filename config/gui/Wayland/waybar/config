@@ -146,8 +146,8 @@
       "car": "󰄋",
       "default": ["󰕿", "󰖀", "󰕾"]
     },
-    "on-click": "pulsemixer",
-    "on-click-right": "pavucontrol",
+    "on-click": "terminal -e pulsemixer",
+    "on-click-right": "terminal -e wiremix",
     "scroll-step": 5,
     "smooth-scrolling-threshold": 1
   },
@@ -159,6 +159,12 @@
     "on-click": "hyprctl switchxkblayout at-translated-set-2-keyboard next"
   },
   
+  "idle_inhibitor": {
+    "format": "{icon}",
+    "format-icons": {"activated": "", "deactivated": ""},
+    "tooltip-format-activated": "Caffeine on: no lock, no screen off",
+    "tooltip-format-deactivated": "Caffeine off: lock after 5 min"
+  },
   "custom/llm-usage": {
     "exec": "llm-usage --waybar",
     "return-type": "json",

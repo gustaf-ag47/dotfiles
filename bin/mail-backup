@@ -1,0 +1,185 @@
+#!/bin/bash
+# mail-backup [backup|verify|init|status] -- versioned, encrypted backups of
+# the append-only mail archive (~/.local/share/mail-archive) with restic.
+#
+#   backup  snapshot the archive into every configured repository (daily timer)
+#   verify  restic check on a rotating 1/12 of the data, then restore the newest
+#           snapshot to scratch and compare per-folder counts with the manifest
+#           taken at backup time (monthly timer)
+#   init    create any configured repository that does not exist yet
+#   status  newest snapshot per repository
+#
+# Repositories: one restic URI per line in $DOTFILES/local/env/mail/backup-repos
+# (comments allowed), or MAIL_BACKUP_REPOS (newline-separated). Password file:
+# $DOTFILES/local/env/mail/restic-password. Both live in the private overlay.
+# Plan and rationale: $NOTES/Homelab/dotfiles/MAIL-BACKUP-3-2-1.md.
+set -euo pipefail
+
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+src="${MAIL_BACKUP_SOURCE:-$data/mail-archive}"
+overlay="${MAIL_BACKUP_OVERLAY:-${DOTFILES:-$HOME/sync/src/dotfiles}/local/env/mail}"
+password_file="${MAIL_BACKUP_PASSWORD_FILE:-$overlay/restic-password}"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/mail-backup"
+lock="${XDG_RUNTIME_DIR:-/tmp}/mail-sync.lock"
+stale_days="${MAIL_BACKUP_STALE_DAYS:-3}"
+manifest_name=.backup-manifest
+
+die() {
+	echo "mail-backup: $*" >&2
+	exit 1
+}
+
+alert() {
+	echo "mail-backup: ALERT: $*" >&2
+	if command -v notify-send >/dev/null 2>&1; then
+		notify-send -u critical "Mail backup" "$*" 2>/dev/null || true
+	fi
+}
+
+REPOS=()
+load_repos() {
+	local list
+	if [[ -n "${MAIL_BACKUP_REPOS:-}" ]]; then
+		list=$MAIL_BACKUP_REPOS
+	elif [[ -r "$overlay/backup-repos" ]]; then
+		list=$(cat "$overlay/backup-repos")
+	else
+		die "no repositories: create $overlay/backup-repos (one restic URI per line)"
+	fi
+	mapfile -t REPOS < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' <<<"$list")
+	((${#REPOS[@]} > 0)) || die "repository list is empty"
+}
+
+rr() { # rr <repo> <restic args...>
+	local repo=$1
+	shift
+	restic -r "$repo" --password-file "$password_file" "$@"
+}
+
+stamp_for() { # stable per-repository stamp file name
+	printf '%s/ok-%s' "$state" "$(printf '%s' "$1" | sha256sum | cut -c1-16)"
+}
+
+# "<count> <folder>" for every Maildir folder (cur+new), sorted by folder.
+folder_counts() {
+	local root=$1
+	find "$root" -type f \( -path '*/cur/*' -o -path '*/new/*' \) -printf '%h\n' |
+		sed -e "s|^$root/||" -e 's#/\(cur\|new\)$##' | sort | uniq -c |
+		awk '{n=$1; $1=""; sub(/^ /,""); print n" "$0}'
+}
+
+total_of() { awk '{s+=$1} END {print s+0}'; }
+
+check_stale() {
+	local repo=$1 stamp
+	stamp=$(stamp_for "$repo")
+	if [[ ! -e "$stamp" ]] || [[ -n "$(find "$stamp" -mtime +"$((stale_days - 1))" -print)" ]]; then
+		alert "no successful backup to $repo for ${stale_days}+ days"
+	fi
+}
+
+cmd_backup() {
+	[[ -d "$src" ]] || die "no archive at $src"
+	[[ -r "$password_file" ]] || die "no password file at $password_file"
+	mkdir -p "$state"
+
+	exec 9>"$lock"
+	flock -w 600 9 || die "mail-sync still running after 10 minutes"
+
+	local counts total last
+	counts=$(folder_counts "$src")
+	total=$(total_of <<<"$counts")
+	last=$(cat "$state/last-count" 2>/dev/null || echo 0)
+	# The archive only ever gains mail. Fewer messages than last time means an
+	# accidental delete or a broken disk: refuse to make that the newest backup.
+	if ((total < last)) && [[ "${MAIL_BACKUP_ALLOW_SHRINK:-}" != 1 ]]; then
+		alert "archive shrank from $last to $total messages; not backing up (MAIL_BACKUP_ALLOW_SHRINK=1 to override)"
+		exit 1
+	fi
+	{
+		echo "# mail-backup manifest $(date -Is) host=$(hostname) total=$total"
+		echo "$counts"
+	} >"$src/$manifest_name"
+
+	local repo failed=0
+	while IFS= read -r repo; do
+		if rr "$repo" backup --quiet --tag mail-archive --host "$(hostname)" "$src"; then
+			touch "$(stamp_for "$repo")"
+			echo "mail-backup: $total messages -> $repo"
+		else
+			failed=1
+			echo "mail-backup: backup to $repo failed" >&2
+			check_stale "$repo"
+		fi
+	done < <(printf '%s\n' "${REPOS[@]}")
+	echo "$total" >"$state/last-count"
+	return "$failed"
+}
+
+cmd_verify() {
+	[[ -r "$password_file" ]] || die "no password file at $password_file"
+	local scratch_root="${MAIL_BACKUP_SCRATCH:-${XDG_CACHE_HOME:-$HOME/.cache}/mail-backup-verify}"
+	local subset="$((10#$(date +%m) % 12 + 1))/12" repo failed=0
+	while IFS= read -r repo; do
+		echo "mail-backup: verify $repo (read-data-subset $subset)"
+		if ! rr "$repo" check --read-data-subset="$subset"; then
+			alert "restic check failed for $repo"
+			failed=1
+			continue
+		fi
+		rm -rf "$scratch_root"
+		mkdir -p "$scratch_root"
+		chmod 700 "$scratch_root"
+		if ! rr "$repo" restore latest --tag mail-archive --target "$scratch_root" >/dev/null; then
+			alert "restore test failed for $repo"
+			failed=1
+			continue
+		fi
+		local restored="$scratch_root$src"
+		if [[ ! -r "$restored/$manifest_name" ]]; then
+			alert "restored snapshot from $repo has no manifest"
+			failed=1
+		elif ! diff <(grep -v '^#' "$restored/$manifest_name") <(folder_counts "$restored") >/dev/null; then
+			alert "restored mail from $repo does not match its manifest"
+			failed=1
+		else
+			echo "mail-backup: restore OK: $(folder_counts "$restored" | total_of) messages match the manifest"
+		fi
+		rm -rf "$scratch_root"
+	done < <(printf '%s\n' "${REPOS[@]}")
+	return "$failed"
+}
+
+cmd_init() {
+	[[ -r "$password_file" ]] || die "no password file at $password_file"
+	local repo
+	while IFS= read -r repo; do
+		if rr "$repo" cat config >/dev/null 2>&1; then
+			echo "mail-backup: $repo already initialised"
+		else
+			rr "$repo" init
+		fi
+	done < <(printf '%s\n' "${REPOS[@]}")
+}
+
+cmd_status() {
+	local repo
+	while IFS= read -r repo; do
+		echo "== $repo"
+		rr "$repo" snapshots --tag mail-archive --latest 1 || true
+	done < <(printf '%s\n' "${REPOS[@]}")
+}
+
+case "${1:-backup}" in
+backup | verify | init | status) load_repos ;;
+esac
+case "${1:-backup}" in
+backup) cmd_backup ;;
+verify) cmd_verify ;;
+init) cmd_init ;;
+status) cmd_status ;;
+*)
+	echo "usage: mail-backup [backup|verify|init|status]" >&2
+	exit 2
+	;;
+esac

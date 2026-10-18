@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""pkgpick -- choose which packages a machine gets, interactively.
+
+Lists every package of every role (system/roles/*) with its state for one
+machine profile and lets you toggle it in fzf:
+
+  Tab       toggle the package (or, on a role row, the whole role)
+  Enter     save and quit        Esc / Ctrl-C   quit without saving
+  type      to search            preview pane   pacman/paru -Si of the package
+
+Saving writes two files, both reviewed like any other change:
+  profiles/<host>.env                 PROFILE_ROLES (role rows)
+  system/hosts/<host>/packages.select "-pkg" drops a package an enabled role
+                                      brings, "+pkg" adds one from a disabled
+                                      role (scripts/install-system.sh reads it)
+Common, GPU and host packages are the hardware layer and are not listed.
+
+Usage:
+  pkgpick [host]            interactive (default host: $PROFILE or hostname)
+  pkgpick [host] --list     print the effective package list and exit
+"""
+import json
+import os
+import re
+import shlex
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+DOTFILES = Path(os.environ.get("DOTFILES") or Path(__file__).resolve().parents[1])
+# Roles every machine gets: their row cannot be switched off (single packages
+# inside them still can).
+LOCKED_ROLES = {"base"}
+SELECT_HEADER = (
+    "# Managed by `pkgpick {host}` (edit by hand if you like).\n"
+    "# -pkg drops a package an enabled role brings; +pkg adds one from a role\n"
+    "# not in PROFILE_ROLES. Read by scripts/install-system.sh.\n"
+)
+
+
+def entries(path):
+    """Package names in a layer file: comments and blank lines stripped."""
+    if not path.is_file():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.append(line)
+    return out
+
+
+def load_roles(dotfiles=DOTFILES):
+    """{role: [(pkg, kind)]} for every system/roles/<role>, kind = 'repo'|'aur'."""
+    roles = {}
+    for d in sorted((dotfiles / "system/roles").iterdir()):
+        if d.is_dir():
+            roles[d.name] = [(p, "repo") for p in entries(d / "packages")] + [
+                (p, "aur") for p in entries(d / "packages.aur")
+            ]
+    return roles
+
+
+def profile_path(host, dotfiles=DOTFILES):
+    return dotfiles / "profiles" / f"{host}.env"
+
+
+def select_path(host, dotfiles=DOTFILES):
+    return dotfiles / "system/hosts" / host / "packages.select"
+
+
+def read_profile_roles(host, dotfiles=DOTFILES):
+    m = re.search(r'^PROFILE_ROLES="?([^"\n]*)"?', profile_path(host, dotfiles).read_text(), re.M)
+    return m.group(1).split() if m else []
+
+
+def read_select(host, dotfiles=DOTFILES):
+    off, on = set(), set()
+    for e in entries(select_path(host, dotfiles)):
+        if e.startswith("-") and len(e) > 1:
+            off.add(e[1:])
+        elif e.startswith("+") and len(e) > 1:
+            on.add(e[1:])
+    return off, on
+
+
+class State:
+    """Enabled roles plus per-package overrides, kept minimal (normalized)."""
+
+    def __init__(self, roles, enabled, off=(), on=()):
+        self.roles = roles  # {role: [(pkg, kind)]}
+        self.enabled = [r for r in enabled if r in roles]
+        for r in sorted(LOCKED_ROLES & set(roles)):
+            if r not in self.enabled:
+                self.enabled.insert(0, r)
+        self.off, self.on = set(off), set(on)
+        self.normalize()
+
+    def roles_of(self, pkg):
+        return [r for r, pkgs in self.roles.items() if any(p == pkg for p, _ in pkgs)]
+
+    def from_enabled_role(self, pkg):
+        return any(r in self.enabled for r in self.roles_of(pkg))
+
+    def is_on(self, pkg):
+        return pkg in self.on or (self.from_enabled_role(pkg) and pkg not in self.off)
+
+    def normalize(self):
+        # -pkg only means something while a role brings pkg; +pkg only while none does.
+        self.off = {p for p in self.off if self.from_enabled_role(p)}
+        self.on = {p for p in self.on if not self.from_enabled_role(p) and self.roles_of(p)}
+
+    def toggle_pkg(self, pkg):
+        if self.is_on(pkg):
+            self.on.discard(pkg)
+            if self.from_enabled_role(pkg):
+                self.off.add(pkg)
+        else:
+            self.off.discard(pkg)
+            if not self.from_enabled_role(pkg):
+                self.on.add(pkg)
+        self.normalize()
+
+    def toggle_role(self, role):
+        if role in LOCKED_ROLES:
+            return  # always on
+        if role in self.enabled:
+            self.enabled.remove(role)
+        else:
+            self.enabled.append(role)
+        self.normalize()
+
+    def effective(self):
+        """Sorted (pkg, kind) the roles + selection install (deduplicated)."""
+        seen = {}
+        for pkgs in self.roles.values():
+            for p, kind in pkgs:
+                if self.is_on(p):
+                    seen.setdefault(p, kind)
+        return sorted(seen.items())
+
+    def to_json(self):
+        return {"enabled": self.enabled, "off": sorted(self.off), "on": sorted(self.on)}
+
+    @classmethod
+    def from_json(cls, roles, data):
+        return cls(roles, data["enabled"], data["off"], data["on"])
+
+
+def render(state):
+    """fzf input: tab-separated, field 1 = kind (role|pkg), field 2 = name."""
+    lines = []
+    for role, pkgs in state.roles.items():
+        on = role in state.enabled
+        n_on = sum(1 for p, _ in pkgs if state.is_on(p))
+        lock = "  (always on)" if role in LOCKED_ROLES else ""
+        lines.append(f"role\t{role}\t{'■' if on else '□'} {role.upper():<10} {n_on}/{len(pkgs)} on{lock}")
+        for p, kind in pkgs:
+            mark = "✔" if state.is_on(p) else "·"
+            note = ""
+            if p in state.off:
+                note = "  (deselected)"
+            elif p in state.on:
+                note = "  (added)"
+            lines.append(f"pkg\t{p}\t    {mark} {p:<34} {role}{' aur' if kind == 'aur' else ''}{note}")
+    return "\n".join(lines)
+
+
+def write_selection(host, state, dotfiles=DOTFILES):
+    prof = profile_path(host, dotfiles)
+    text = prof.read_text()
+    roles_line = f'PROFILE_ROLES="{" ".join(state.enabled)}"'
+    if re.search(r"^PROFILE_ROLES=.*$", text, re.M):
+        text = re.sub(r"^PROFILE_ROLES=.*$", roles_line, text, count=1, flags=re.M)
+    else:
+        text = text.rstrip("\n") + "\n" + roles_line + "\n"
+    prof.write_text(text)
+
+    sel = select_path(host, dotfiles)
+    body = [f"-{p}" for p in sorted(state.off)] + [f"+{p}" for p in sorted(state.on)]
+    if body:
+        sel.parent.mkdir(parents=True, exist_ok=True)
+        sel.write_text(SELECT_HEADER.format(host=host) + "\n".join(body) + "\n")
+    elif sel.exists():
+        sel.unlink()
+
+
+def default_host():
+    if os.environ.get("PROFILE"):
+        return os.environ["PROFILE"]
+    try:
+        return Path("/etc/hostname").read_text().strip()
+    except OSError:
+        return socket.gethostname()
+
+
+def interactive(host):
+    if not shutil.which("fzf"):
+        sys.exit("pkgpick: needs fzf")
+    roles = load_roles()
+    state = State(roles, read_profile_roles(host), *read_select(host))
+    before = state.to_json()
+    with tempfile.TemporaryDirectory(prefix="pkgpick-") as tmp:
+        sf = Path(tmp) / "state.json"
+        sf.write_text(json.dumps(state.to_json()))
+        me = shlex.quote(str(Path(__file__).resolve()))
+        q = shlex.quote(str(sf))
+        preview = (
+            "if [ {1} = role ]; then echo \"role {2}:\"; "
+            f"{me} _rolepkgs {{2}}; else pacman -Si {{2}} 2>/dev/null || "
+            "paru -Si {2} 2>/dev/null || echo '(no info: not in the synced repos)'; fi"
+        )
+        cmd = [
+            "fzf", "--ansi", "--delimiter", "\t", "--with-nth", "3", "--no-sort",
+            "--layout", "reverse", "--prompt", f"{host}> ",
+            "--header", f"{host}: Tab toggle (role row = whole role), Enter save, Esc cancel",
+            "--preview", preview, "--preview-window", "right,45%,wrap",
+            "--bind", f"tab:execute-silent({me} _toggle {q} {{1}} {{2}})+reload({me} _render {q})",
+        ]
+        res = subprocess.run(cmd, input=render(state), text=True, stdout=subprocess.DEVNULL)
+        if res.returncode not in (0, 1):  # 130 = Esc/Ctrl-C
+            print("pkgpick: cancelled, nothing saved")
+            return 1
+        state = State.from_json(roles, json.loads(sf.read_text()))
+    if state.to_json() == before:
+        print("pkgpick: no changes")
+        return 0
+    write_selection(host, state)
+    n = len(state.effective())
+    print(f"pkgpick: saved {host}: roles '{' '.join(state.enabled)}', "
+          f"{len(state.off)} deselected, {len(state.on)} added -> {n} role packages")
+    print(f"  review: git -C {DOTFILES} diff -- profiles/{host}.env system/hosts/{host}/")
+    print(f"  full plan: scripts/install-system.sh --profile {host} --list")
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["_toggle"]:  # fzf callback: _toggle <statefile> <role|pkg> <name>
+        sf, kind, name = Path(argv[1]), argv[2], argv[3]
+        roles = load_roles()
+        st = State.from_json(roles, json.loads(sf.read_text()))
+        st.toggle_role(name) if kind == "role" else st.toggle_pkg(name)
+        sf.write_text(json.dumps(st.to_json()))
+        return 0
+    if argv[:1] == ["_render"]:
+        roles = load_roles()
+        print(render(State.from_json(roles, json.loads(Path(argv[1]).read_text()))))
+        return 0
+    if argv[:1] == ["_rolepkgs"]:
+        for p, kind in load_roles().get(argv[1], []):
+            print(f"  {p}{' (aur)' if kind == 'aur' else ''}")
+        return 0
+    if any(a in ("-h", "--help") for a in argv):
+        print(__doc__)
+        return 0
+    args = [a for a in argv if not a.startswith("-")]
+    host = args[0] if args else default_host()
+    if not profile_path(host).is_file():
+        sys.exit(f"pkgpick: no profiles/{host}.env")
+    if "--list" in argv:
+        st = State(load_roles(), read_profile_roles(host), *read_select(host))
+        for p, kind in st.effective():
+            print(f"{p}{' (aur)' if kind == 'aur' else ''}")
+        return 0
+    return interactive(host)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

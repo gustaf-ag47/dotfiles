@@ -1,0 +1,51 @@
+#!/bin/bash
+# mail-sync [-j N] [mbsync args] -- pull/push IMAP with mbsync, then index with
+# notmuch. Default syncs every channel (-a). Single-instance: a second run while
+# one is in flight exits 0 instead of racing mbsync's state files.
+#
+# -j N: sync each mailbox of every channel in its own mbsync, N at a time.
+# iCloud serves ~13 MB/min per IMAP connection, so the multi-GB first sync is
+# hours serially; separate mailboxes have separate state files, so parallel
+# runs over disjoint boxes are safe.
+set -euo pipefail
+
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+lock="${XDG_RUNTIME_DIR:-/tmp}/mail-sync.lock"
+channels=(icloud icloud-archive)
+
+jobs=1
+if [[ "${1:-}" == -j ]]; then
+	jobs=${2:?usage: mail-sync -j N}
+	shift 2
+fi
+if ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+	echo "mail-sync: -j needs a positive integer" >&2
+	exit 2
+fi
+
+exec 9>"$lock"
+if ! flock -n 9; then
+	echo "mail-sync: already running" >&2
+	exit 0
+fi
+
+mkdir -p "$data/mail/icloud" "$data/mail-archive/icloud"
+
+if ((jobs > 1)) && [[ $# -eq 0 ]]; then
+	status=0
+	for channel in "${channels[@]}"; do
+		mbsync -l "$channel" | sed "s|^|$channel:|" |
+			xargs -d '\n' -P "$jobs" -n 1 mbsync || status=$?
+	done
+	# Second pass picks up boxes whose parallel run failed or was throttled.
+	((status == 0)) || mbsync -a
+else
+	if [[ $# -eq 0 ]]; then
+		set -- -a
+	fi
+	mbsync "$@"
+fi
+
+if command -v notmuch >/dev/null 2>&1; then
+	notmuch new --quiet
+fi

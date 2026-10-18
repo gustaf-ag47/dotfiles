@@ -1,0 +1,33 @@
+#!/bin/bash
+# readurl -- read a web page in the terminal: readability extraction (rdrview)
+# -> markdown (pandoc) -> glow pager. Falls back to pandoc alone when rdrview
+# is missing, and to w3m -dump when pandoc is missing too.
+#
+#   readurl URL        read URL (defaults to the clipboard)
+#   readurl -m URL     print markdown to stdout instead of paging
+#
+# linkhandler -r sends links here; the terminal keybind uses the clipboard.
+set -euo pipefail
+
+mode=page
+[[ "${1:-}" == -m ]] && { mode=stdout; shift; }
+url="${1:-$(wl-paste 2>/dev/null || true)}"
+[[ -n "$url" ]] || { echo "readurl: no URL" >&2; exit 2; }
+
+to_markdown() {
+	if command -v rdrview >/dev/null && command -v pandoc >/dev/null; then
+		rdrview -H "$url" | pandoc -f html -t gfm-raw_html --wrap=none
+	elif command -v pandoc >/dev/null; then
+		curl -sfL -A 'Mozilla/5.0' "$url" | pandoc -f html -t gfm-raw_html --wrap=none
+	else
+		w3m -dump "$url"
+	fi
+}
+
+if [[ "$mode" == stdout ]]; then
+	to_markdown
+elif command -v glow >/dev/null; then
+	to_markdown | glow -p -w 100 -
+else
+	to_markdown | "${PAGER:-less}"
+fi

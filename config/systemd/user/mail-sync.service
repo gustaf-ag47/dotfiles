@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync IMAP mail to Maildir (mbsync) and index it (notmuch)
+Documentation=file://%h/sync/src/dotfiles/bin/mail-sync
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/mail-sync -a
+TimeoutStartSec=3h

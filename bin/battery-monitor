@@ -53,6 +53,21 @@ is_charging() {
     return 1
 }
 
+# Hibernate needs a resume device (resume= on the cmdline or /sys/power/resume);
+# without one the image is written and the next boot is cold: a poweroff that
+# loses the session. s2idle at least keeps the session for a few hours.
+# Overridable for tests.
+POWER_RESUME_FILE="${POWER_RESUME_FILE:-/sys/power/resume}"
+emergency_action() {
+    local resume
+    resume=$(cat "$POWER_RESUME_FILE" 2>/dev/null || echo "0:0")
+    if [[ -n "$resume" && "$resume" != "0:0" ]]; then
+        echo hibernate
+    else
+        echo suspend
+    fi
+}
+
 # Send notification
 send_notification() {
     local title="$1"
@@ -83,7 +98,9 @@ handle_low_battery() {
     fi
     
     if [[ $capacity -le $VERY_CRITICAL_THRESHOLD ]]; then
-        send_notification "Critical Battery!" "Battery at ${capacity}%. System will hibernate in 30 seconds." "critical" "battery-caution"
+        local action
+        action=$(emergency_action)
+        send_notification "Critical Battery!" "Battery at ${capacity}%. System will ${action} in 30 seconds." "critical" "battery-caution"
         echo "$current_time" > "$LAST_NOTIFICATION_FILE"
         
         # Give user 30 seconds to plug in charger
@@ -96,8 +113,8 @@ handle_low_battery() {
         new_capacity=$(echo "$new_info" | cut -d',' -f1)
         
         if [[ $new_capacity -le $VERY_CRITICAL_THRESHOLD ]] && ! is_charging; then
-            send_notification "Hibernating Now" "Battery critically low. Hibernating system." "critical" "battery-caution"
-            systemctl hibernate
+            send_notification "Battery empty" "Battery critically low: ${action}." "critical" "battery-caution"
+            systemctl "$action"
         fi
         
     elif [[ $capacity -le $CRITICAL_BATTERY_THRESHOLD ]]; then
@@ -160,7 +177,8 @@ monitor_battery() {
     echo "$(date): Battery ${capacity}%, Status: ${status}, Charging: ${charging}"
 }
 
-# Run once or continuously
+# Run once or continuously (tests source this file and call functions directly)
+[[ "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 if [[ "${1:-}" == "--daemon" ]]; then
     while true; do
         monitor_battery

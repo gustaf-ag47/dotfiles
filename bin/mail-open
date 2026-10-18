@@ -1,0 +1,14 @@
+#!/bin/bash
+# mail-open <file> -- open a neomutt attachment in its desktop app, detached.
+# neomutt deletes the temp file as soon as the mailcap command returns, and
+# xdg-open returns before the browser/viewer has read it. Copy it somewhere
+# that outlives neomutt first (cleared on logout: $XDG_RUNTIME_DIR is tmpfs).
+set -euo pipefail
+
+src=${1:?usage: mail-open <file>}
+dir="${XDG_RUNTIME_DIR:-/tmp}/mail-open"
+mkdir -p "$dir"
+chmod 700 "$dir"
+dst="$dir/$(date +%s%N)-$(basename "$src")"
+cp -- "$src" "$dst"
+setsid -f "${MAIL_OPEN_CMD:-xdg-open}" "$dst" >/dev/null 2>&1
