@@ -5,6 +5,8 @@ set -euo pipefail
 #
 #   bwf [scope]            fzf picker in a scope (default: last used)
 #   bwf --wofi [scope]     same, as wofi popups (for a Hyprland keybinding)
+#   bwf [--wofi] add       create a login: name, username, password (empty =
+#                          generate), url, folder; copies the password
 #   bwf lock               forget session + cached vault
 #   bwf sync               refresh the cached vault now
 #
@@ -108,8 +110,76 @@ cache_fresh() {
   (( age < CACHE_TTL ))
 }
 
+# --- add ---------------------------------------------------------------------
+# ask <prompt> [default] [--secret]: one answer via fzf-less terminal or wofi
+ask() {
+  local prompt="$1" default="${2:-}" secret="${3:-}" answer
+  if [[ "$UI" == "wofi" ]]; then
+    if [[ "$secret" == "--secret" ]]; then
+      answer="$(wofi --dmenu --password --prompt "$prompt" --lines 1 </dev/null)" || exit 0
+    else
+      answer="$(printf '%s\n' "$default" | wofi --dmenu --prompt "$prompt" --lines 1)" || exit 0
+    fi
+  else
+    if [[ "$secret" == "--secret" ]]; then
+      read -rsp "$prompt: " answer </dev/tty; echo >&2
+    else
+      read -rp "$prompt${default:+ [$default]}: " answer </dev/tty
+      answer="${answer:-$default}"
+    fi
+  fi
+  printf '%s' "$answer"
+}
+
+# choose <prompt> <lines...>: pick one of several
+choose() {
+  local prompt="$1"; shift
+  if [[ "$UI" == "wofi" ]]; then
+    printf '%s\n' "$@" | wofi --dmenu -i --prompt "$prompt" --lines $(( $# + 1 ))
+  else
+    printf '%s\n' "$@" | fzf --header="$prompt" --reverse --height=40%
+  fi
+}
+
+cmd_add() {
+  cache_fresh || fetch_vault
+  local name user pass url folder folder_id="null" json
+
+  # URL first: name defaults to its host, like the browser extension does
+  url="$(ask "URL (optional)")"
+  name="$(ask "Name" "$(sed -E 's#^[a-z]+://##; s#/.*##; s#^www\.##' <<<"$url")")"
+  [[ -n "$name" ]] || die "add: a name is required"
+  user="$(ask "Username")"
+  pass="$(ask "Password (empty = generate)" "" --secret)"
+  if [[ -z "$pass" ]]; then
+    pass="$(bw_s generate -ulns --length 24)"
+  fi
+
+  mapfile -t folders < <(jq -r '.[] | select(.id != null) | .name' "$FOLDERS_FILE" | sort -f)
+  folder="$(choose "Folder" "(none)" "${folders[@]}")" || folder="(none)"
+  [[ -z "$folder" ]] && folder="(none)"
+  if [[ "$folder" != "(none)" ]]; then
+    folder_id="$(jq --arg n "$folder" '.[] | select(.name == $n) | .id' "$FOLDERS_FILE")"
+  fi
+
+  json="$(jq -nc --arg name "$name" --arg user "$user" --arg pass "$pass" --arg url "$url" \
+              --argjson folder "$folder_id" '{
+      type: 1, name: $name, folderId: $folder, notes: null, favorite: false, fields: [],
+      login: { username: (if $user == "" then null else $user end), password: $pass,
+               uris: (if $url == "" then [] else [{match: null, uri: $url}] end) }
+    }')"
+  bw_s create item "$(printf '%s' "$json" | bw encode)" >/dev/null || die "add: bw create failed"
+  fetch_vault
+  printf '%s' "$pass" | copy
+  say "Added '$name'${folder:+ in $folder}. Password copied, clears in ${CLEAR_SECONDS}s."
+  ( sleep "$CLEAR_SECONDS"; printf '' | copy; ) &>/dev/null &
+  disown
+}
+
 # --- subcommands -------------------------------------------------------------
 case "${1:-}" in
+  add)
+    cmd_add; exit 0 ;;
   lock)
     s="$(cat "$SESSION_FILE" 2>/dev/null || true)"
     [[ -n "$s" ]] && bw --session "$s" lock &>/dev/null || true
@@ -120,7 +190,7 @@ case "${1:-}" in
     bw_s sync >/dev/null && fetch_vault && echo "bwf: vault refreshed."
     exit 0 ;;
   -h|--help)
-    sed -n '3,22p' "$0"; exit 0 ;;
+    sed -n '3,24p' "$0"; exit 0 ;;
 esac
 
 # --- scope -------------------------------------------------------------------
