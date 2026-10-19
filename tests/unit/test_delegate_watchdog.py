@@ -60,6 +60,24 @@ class WatchdogTests(unittest.TestCase):
         self.tick()
         self.assertEqual([target for target, _ in self.sent], ["parent", "parent"])
 
+    def test_blocker_record_in_mailbox_parks_child_even_when_pane_scrolled(self):
+        mailbox = self.root / "mailbox"
+        (mailbox / "ack").mkdir(parents=True)
+        (mailbox / "ack" / "steer-1.md").write_text("# Delegation steering\n\nchild: BLOCKER none - ~/runs/report.md\n")
+        self.assertEqual(self.tick(), 10)
+        self.assertEqual([target for target, _ in self.sent], ["parent"])
+        self.assertIn("parked on BLOCKER", self.sent[0][1])
+
+    def test_later_done_record_unparks_child(self):
+        mailbox = self.root / "mailbox"
+        (mailbox / "ack").mkdir(parents=True)
+        old = mailbox / "ack" / "steer-1.md"
+        old.write_text("child: BLOCKER none - ~/r.md\n")
+        os.utime(old, (100, 100))
+        (mailbox / "ack" / "steer-2.md").write_text("child: DONE abcdef1 - ~/r.md ci:1\n")
+        self.assertEqual(self.tick(), 10)
+        self.assertEqual([target for target, _ in self.sent], ["parent", "child"])
+
     def test_dirty_and_behind_notify_both_panes_once(self):
         self.assertEqual(self.tick(), 10)
         self.assertEqual([target for target, _ in self.sent], ["parent", "child"])
