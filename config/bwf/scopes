@@ -1,0 +1,3 @@
+# bwf scopes: <scope>: <Bitwarden folder>, <folder>, ...
+# "private" is every item in no folder listed here; "all" is everything.
+sweetspot: Sweetspot
