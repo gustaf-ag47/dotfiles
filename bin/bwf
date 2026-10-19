@@ -3,9 +3,10 @@ set -euo pipefail
 
 # bwf - Bitwarden fuzzy finder: pick a login, copy a field to the clipboard.
 #
-#   bwf [all|private|<org name>]   open the picker in a scope (default: last used)
-#   bwf lock                        forget session + cached vault
-#   bwf sync                        refresh the cached vault now
+#   bwf [scope]            fzf picker in a scope (default: last used)
+#   bwf --wofi [scope]     same, as wofi popups (for a Hyprland keybinding)
+#   bwf lock               forget session + cached vault
+#   bwf sync               refresh the cached vault now
 #
 # Fast path makes no `bw` call at all: the session token and the decrypted
 # item list live in $XDG_RUNTIME_DIR/bwf (tmpfs, 0600, gone at logout/reboot).
@@ -15,8 +16,8 @@ set -euo pipefail
 # Scope: ~/.config/bwf/scopes maps a scope to Bitwarden folders, one per line:
 #     sweetspot: Sweetspot, Work
 # "private" is every item in no listed folder; "all" is everything. Ctrl-S in
-# the picker cycles the scope; the folder is also a column, so typing its
-# name fuzzy-filters too.
+# the picker cycles the scope (wofi: first menu entry); the folder is also a
+# column, so typing its name filters too.
 #
 # Dependencies: bw, jq, fzf, copy (from dotfiles bin/)
 
@@ -29,13 +30,18 @@ FOLDERS_FILE="$DIR/folders.json"
 SCOPES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/bwf/scopes"
 SCOPE_FILE="$DIR/scope"
 
+UI=fzf
+if [[ "${1:-}" == "--wofi" ]]; then UI=wofi; shift; fi
+
 for cmd in bw jq fzf; do
   command -v "$cmd" &>/dev/null || { echo "Error: '$cmd' is not installed." >&2; exit 1; }
 done
 
 mkdir -p "$DIR" && chmod 700 "$DIR"
 
-die() { echo "$*" >&2; exit 1; }
+die() { if [[ "$UI" == "wofi" ]]; then notify_err "$*"; else echo "$*" >&2; fi; exit 1; }
+notify_err() { notify-send -u critical -a bwf "bwf" "$*" 2>/dev/null || echo "$*" >&2; }
+say() { if [[ "$UI" == "wofi" ]]; then notify-send -a bwf -t 3000 "bwf" "$*" 2>/dev/null; else echo "$*"; fi; }
 
 # --- session -----------------------------------------------------------------
 session() {
@@ -44,8 +50,15 @@ session() {
     return
   fi
   bw login --check &>/dev/null || die "Not logged in: run 'bw login' first."
-  local s
-  s="$(bw unlock --raw </dev/tty)" || die "unlock failed"
+  local s pw
+  if [[ "$UI" == "wofi" ]]; then
+    pw="$(wofi --dmenu --password --prompt 'Bitwarden master password' --lines 1 </dev/null)" || exit 0
+    [[ -n "$pw" ]] || exit 0
+    s="$(BW_PW="$pw" bw unlock --raw --passwordenv BW_PW)" || { notify_err "unlock failed"; exit 1; }
+    unset pw
+  else
+    s="$(bw unlock --raw </dev/tty)" || die "unlock failed"
+  fi
   (umask 077; printf '%s' "$s" > "$SESSION_FILE")
   printf '%s' "$s"
 }
@@ -107,7 +120,7 @@ case "${1:-}" in
     bw_s sync >/dev/null && fetch_vault && echo "bwf: vault refreshed."
     exit 0 ;;
   -h|--help)
-    sed -n '3,21p' "$0"; exit 0 ;;
+    sed -n '3,22p' "$0"; exit 0 ;;
 esac
 
 # --- scope -------------------------------------------------------------------
@@ -163,25 +176,52 @@ list_items() {
   ' "$ITEMS_FILE"
 }
 
-# --- pick item (Ctrl-S cycles scope) -----------------------------------------
-while :; do
-  out="$(list_items "$scope" \
-    | fzf --with-nth=2.. --delimiter='\t' --tabstop=1 \
-          --header="[$scope]  Ctrl-S: next scope   (folder | name | username | url)" \
-          --preview='printf "Folder: %s\nName:  %s\nUser:  %s\nURL:   %s\n" {2} {3} {4} {5}' \
-          --preview-window=up:4:wrap --reverse --expect=ctrl-s)" || out=""
-  key="${out%%$'\n'*}"
-  item="${out#*$'\n'}"
-  if [[ "$key" == "ctrl-s" ]]; then
-    scope="$(next_scope "$scope")"
-    continue
-  fi
-  break
-done
+# --- pick item -----------------------------------------------------------------
+if [[ "$UI" == "fzf" ]]; then
+  # Ctrl-S cycles scope
+  while :; do
+    out="$(list_items "$scope" \
+      | fzf --with-nth=2.. --delimiter='\t' --tabstop=1 \
+            --header="[$scope]  Ctrl-S: next scope   (folder | name | username | url)" \
+            --preview='printf "Folder: %s\nName:  %s\nUser:  %s\nURL:   %s\n" {2} {3} {4} {5}' \
+            --preview-window=up:4:wrap --reverse --expect=ctrl-s)" || out=""
+    key="${out%%$'\n'*}"
+    item="${out#*$'\n'}"
+    if [[ "$key" == "ctrl-s" ]]; then
+      scope="$(next_scope "$scope")"
+      continue
+    fi
+    break
+  done
+  [[ -n "$item" && "$item" != "$out" ]] || { echo "No item selected."; exit 0; }
+  item_id="$(cut -f1 <<<"$item")"
+else
+  # wofi: display lines are "folder │ name  (user)"; the first entry switches scope
+  while :; do
+    declare -A by_line=()
+    lines=()
+    while IFS=$'\t' read -r id folder name user uri; do
+      line="$(printf '%-14.14s │ %s' "$folder" "$name")"
+      [[ -n "$user" ]] && line+="  ($user)"
+      [[ -n "${by_line[$line]:-}" ]] && line+="  ‹${uri:-$id}›"
+      by_line["$line"]="$id"
+      lines+=("$line")
+    done < <(list_items "$scope")
+    switch="⇄  scope: $scope  →  $(next_scope "$scope")"
+    choice="$(printf '%s\n' "$switch" "${lines[@]}" \
+      | wofi --dmenu -i --prompt "Bitwarden [$scope]" --lines 14)" || exit 0
+    [[ -n "$choice" ]] || exit 0
+    if [[ "$choice" == "$switch" ]]; then
+      scope="$(next_scope "$scope")"
+      printf '%s' "$scope" > "$SCOPE_FILE"
+      continue
+    fi
+    item_id="${by_line[$choice]:-}"
+    [[ -n "$item_id" ]] || exit 0
+    break
+  done
+fi
 printf '%s' "$scope" > "$SCOPE_FILE"
-
-[[ -n "$item" && "$item" != "$out" ]] || { echo "No item selected."; exit 0; }
-item_id="$(cut -f1 <<<"$item")"
 details="$(jq -c --arg id "$item_id" '.[] | select(.id == $id)' "$ITEMS_FILE")"
 
 # --- pick field --------------------------------------------------------------
@@ -213,16 +253,23 @@ done < <(jq -r '.fields[]? | [(.name // "Field"), (.type|tostring), (.value // "
 
 [[ ${#fields[@]} -gt 0 ]] || { echo "No fields available for this item."; exit 0; }
 
-selected_index="$(printf '%s\n' "${fields[@]}" \
-  | nl -ba -w1 -s$'\t' \
-  | fzf --with-nth=2.. --delimiter='\t' --header="Select field to copy:" --reverse --height=40% \
-  | cut -f1)"
-[[ -n "$selected_index" ]] || { echo "No field selected."; exit 0; }
+if [[ "$UI" == "fzf" ]]; then
+  selected_index="$(printf '%s\n' "${fields[@]}" \
+    | nl -ba -w1 -s$'\t' \
+    | fzf --with-nth=2.. --delimiter='\t' --header="Select field to copy:" --reverse --height=40% \
+    | cut -f1)"
+else
+  chosen="$(printf '%s\n' "${fields[@]}" \
+    | wofi --dmenu -i --prompt "Copy from $(jq -r .name <<<"$details")" --lines $(( ${#fields[@]} + 1 )))" || exit 0
+  selected_index=""
+  for i in "${!fields[@]}"; do [[ "${fields[$i]}" == "$chosen" ]] && selected_index=$((i + 1)); done
+fi
+[[ -n "$selected_index" ]] || { say "No field selected."; exit 0; }
 
 value="${field_values[$((selected_index - 1))]}"
 [[ "$value" == "__TOTP__" ]] && value="$(bw_s get totp "$item_id")"
 
 printf '%s' "$value" | copy
-echo "Copied to clipboard. Clearing in ${CLEAR_SECONDS}s."
+say "${fields[$((selected_index - 1))]%%:*} copied. Clipboard clears in ${CLEAR_SECONDS}s."
 ( sleep "$CLEAR_SECONDS"; printf '' | copy; ) &>/dev/null &
 disown
