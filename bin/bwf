@@ -54,8 +54,8 @@ session() {
   bw login --check &>/dev/null || die "Not logged in: run 'bw login' first."
   local s pw
   if [[ "$UI" == "wofi" ]]; then
-    pw="$(wofi --dmenu --password --prompt 'Bitwarden master password' --lines 1 </dev/null)" || exit 0
-    [[ -n "$pw" ]] || exit 0
+    pw="$(printf '▸ Bitwarden master password\n' | wofi --dmenu --password --prompt 'Master password' --lines 2)" || exit 0
+    [[ -n "$pw" && "$pw" != "▸ Bitwarden master password" ]] || exit 0
     s="$(BW_PW="$pw" bw unlock --raw --passwordenv BW_PW)" || { notify_err "unlock failed"; exit 1; }
     unset pw
   else
@@ -115,11 +115,16 @@ cache_fresh() {
 ask() {
   local prompt="$1" default="${2:-}" secret="${3:-}" answer
   if [[ "$UI" == "wofi" ]]; then
+    # --prompt is only a placeholder in the search box (invisible with our
+    # style), so the question is also the first list entry. Picking it means
+    # "default" (or empty); typing something new returns the typed text.
+    local hint="▸ $prompt${default:+  [Enter = $default]}"
     if [[ "$secret" == "--secret" ]]; then
-      answer="$(wofi --dmenu --password --prompt "$prompt" --lines 1 </dev/null)" || exit 0
+      answer="$(printf '%s\n' "$hint" | wofi --dmenu --password --prompt "$prompt" --lines 2)" || exit 0
     else
-      answer="$(printf '%s\n' "$default" | wofi --dmenu --prompt "$prompt" --lines 1)" || exit 0
+      answer="$(printf '%s\n' "$hint" | wofi --dmenu --prompt "$prompt" --lines 2)" || exit 0
     fi
+    [[ "$answer" == "$hint" ]] && answer="$default"
   else
     if [[ "$secret" == "--secret" ]]; then
       read -rsp "$prompt: " answer </dev/tty; echo >&2

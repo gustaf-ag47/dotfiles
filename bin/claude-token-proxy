@@ -91,12 +91,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 from collections import OrderedDict
 import hashlib
 import http.client
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -2291,6 +2293,60 @@ def upstream(method: str, path: str, headers: dict, body: bytes, token: str, tim
     return conn, conn.getresponse()
 
 
+# Errno values that mean "the local network/DNS is down", not "this account is
+# spent". On a Wi-Fi drop every token's upstream call fails identically, so such a
+# request must surface as a transient offline condition the client can wait out —
+# never as pool exhaustion (which drives the failover/quota-reset machinery toward
+# a reset that is not coming) and never as a token cooldown (no quota was used).
+OFFLINE_ERRNOS = {
+    value for value in (
+        getattr(errno, name, None) for name in (
+            "ENETUNREACH", "ENETDOWN", "ENETRESET", "EHOSTUNREACH", "EHOSTDOWN",
+            "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ETIMEDOUT",
+            "EADDRNOTAVAIL", "EPIPE", "ENONET",
+        )
+    ) if value is not None
+}
+# Substring the llm-failover extension keys on to tell "offline, wait for the
+# network" apart from "pool exhausted, wait for a quota reset". Keep in sync with
+# config/pi/extensions/llm-failover.ts OFFLINE_MARKER.
+OFFLINE_MARKER = "upstream unreachable: network offline"
+
+
+def is_offline_error(exc: BaseException) -> bool:
+    """True when an upstream call failed because the local network is down, as
+    opposed to an HTTP error from Anthropic (which arrives as a response, never an
+    exception). Walks the cause/context chain so a wrapped socket error still counts."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, socket.gaierror):
+            return True  # DNS could not resolve the host -> no network
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return True
+        if isinstance(exc, OSError) and exc.errno in OFFLINE_ERRNOS:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def offline_message(failures: int, host: str = UPSTREAM_HOST) -> str:
+    return (f"claude-token-proxy: {OFFLINE_MARKER} \u2014 {failures} consecutive "
+            f"connection failure(s) reaching {host}; this machine appears to be offline. "
+            f"No OAuth account quota was consumed; the request will succeed once "
+            f"connectivity returns.")
+
+
+def upstream_reachable(host: str = UPSTREAM_HOST, port: int = 443,
+                       timeout: float = 3.0) -> tuple[bool, str | None]:
+    """Fast TCP reachability probe for the upstream host; no TLS, no quota touched."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, None
+    except OSError as exc:
+        return False, exc.__class__.__name__
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"  # Connection: close + read-to-EOF streaming.
 
@@ -2344,6 +2400,15 @@ class Handler(BaseHTTPRequestHandler):
     def _usage_page(self) -> None:
         self._send_json(200, usage_payload())
 
+    def _online_page(self) -> None:
+        """Loopback connectivity probe: can this machine reach Anthropic right now?
+        It is served locally, so a client waiting out a Wi-Fi drop can poll it even
+        while every forwarded request is failing."""
+        online, detail = upstream_reachable()
+        self._send_json(200, {"online": online, "host": UPSTREAM_HOST,
+                              "detail": detail,
+                              "checked_at": datetime.now(timezone.utc).isoformat()})
+
     def _route_page(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         model = (query.get("model") or [""])[0]
@@ -2387,6 +2452,8 @@ class Handler(BaseHTTPRequestHandler):
             messages_len = None
         boundary = (messages_len is not None and messages_len <= 2) or self.headers.get("x-cc-proxy-boundary") == "1"
         paced: set[str] = set()  # tokens already given one burst-429 pause
+        offline_failures = 0  # upstream calls that failed because the network is down
+        contacted = False     # any token actually reached upstream (got an HTTP response)
         class_name = self.headers.get("x-cc-proxy-class", "interactive")
         if self.headers.get("x-cc-proxy-class-escalate") == "1":
             class_name = escalated_class(class_name, session_key)
@@ -2423,6 +2490,15 @@ class Handler(BaseHTTPRequestHandler):
                     detail = ", ".join(
                         f"{t.name()}[{'parked' if not t.valid else 'forced' if t.fp in forced_cooldown_fps() else 'cooling'}"
                         f" u7={t.u7}]" for t in STATE)
+                if offline_failures and not contacted:
+                    # Every upstream call failed on connectivity, not quota: surface a
+                    # transient offline error. Do not cool down or park any token, do
+                    # not fall over to a provider that is just as unreachable, and do
+                    # not count it as starvation — the pool is fine, the Wi-Fi is not.
+                    log(f"WARNING: upstream unreachable — network offline "
+                        f"({offline_failures} connect failure(s)); quota untouched")
+                    self._send_api_error(503, offline_message(offline_failures), "overloaded_error")
+                    return
                 if self._deepseek_fallback(endpoint, fwd, body, model):
                     return
                 log(f"WARNING: request rejected — no token pickable: {detail}")
@@ -2433,9 +2509,14 @@ class Handler(BaseHTTPRequestHandler):
                 clear_fallback(f"token {tok.fp} pickable")
             try:
                 conn, resp = ramp_upstream(tok, self.command, self.path, fwd, body)
+                contacted = True
                 record_request(tok, model, class_name)
-            except Exception as exc:  # network error -> try next token
-                log(f"{self.command} {endpoint} -> token {tok.fp} ERROR {exc.__class__.__name__}")
+            except Exception as exc:  # upstream call failed before any HTTP response
+                offline = is_offline_error(exc)
+                if offline:
+                    offline_failures += 1
+                log(f"{self.command} {endpoint} -> token {tok.fp} ERROR "
+                    f"{exc.__class__.__name__}" + (" [offline]" if offline else ""))
                 tried.add(tok.fp)
                 continue
 
@@ -2595,6 +2676,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if endpoint == "/_route":
             self._route_page()
+            return
+        if endpoint == "/_online":
+            self._online_page()
             return
         self._proxy()
 

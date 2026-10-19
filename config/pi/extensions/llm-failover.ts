@@ -20,7 +20,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 export const ANTHROPIC = "anthropic";
 /** Substring of the proxy's `unavailable_message()`; see bin/claude-token-proxy. */
 export const POOL_EXHAUSTED_MARKER = "no OAuth account can serve";
+/** Substring of the proxy's `offline_message()`; see bin/claude-token-proxy OFFLINE_MARKER. */
+export const OFFLINE_MARKER = "upstream unreachable: network offline";
 export const ROUTE_TIMEOUT_MS = 3_000;
+/** While offline, re-probe the local connectivity endpoint this often. */
+export const OFFLINE_POLL_MS = 10_000;
 /** Minimum gap between recovery polls and between the two confirming polls. */
 export const RECOVERY_POLL_MS = 60_000;
 /** Do not repeat an identical "nothing routable" line more often than this. */
@@ -53,6 +57,8 @@ export type Target = { provider: string; model: string };
 
 export type FailoverDeps = {
 	fetchRoute: (model: string, current?: string) => Promise<RouteAnswer | null>;
+	/** Loopback connectivity probe: true online, false offline, null unknown. */
+	fetchOnline?: () => Promise<boolean | null>;
 	/** Returns false when pi cannot select the model (no auth, unknown id). */
 	setModel: (target: Target) => Promise<boolean>;
 	notify: (line: string, level: "info" | "warning" | "error") => void;
@@ -178,6 +184,20 @@ export function isPoolExhausted(errorMessage: string | undefined): boolean {
 	return typeof errorMessage === "string" && errorMessage.includes(POOL_EXHAUSTED_MARKER);
 }
 
+/**
+ * True for the proxy's transient-offline error: the network is down, not the
+ * quota. Switching providers is useless (they are equally unreachable), so the
+ * only sane response is to wait for connectivity and retry the same request.
+ */
+export function isOffline(errorMessage: string | undefined): boolean {
+	return typeof errorMessage === "string" && errorMessage.includes(OFFLINE_MARKER);
+}
+
+export function offlineLine(pollMs: number, deadline: number, now: number): string {
+	return `\u2301 network offline; waiting for connectivity, polling every ${pollMs / 1000}s`
+		+ ` (at most until ${clockText(deadline, now)}; type a message or /failover off to stop)`;
+}
+
 export function shortProvider(provider: string): string {
 	return provider === "openai-codex" ? "codex" : provider;
 }
@@ -218,6 +238,23 @@ export function rankingLines(answer: RouteAnswer | null): string[] {
 		const reset = c.reset_at ? ` reset ${c.reset_at}` : "";
 		return `  ${c.routable ? "•" : "·"} ${c.provider}/${c.model}: ${state}${quota}${reset}`;
 	});
+}
+
+/** Loopback connectivity probe (proxy `GET /_online`): true online, false offline, null unknown. */
+export async function fetchOnline(origin: string, fetchImpl: typeof fetch = fetch,
+	timeoutMs = ROUTE_TIMEOUT_MS): Promise<boolean | null> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const res = await fetchImpl(`${origin}/_online`, { signal: controller.signal, headers: { accept: "application/json" } });
+		if (!res.ok) return null;
+		const body = (await res.json()) as { online?: unknown };
+		return typeof body.online === "boolean" ? body.online : null;
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /** Loopback GET with a hard timeout; never inherits an HTTP proxy. */
@@ -400,6 +437,36 @@ export function createFailover(deps: FailoverDeps) {
 		}
 	}
 
+	/**
+	 * The proxy reported the network is down. Every provider is equally unreachable,
+	 * so do not switch: poll the local connectivity endpoint until it comes back (or
+	 * the wait cap elapses) and return true to resume the same request.
+	 */
+	async function onOffline(cancelled: () => boolean = () => false): Promise<boolean> {
+		if (!state.enabled || !wait.enabled || !deps.fetchOnline) return false;
+		state.cancelWait = false;
+		const stop = () => state.cancelWait || !state.enabled || cancelled();
+		const start = now();
+		const deadline = start + wait.maxWaitMs;
+		deps.notify(offlineLine(OFFLINE_POLL_MS, deadline, start), "warning");
+		for (;;) {
+			const t = now();
+			if (t >= deadline) {
+				deps.notify(`\u2717 still offline after ${hoursText(wait.maxWaitMs)} of waiting \u2014 giving up`, "error");
+				return false;
+			}
+			await sleep(Math.min(deadline - t, OFFLINE_POLL_MS));
+			if (stop()) {
+				deps.notify("\u23f9 stopped waiting for the network", "info");
+				return false;
+			}
+			if ((await deps.fetchOnline()) === true) {
+				deps.notify("\u25b6 network back; resuming", "info");
+				return true;
+			}
+		}
+	}
+
 	/** A turn completed normally: the next exhaustion starts a fresh wait budget. */
 	function onTurnSucceeded(): void {
 		state.waitingSince = 0;
@@ -420,7 +487,7 @@ export function createFailover(deps: FailoverDeps) {
 	}
 
 	function setPinned(pinned: boolean): void { state.pinned = pinned; }
-	return { state, onPoolExhausted, onTurnStart, onManualModelSelect, setEnabled, setPinned, onSettledExhausted, onTurnSucceeded };
+	return { state, onPoolExhausted, onTurnStart, onManualModelSelect, setEnabled, setPinned, onSettledExhausted, onOffline, onTurnSucceeded };
 }
 
 type AssistantLike = { role?: string; stopReason?: string; errorMessage?: string };
@@ -442,6 +509,7 @@ export default function llmFailover(pi: ExtensionAPI) {
 
 	const core = createFailover({
 		fetchRoute: (model, current) => fetchRoute(origin, model, fetch, ROUTE_TIMEOUT_MS, current),
+		fetchOnline: () => fetchOnline(origin, fetch, ROUTE_TIMEOUT_MS),
 		setModel: async (target) => {
 			const model = ctxRef?.modelRegistry.find(target.provider, target.model);
 			if (!model) return false;
@@ -489,10 +557,16 @@ export default function llmFailover(pi: ExtensionAPI) {
 		const entry = [...event.context.contextEntries].reverse().find((e) => e.messages.length > 0);
 		const failed = entry?.messages.at(-1) as AssistantLike | undefined;
 		if (!entry || failed?.role !== "assistant" || failed.stopReason !== "error") return;
-		if (!isPoolExhausted(failed.errorMessage)) return;
 		const model = ctx.model;
 		if (!model) return;
 		ctxRef = ctx;
+		// Network down: wait for connectivity (not a quota reset) and retry as-is.
+		if (isOffline(failed.errorMessage)) {
+			const back = await core.onOffline(interrupted);
+			if (!back) return;
+			return { entries: [{ type: "context_edit", targetId: entry.sourceEntry.id, replacement: null }], continue: true };
+		}
+		if (!isPoolExhausted(failed.errorMessage)) return;
 		const resume = await core.onSettledExhausted({ provider: model.provider, model: model.id }, failed.errorMessage, interrupted);
 		if (!resume) return;
 		return { entries: [{ type: "context_edit", targetId: entry.sourceEntry.id, replacement: null }], continue: true };

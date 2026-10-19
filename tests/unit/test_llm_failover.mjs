@@ -2,8 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createFailover, isPoolExhausted, fetchRoute, noRouteLine, relativeTime, proxyOrigin,
-  RECOVERY_POLL_MS, earliestCooldown, planWait, waitSettings, waitLine, clockText,
+  createFailover, isPoolExhausted, isOffline, fetchRoute, fetchOnline, noRouteLine, relativeTime, proxyOrigin,
+  RECOVERY_POLL_MS, OFFLINE_POLL_MS, OFFLINE_MARKER, earliestCooldown, planWait, waitSettings, waitLine, clockText,
 } from '../../config/pi/extensions/llm-failover.ts';
 import llmFailover from '../../config/pi/extensions/llm-failover.ts';
 import http from 'node:http';
@@ -26,11 +26,12 @@ const answer = (candidates) => ({
   model: 'claude-fable-5-1', candidates, first_routable: candidates.find(c => c.routable) ?? null,
 });
 
-function harness({ routes, setModelOk = () => true, start = 1_000_000, wait, launchArgs = [] }) {
-  const calls = { route: [], setModel: [], notify: [], sleep: [] };
+function harness({ routes, setModelOk = () => true, start = 1_000_000, wait, launchArgs = [], online = [] }) {
+  const calls = { route: [], setModel: [], notify: [], sleep: [], online: [] };
   let clock = start;
   const core = createFailover({
     fetchRoute: async (model) => { calls.route.push(model); return routes.shift() ?? null; },
+    fetchOnline: async () => { calls.online.push(clock); return online.length ? online.shift() : false; },
     setModel: async (target) => { calls.setModel.push(target); return setModelOk(target); },
     notify: (line, level) => calls.notify.push([level, line]),
     now: () => clock,
@@ -47,6 +48,46 @@ test('trigger matches only the proxy pool-exhausted error', () => {
   assert.equal(isPoolExhausted('503 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'), false);
   assert.equal(isPoolExhausted('529 overloaded_error'), false);
   assert.equal(isPoolExhausted(undefined), false);
+});
+
+const OFFLINE_ERROR = '503 {"type":"error","error":{"type":"overloaded_error","message":'
+  + `"claude-token-proxy: ${OFFLINE_MARKER} \u2014 3 consecutive connection failure(s) reaching api.anthropic.com"}}`;
+
+test('offline error is distinct from pool exhaustion', () => {
+  assert.equal(isOffline(OFFLINE_ERROR), true);
+  assert.equal(isOffline(PROXY_ERROR), false);
+  assert.equal(isPoolExhausted(OFFLINE_ERROR), false, 'offline must not drive the quota-reset wait');
+  assert.equal(isOffline(undefined), false);
+});
+
+test('offline waits for connectivity then resumes the same request', async () => {
+  // false, false, true: comes back on the third probe.
+  const { core, calls } = harness({ routes: [], online: [false, false, true] });
+  const resume = await core.onOffline();
+  assert.equal(resume, true);
+  assert.equal(calls.setModel.length, 0, 'never switches provider while offline');
+  assert.equal(calls.online.length, 3);
+  assert.deepEqual(calls.sleep, [OFFLINE_POLL_MS, OFFLINE_POLL_MS, OFFLINE_POLL_MS]);
+  assert.match(calls.notify[0][1], /network offline; waiting for connectivity/);
+  assert.equal(calls.notify.at(-1)[1], '\u25b6 network back; resuming');
+});
+
+test('offline gives up at the wait cap without switching provider', async () => {
+  const wait = { enabled: true, maxWaitMs: 25_000, pollMs: RECOVERY_POLL_MS };
+  const { core, calls } = harness({ routes: [], online: [], wait });
+  const resume = await core.onOffline();
+  assert.equal(resume, false);
+  assert.equal(calls.setModel.length, 0);
+  assert.match(calls.notify.at(-1)[1], /still offline after .* giving up/);
+});
+
+test('offline stops when the run is interrupted', async () => {
+  const { core, calls } = harness({ routes: [], online: [false, false, false] });
+  let ticks = 0;
+  const resume = await core.onOffline(() => ++ticks >= 2);
+  assert.equal(resume, false);
+  assert.equal(calls.setModel.length, 0);
+  assert.equal(calls.notify.at(-1)[1], '\u23f9 stopped waiting for the network');
 });
 
 test('codex routable -> switch with one warning line', async () => {
