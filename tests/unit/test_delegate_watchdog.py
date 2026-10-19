@@ -50,6 +50,16 @@ class WatchdogTests(unittest.TestCase):
     def tick(self):
         return module.tick(self.manifest, "child", "parent")
 
+    def test_child_parked_on_blocker_is_never_told_to_rebase(self):
+        self.child = "x\n $ delegate-send %16 --text 'docs-purge-4593: BLOCKER none - ~/runs/lane-report.md'\n"
+        self.assertEqual(self.tick(), 10)
+        self.assertEqual([target for target, _ in self.sent], ["parent"])
+        self.assertIn("parked on BLOCKER", self.sent[0][1])
+        self.pr["mergeStateStatus"] = "CLEAN"
+        self.checks = [dict(name="hub verdict", bucket="fail")]
+        self.tick()
+        self.assertEqual([target for target, _ in self.sent], ["parent", "parent"])
+
     def test_dirty_and_behind_notify_both_panes_once(self):
         self.assertEqual(self.tick(), 10)
         self.assertEqual([target for target, _ in self.sent], ["parent", "child"])

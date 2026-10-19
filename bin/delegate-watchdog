@@ -9,6 +9,7 @@ import sys
 import time
 
 BUSY = re.compile(r"[⠀-⣿] Working|Working\.\.\.|esc to interrupt")
+PARKED = re.compile(r"[\w.-]+: BLOCKER [0-9a-fA-F]{7,40}|[\w.-]+: BLOCKER none - ")
 
 
 def command(args, cwd=None):
@@ -66,8 +67,12 @@ def tick(manifest, child, parent):
     if stalled:
         signature = f"{pr['headRefOid']}:{reason}"
         if state.get("signature") != signature or not state.get("stalled"):
-            notify(parent, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
-            notify(child, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
+            history = command(["tmux", "capture-pane", "-J", "-p", "-S", "-3000", "-t", child])
+            if PARKED.search(history):
+                notify(parent, f"Child {child} is parked on BLOCKER; PR #{pr['number']} {reason} is left for the operator's decision. {pr['url']} (lane {manifest.stem})")
+            else:
+                notify(parent, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
+                notify(child, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
             state.update(signature=signature, stalled_since=now, parent_alerted=False)
         parent_pane = command(["tmux", "capture-pane", "-J", "-p", "-t", parent])
         if BUSY.search(parent_pane):
