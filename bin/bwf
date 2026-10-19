@@ -1,149 +1,350 @@
 #!/bin/bash
 set -euo pipefail
 
-# Bitwarden fuzzy finder - search vault items and copy fields to clipboard
+# bwf - Bitwarden fuzzy finder: pick a login, copy a field to the clipboard.
+#
+#   bwf [scope]            fzf picker in a scope (default: last used)
+#   bwf --wofi [scope]     same, as wofi popups (for a Hyprland keybinding)
+#   bwf [--wofi] add       create a login: name, username, password (empty =
+#                          generate), url, folder; copies the password
+#   bwf lock               forget session + cached vault
+#   bwf sync               refresh the cached vault now
+#
+# Fast path makes no `bw` call at all: the session token and the decrypted
+# item list live in $XDG_RUNTIME_DIR/bwf (tmpfs, 0600, gone at logout/reboot).
+# `bw sync` runs in the background after the picker opens, so the next run
+# sees today's changes. Only TOTP needs a live `bw` call.
+#
+# Scope: ~/.config/bwf/scopes maps a scope to Bitwarden folders, one per line:
+#     sweetspot: Sweetspot, Work
+# "private" is every item in no listed folder; "all" is everything. Ctrl-S in
+# the picker cycles the scope (wofi: first menu entry); the folder is also a
+# column, so typing its name filters too.
+#
 # Dependencies: bw, jq, fzf, copy (from dotfiles bin/)
 
 CLEAR_SECONDS="${BW_CLEAR_SECONDS:-15}"
+CACHE_TTL="${BWF_CACHE_TTL:-43200}"  # seconds before a cached vault is refetched in the foreground
+DIR="${XDG_RUNTIME_DIR:-/tmp/bwf-$UID}/bwf"
+SESSION_FILE="$DIR/session"
+ITEMS_FILE="$DIR/items.json"
+FOLDERS_FILE="$DIR/folders.json"
+SCOPES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/bwf/scopes"
+SCOPE_FILE="$DIR/scope"
 
-# Check dependencies
+UI=fzf
+if [[ "${1:-}" == "--wofi" ]]; then UI=wofi; shift; fi
+
 for cmd in bw jq fzf; do
-  if ! command -v "$cmd" &>/dev/null; then
-    echo "Error: '$cmd' is not installed." >&2
-    exit 1
-  fi
+  command -v "$cmd" &>/dev/null || { echo "Error: '$cmd' is not installed." >&2; exit 1; }
 done
 
-# Ensure logged in
-if ! bw login --check &>/dev/null; then
-  echo "Not logged in. Running 'bw login'..."
-  BW_SESSION=$(bw login --raw)
-  export BW_SESSION
+mkdir -p "$DIR" && chmod 700 "$DIR"
+
+die() { if [[ "$UI" == "wofi" ]]; then notify_err "$*"; else echo "$*" >&2; fi; exit 1; }
+notify_err() { notify-send -u critical -a bwf "bwf" "$*" 2>/dev/null || echo "$*" >&2; }
+say() { if [[ "$UI" == "wofi" ]]; then notify-send -a bwf -t 3000 "bwf" "$*" 2>/dev/null; else echo "$*"; fi; }
+
+# --- session -----------------------------------------------------------------
+session() {
+  if [[ -s "$SESSION_FILE" ]]; then
+    cat "$SESSION_FILE"
+    return
+  fi
+  bw login --check &>/dev/null || die "Not logged in: run 'bw login' first."
+  local s pw
+  if [[ "$UI" == "wofi" ]]; then
+    pw="$(printf '▸ Bitwarden master password\n' | wofi --dmenu --password --prompt 'Master password' --lines 2)" || exit 0
+    [[ -n "$pw" && "$pw" != "▸ Bitwarden master password" ]] || exit 0
+    s="$(BW_PW="$pw" bw unlock --raw --passwordenv BW_PW)" || { notify_err "unlock failed"; exit 1; }
+    unset pw
+  else
+    s="$(bw unlock --raw </dev/tty)" || die "unlock failed"
+  fi
+  (umask 077; printf '%s' "$s" > "$SESSION_FILE")
+  printf '%s' "$s"
+}
+
+# Run bw with the cached session; on an invalid session, re-unlock once.
+bw_s() {
+  local s out
+  s="$(session)"
+  if out="$(bw --session "$s" "$@" 2>/dev/null)"; then
+    printf '%s' "$out"
+    return
+  fi
+  rm -f "$SESSION_FILE" "$ITEMS_FILE"
+  s="$(session)"
+  bw --session "$s" "$@"
+}
+
+# write_cache <file> <bw args...>: atomic, 0600, no leftovers on failure
+write_cache() {
+  local target="$1" tmp; shift
+  tmp="$(mktemp -p "$DIR")"
+  if "$@" > "$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+    chmod 600 "$tmp" && mv -f "$tmp" "$target"
+  else
+    rm -f "$tmp"; return 1
+  fi
+}
+
+fetch_vault() {  # foreground, into the cache
+  write_cache "$FOLDERS_FILE" bw_s list folders
+  write_cache "$ITEMS_FILE" bw_s list items
+}
+
+refresh_background() {
+  (
+    s="$(cat "$SESSION_FILE" 2>/dev/null)" || exit 0
+    bw --session "$s" sync &>/dev/null || exit 0
+    write_cache "$FOLDERS_FILE" bw --session "$s" list folders
+    write_cache "$ITEMS_FILE" bw --session "$s" list items
+  ) &>/dev/null &
+  disown
+}
+
+cache_fresh() {
+  [[ -s "$ITEMS_FILE" && -s "$FOLDERS_FILE" ]] || return 1
+  local age=$(( $(date +%s) - $(stat -c %Y "$ITEMS_FILE") ))
+  (( age < CACHE_TTL ))
+}
+
+# --- add ---------------------------------------------------------------------
+# ask <prompt> [default] [--secret]: one answer via fzf-less terminal or wofi
+ask() {
+  local prompt="$1" default="${2:-}" secret="${3:-}" answer
+  if [[ "$UI" == "wofi" ]]; then
+    # --prompt is only a placeholder in the search box (invisible with our
+    # style), so the question is also the first list entry. Picking it means
+    # "default" (or empty); typing something new returns the typed text.
+    local hint="▸ $prompt${default:+  [Enter = $default]}"
+    if [[ "$secret" == "--secret" ]]; then
+      answer="$(printf '%s\n' "$hint" | wofi --dmenu --password --prompt "$prompt" --lines 2)" || exit 0
+    else
+      answer="$(printf '%s\n' "$hint" | wofi --dmenu --prompt "$prompt" --lines 2)" || exit 0
+    fi
+    [[ "$answer" == "$hint" ]] && answer="$default"
+  else
+    if [[ "$secret" == "--secret" ]]; then
+      read -rsp "$prompt: " answer </dev/tty; echo >&2
+    else
+      read -rp "$prompt${default:+ [$default]}: " answer </dev/tty
+      answer="${answer:-$default}"
+    fi
+  fi
+  printf '%s' "$answer"
+}
+
+# choose <prompt> <lines...>: pick one of several
+choose() {
+  local prompt="$1"; shift
+  if [[ "$UI" == "wofi" ]]; then
+    printf '%s\n' "$@" | wofi --dmenu -i --prompt "$prompt" --lines $(( $# + 1 ))
+  else
+    printf '%s\n' "$@" | fzf --header="$prompt" --reverse --height=40%
+  fi
+}
+
+cmd_add() {
+  cache_fresh || fetch_vault
+  local name user pass url folder folder_id="null" json
+
+  # URL first: name defaults to its host, like the browser extension does
+  url="$(ask "URL (optional)")"
+  name="$(ask "Name" "$(sed -E 's#^[a-z]+://##; s#/.*##; s#^www\.##' <<<"$url")")"
+  [[ -n "$name" ]] || die "add: a name is required"
+  user="$(ask "Username")"
+  pass="$(ask "Password (empty = generate)" "" --secret)"
+  if [[ -z "$pass" ]]; then
+    pass="$(bw_s generate -ulns --length 24)"
+  fi
+
+  mapfile -t folders < <(jq -r '.[] | select(.id != null) | .name' "$FOLDERS_FILE" | sort -f)
+  folder="$(choose "Folder" "(none)" "${folders[@]}")" || folder="(none)"
+  [[ -z "$folder" ]] && folder="(none)"
+  if [[ "$folder" != "(none)" ]]; then
+    folder_id="$(jq --arg n "$folder" '.[] | select(.name == $n) | .id' "$FOLDERS_FILE")"
+  fi
+
+  json="$(jq -nc --arg name "$name" --arg user "$user" --arg pass "$pass" --arg url "$url" \
+              --argjson folder "$folder_id" '{
+      type: 1, name: $name, folderId: $folder, notes: null, favorite: false, fields: [],
+      login: { username: (if $user == "" then null else $user end), password: $pass,
+               uris: (if $url == "" then [] else [{match: null, uri: $url}] end) }
+    }')"
+  bw_s create item "$(printf '%s' "$json" | bw encode)" >/dev/null || die "add: bw create failed"
+  fetch_vault
+  printf '%s' "$pass" | copy
+  say "Added '$name'${folder:+ in $folder}. Password copied, clears in ${CLEAR_SECONDS}s."
+  ( sleep "$CLEAR_SECONDS"; printf '' | copy; ) &>/dev/null &
+  disown
+}
+
+# --- subcommands -------------------------------------------------------------
+case "${1:-}" in
+  add)
+    cmd_add; exit 0 ;;
+  lock)
+    s="$(cat "$SESSION_FILE" 2>/dev/null || true)"
+    [[ -n "$s" ]] && bw --session "$s" lock &>/dev/null || true
+    rm -rf "$DIR"
+    echo "bwf: session and cache cleared."
+    exit 0 ;;
+  sync)
+    bw_s sync >/dev/null && fetch_vault && echo "bwf: vault refreshed."
+    exit 0 ;;
+  -h|--help)
+    sed -n '3,24p' "$0"; exit 0 ;;
+esac
+
+# --- scope -------------------------------------------------------------------
+cache_fresh || fetch_vault
+refresh_background
+
+# Scopes: all, private, then each "<scope>: <folder>, <folder>" line of the config.
+declare -A scope_folders=()
+scopes=(all private)
+if [[ -f "$SCOPES_CONF" ]]; then
+  while IFS=: read -r name folders; do
+    name="$(tr -d '[:space:]' <<<"$name")"
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    scope_folders["$name"]="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[[:space:]]*,[[:space:]]*/|/g' <<<"$folders")"
+    scopes+=("$name")
+  done < "$SCOPES_CONF"
+fi
+if [[ ${#scope_folders[@]} -eq 0 ]]; then
+  echo "bwf: no scopes in $SCOPES_CONF - only all/private (see 'bwf --help')" >&2
 fi
 
-# Ensure unlocked
-if ! bw unlock --check &>/dev/null; then
-  BW_SESSION=$(bw unlock --raw)
-  export BW_SESSION
+scope="${1:-$(cat "$SCOPE_FILE" 2>/dev/null || echo all)}"
+scope_ok=false
+for s in "${scopes[@]}"; do [[ "${s,,}" == "${scope,,}" ]] && scope="$s" && scope_ok=true; done
+$scope_ok || die "unknown scope '$scope' (have: ${scopes[*]})"
+
+next_scope() {
+  local i
+  for i in "${!scopes[@]}"; do
+    [[ "${scopes[$i]}" == "$1" ]] && { echo "${scopes[$(( (i + 1) % ${#scopes[@]} ))]}"; return; }
+  done
+  echo all
+}
+
+# id, folder, name, username, first uri - filtered by scope
+list_items() {
+  local scope="$1" want="" claimed=""
+  if [[ -n "${scope_folders[$scope]:-}" ]]; then
+    want="^(${scope_folders[$scope]})$"
+  elif [[ "$scope" == "private" ]]; then
+    claimed="$(IFS='|'; echo "${scope_folders[*]}")"
+    claimed="^(${claimed:-__none__})$"
+  fi
+  jq -r --arg want "$want" --arg claimed "$claimed" --slurpfile folders "$FOLDERS_FILE" '
+    ($folders[0] | map(select(.id != null)) | map({key: .id, value: .name}) | from_entries) as $f
+    | .[] | select(.type == 1)
+    | .folder = (if .folderId then ($f[.folderId] // "?") else "-" end)
+    | select(
+        ($want == "" and $claimed == "")
+        or ($want != "" and (.folder | test($want; "i")))
+        or ($claimed != "" and (.folder | test($claimed; "i") | not)))
+    | [.id, .folder, .name, (.login.username // ""), (.login.uris[0].uri // "")] | @tsv
+  ' "$ITEMS_FILE"
+}
+
+# --- pick item -----------------------------------------------------------------
+if [[ "$UI" == "fzf" ]]; then
+  # Ctrl-S cycles scope
+  while :; do
+    out="$(list_items "$scope" \
+      | fzf --with-nth=2.. --delimiter='\t' --tabstop=1 \
+            --header="[$scope]  Ctrl-S: next scope   (folder | name | username | url)" \
+            --preview='printf "Folder: %s\nName:  %s\nUser:  %s\nURL:   %s\n" {2} {3} {4} {5}' \
+            --preview-window=up:4:wrap --reverse --expect=ctrl-s)" || out=""
+    key="${out%%$'\n'*}"
+    item="${out#*$'\n'}"
+    if [[ "$key" == "ctrl-s" ]]; then
+      scope="$(next_scope "$scope")"
+      continue
+    fi
+    break
+  done
+  [[ -n "$item" && "$item" != "$out" ]] || { echo "No item selected."; exit 0; }
+  item_id="$(cut -f1 <<<"$item")"
+else
+  # wofi: display lines are "folder │ name  (user)"; the first entry switches scope
+  while :; do
+    declare -A by_line=()
+    lines=()
+    while IFS=$'\t' read -r id folder name user uri; do
+      line="$(printf '%-14.14s │ %s' "$folder" "$name")"
+      [[ -n "$user" ]] && line+="  ($user)"
+      [[ -n "${by_line[$line]:-}" ]] && line+="  ‹${uri:-$id}›"
+      by_line["$line"]="$id"
+      lines+=("$line")
+    done < <(list_items "$scope")
+    switch="⇄  scope: $scope  →  $(next_scope "$scope")"
+    choice="$(printf '%s\n' "$switch" "${lines[@]}" \
+      | wofi --dmenu -i --prompt "Bitwarden [$scope]" --lines 14)" || exit 0
+    [[ -n "$choice" ]] || exit 0
+    if [[ "$choice" == "$switch" ]]; then
+      scope="$(next_scope "$scope")"
+      printf '%s' "$scope" > "$SCOPE_FILE"
+      continue
+    fi
+    item_id="${by_line[$choice]:-}"
+    [[ -n "$item_id" ]] || exit 0
+    break
+  done
 fi
+printf '%s' "$scope" > "$SCOPE_FILE"
+details="$(jq -c --arg id "$item_id" '.[] | select(.id == $id)' "$ITEMS_FILE")"
 
-# Sync vault (background, best-effort)
-bw sync &>/dev/null || true
-
-# Fetch items and let user pick one
-item=$(bw list items 2>/dev/null \
-  | jq -r '.[] | select(.type == 1) | "\(.id)\t\(.name)\t\(.login.username // "")\t\(.login.uris[0].uri // "")"' \
-  | fzf --with-nth=2.. \
-        --delimiter='\t' \
-        --header="Select a login (name | username | url):" \
-        --preview='echo -e "Name: {2}\nUser: {3}\nURL:  {4}"' \
-        --preview-window=up:3:wrap \
-        --reverse)
-
-if [[ -z "$item" ]]; then
-  echo "No item selected."
-  exit 0
-fi
-
-item_id=$(echo "$item" | cut -f1)
-
-# Get full item details
-details=$(bw get item "$item_id" 2>/dev/null)
-
-# Build field list
+# --- pick field --------------------------------------------------------------
 fields=()
 field_values=()
+add() { fields+=("$1"); field_values+=("$2"); }
 
-username=$(echo "$details" | jq -r '.login.username // empty')
-if [[ -n "$username" ]]; then
-  fields+=("Username: $username")
-  field_values+=("$username")
+username="$(jq -r '.login.username // empty' <<<"$details")"
+[[ -n "$username" ]] && add "Username: $username" "$username"
+
+password="$(jq -r '.login.password // empty' <<<"$details")"
+[[ -n "$password" ]] && add "Password: ********" "$password"
+
+if [[ -n "$(jq -r '.login.totp // empty' <<<"$details")" ]]; then
+  add "TOTP: (generated on copy)" "__TOTP__"
 fi
 
-password=$(echo "$details" | jq -r '.login.password // empty')
-if [[ -n "$password" ]]; then
-  fields+=("Password: ********")
-  field_values+=("$password")
+while IFS= read -r uri; do
+  [[ -n "$uri" ]] && add "URI: $uri" "$uri"
+done < <(jq -r '.login.uris[]?.uri // empty' <<<"$details")
+
+notes="$(jq -r '.notes // empty' <<<"$details")"
+[[ -n "$notes" ]] && add "Notes: $(head -1 <<<"$notes" | cut -c1-60)..." "$notes"
+
+while IFS=$'\t' read -r fname ftype fvalue; do
+  [[ -n "$fvalue" ]] || continue
+  if [[ "$ftype" == "1" ]]; then add "$fname: ********" "$fvalue"; else add "$fname: $fvalue" "$fvalue"; fi
+done < <(jq -r '.fields[]? | [(.name // "Field"), (.type|tostring), (.value // "")] | @tsv' <<<"$details")
+
+[[ ${#fields[@]} -gt 0 ]] || { echo "No fields available for this item."; exit 0; }
+
+if [[ "$UI" == "fzf" ]]; then
+  selected_index="$(printf '%s\n' "${fields[@]}" \
+    | nl -ba -w1 -s$'\t' \
+    | fzf --with-nth=2.. --delimiter='\t' --header="Select field to copy:" --reverse --height=40% \
+    | cut -f1)"
+else
+  chosen="$(printf '%s\n' "${fields[@]}" \
+    | wofi --dmenu -i --prompt "Copy from $(jq -r .name <<<"$details")" --lines $(( ${#fields[@]} + 1 )))" || exit 0
+  selected_index=""
+  for i in "${!fields[@]}"; do [[ "${fields[$i]}" == "$chosen" ]] && selected_index=$((i + 1)); done
 fi
-
-totp=$(echo "$details" | jq -r '.login.totp // empty')
-if [[ -n "$totp" ]]; then
-  # Generate current TOTP code
-  totp_code=$(bw get totp "$item_id" 2>/dev/null || echo "")
-  if [[ -n "$totp_code" ]]; then
-    fields+=("TOTP: $totp_code")
-    field_values+=("$totp_code")
-  fi
-fi
-
-# URIs
-uri_count=$(echo "$details" | jq '.login.uris | length // 0')
-for ((i = 0; i < uri_count; i++)); do
-  uri=$(echo "$details" | jq -r ".login.uris[$i].uri // empty")
-  if [[ -n "$uri" ]]; then
-    fields+=("URI: $uri")
-    field_values+=("$uri")
-  fi
-done
-
-# Notes
-notes=$(echo "$details" | jq -r '.notes // empty')
-if [[ -n "$notes" ]]; then
-  short_notes=$(echo "$notes" | head -1 | cut -c1-60)
-  fields+=("Notes: ${short_notes}...")
-  field_values+=("$notes")
-fi
-
-# Custom fields
-custom_count=$(echo "$details" | jq '.fields | length // 0')
-for ((i = 0; i < custom_count; i++)); do
-  fname=$(echo "$details" | jq -r ".fields[$i].name // \"Field $i\"")
-  ftype=$(echo "$details" | jq -r ".fields[$i].type")
-  fvalue=$(echo "$details" | jq -r ".fields[$i].value // empty")
-  if [[ -n "$fvalue" ]]; then
-    if [[ "$ftype" == "1" ]]; then
-      # Hidden field
-      fields+=("$fname: ********")
-    else
-      fields+=("$fname: $fvalue")
-    fi
-    field_values+=("$fvalue")
-  fi
-done
-
-if [[ ${#fields[@]} -eq 0 ]]; then
-  echo "No fields available for this item."
-  exit 0
-fi
-
-# Let user pick a field
-selected_index=$(printf '%s\n' "${fields[@]}" \
-  | nl -ba -w1 -s$'\t' \
-  | fzf --with-nth=2.. \
-        --delimiter='\t' \
-        --header="Select field to copy:" \
-        --reverse \
-        --height=40% \
-  | cut -f1)
-
-if [[ -z "$selected_index" ]]; then
-  echo "No field selected."
-  exit 0
-fi
+[[ -n "$selected_index" ]] || { say "No field selected."; exit 0; }
 
 value="${field_values[$((selected_index - 1))]}"
+[[ "$value" == "__TOTP__" ]] && value="$(bw_s get totp "$item_id")"
 
-# Copy to clipboard
-echo -n "$value" | copy
-
-echo "Copied to clipboard. Clearing in ${CLEAR_SECONDS}s."
-
-# Clear clipboard after timeout
-(
-  sleep "$CLEAR_SECONDS"
-  if command -v copy &>/dev/null; then
-    echo -n "" | copy
-  fi
-  echo "Clipboard cleared."
-) &
+printf '%s' "$value" | copy
+say "${fields[$((selected_index - 1))]%%:*} copied. Clipboard clears in ${CLEAR_SECONDS}s."
+( sleep "$CLEAR_SECONDS"; printf '' | copy; ) &>/dev/null &
 disown

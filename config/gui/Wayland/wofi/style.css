@@ -27,6 +27,16 @@ window {
   transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
+/* --prompt text (placeholder). GTK3 draws it in the entry's insensitive
+   colour, which the default theme makes a near-invisible grey on our
+   #input gradient; the second selector covers newer GTK placeholder nodes. */
+#input:disabled,
+#input placeholder {
+  color: #9aa5ce;
+  font-style: italic;
+  font-weight: 500;
+}
+
 #input:focus {
   border-color: rgba(122, 162, 247, 0.8);
   box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.2);
