@@ -1,0 +1,11 @@
+[Unit]
+Description=Pull origin/master, run the dotfiles installer, reload Hyprland/tmux
+Documentation=file://%h/sync/src/dotfiles/bin/dotfiles-sync
+RequiresMountsFor=%h/sync
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=%h/.local/bin/dotfiles-sync

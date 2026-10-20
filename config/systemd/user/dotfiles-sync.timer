@@ -1,0 +1,10 @@
+[Unit]
+Description=Keep dotfiles on origin/master (every 15 min)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

@@ -8,6 +8,7 @@ enable llm-schedule.timer
 enable tmux.service
 enable tmux-resurrect-save.timer
 enable git-bundle-backup.timer
+enable dotfiles-sync.timer
 enable host-pressure-alert.timer
 enable pi-delegate-supervisor.timer
 enable pi-delegate-reap.timer
