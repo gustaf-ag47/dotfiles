@@ -1,0 +1,74 @@
+#!/bin/bash
+# dotfiles-sync: keep this machine on origin/master and re-apply the installer.
+#
+#   dotfiles-sync            pull (ff on master, merge on a feature branch),
+#                            push local master commits, run install.sh, reload
+#                            Hyprland/tmux - only when something changed
+#   dotfiles-sync --force    run the installer even if nothing changed
+#
+# Driven by dotfiles-sync.timer on every machine. Never force-pushes, never
+# discards local changes: a merge that would touch dirty files is aborted and
+# reported with notify-send (if a session is available) and in the journal.
+set -euo pipefail
+
+DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
+MAIN=master
+force=false
+[[ "${1:-}" == "--force" ]] && force=true
+
+notify() {  # <urgency> <message>
+  echo "dotfiles-sync: $2"
+  command -v notify-send >/dev/null && notify-send -a dotfiles-sync -u "$1" "dotfiles" "$2" 2>/dev/null || true
+}
+
+cd "$DOTFILES"
+git fetch -q origin "$MAIN" || { notify low "fetch failed (offline?)"; exit 0; }
+
+branch="$(git branch --show-current)"
+before="$(git rev-parse HEAD)"
+remote="$(git rev-parse "origin/$MAIN")"
+
+if [[ "$branch" == "$MAIN" ]]; then
+  if ! git merge-base --is-ancestor "$remote" HEAD; then
+    if ! git merge -q --ff-only "origin/$MAIN" 2>/tmp/dotfiles-sync.err; then
+      notify critical "master diverged from origin: $(tail -1 /tmp/dotfiles-sync.err)"
+      exit 1
+    fi
+  fi
+  # Push commits made here so the other machines pick them up.
+  if [[ "$(git rev-list --count "origin/$MAIN..HEAD")" -gt 0 ]]; then
+    git push -q origin "$MAIN" && echo "dotfiles-sync: pushed $(git rev-list --count "$remote..HEAD") commit(s)"
+  fi
+else
+  # Feature branch (e.g. skrubben's reading-kobo-usb): carry master into it.
+  if ! git merge-base --is-ancestor "$remote" HEAD; then
+    if ! git merge -q --no-edit "origin/$MAIN" 2>/tmp/dotfiles-sync.err; then
+      git merge --abort 2>/dev/null || true
+      notify critical "merge of origin/master into $branch failed: $(tail -1 /tmp/dotfiles-sync.err)"
+      exit 1
+    fi
+    git push -q origin "$branch" 2>/dev/null || true
+  fi
+fi
+
+after="$(git rev-parse HEAD)"
+if [[ "$after" == "$before" ]] && ! $force; then
+  echo "dotfiles-sync: up to date ($(git log --oneline -1 | cut -c1-60))"
+  exit 0
+fi
+
+if ! bash scripts/install.sh > /tmp/dotfiles-sync-install.log 2>&1; then
+  notify critical "install.sh failed, see /tmp/dotfiles-sync-install.log"
+  exit 1
+fi
+
+# Reload what reads its config only at start.
+if pgrep -x Hyprland >/dev/null; then
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  export HYPRLAND_INSTANCE_SIGNATURE="${HYPRLAND_INSTANCE_SIGNATURE:-$(ls -t "$XDG_RUNTIME_DIR/hypr/" 2>/dev/null | head -1)}"
+  hyprctl reload >/dev/null 2>&1 || true
+fi
+tmux source-file ~/.config/tmux/tmux.conf 2>/dev/null || true
+
+n="$(git rev-list --count "$before..$after")"
+notify low "applied $n commit(s): $(git log --oneline -1 | cut -c1-60)"

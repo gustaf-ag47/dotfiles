@@ -9,6 +9,7 @@ import sys
 import time
 
 BUSY = re.compile(r"[⠀-⣿] Working|Working\.\.\.|esc to interrupt")
+PARKED = re.compile(r"[\w.-]+: BLOCKER [0-9a-fA-F]{7,40}|[\w.-]+: BLOCKER none - ")
 
 
 def command(args, cwd=None):
@@ -16,6 +17,24 @@ def command(args, cwd=None):
     if result.returncode:
         raise ValueError(result.stderr.strip() or f"command failed: {args[0]}")
     return result.stdout
+
+
+def parked(child, mailbox):
+    lane = re.escape(child.split(":")[-1])
+    result = re.compile(rf"^\s*{lane}: (BLOCKER|DONE|PASS|FAILED) ", re.MULTILINE)
+    latest = None
+    for record in list(mailbox.glob("*.md")) + list((mailbox / "ack").glob("*.md")):
+        try:
+            match = result.search(record.read_text(errors="replace"))
+            stamp = record.stat().st_mtime
+        except OSError:
+            continue
+        if match and (latest is None or stamp > latest[0]):
+            latest = (stamp, match.group(1))
+    if latest:
+        return latest[1] == "BLOCKER"
+    history = command(["tmux", "capture-pane", "-J", "-p", "-S", "-3000", "-t", child])
+    return bool(PARKED.search(history))
 
 
 def notify(target, message):
@@ -66,8 +85,11 @@ def tick(manifest, child, parent):
     if stalled:
         signature = f"{pr['headRefOid']}:{reason}"
         if state.get("signature") != signature or not state.get("stalled"):
-            notify(parent, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
-            notify(child, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
+            if parked(child, mailbox):
+                notify(parent, f"Child {child} is parked on BLOCKER; PR #{pr['number']} {reason} is left for the operator's decision. {pr['url']} (lane {manifest.stem})")
+            else:
+                notify(parent, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
+                notify(child, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
             state.update(signature=signature, stalled_since=now, parent_alerted=False)
         parent_pane = command(["tmux", "capture-pane", "-J", "-p", "-t", parent])
         if BUSY.search(parent_pane):
