@@ -1,5 +1,6 @@
 """Tests for bin/reading (reading flow: kosync, books.json, inbox cards)."""
 
+import argparse
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -329,6 +330,23 @@ class SourcesTest(unittest.TestCase):
             self.assertEqual(h["text"], "Bookmarked: HOW TO READ THE TEXT (p. 6)")
             self.assertEqual(reading.render_highlight(h),
                              f"- Bookmarked: HOW TO READ THE TEXT (p. 6) · 2026-10-15\n<!-- hl:koreader:{md5}:BOOKMARK|/body/DocFragment[6]/body/h1/text().0 -->\n")
+
+    def test_empty_files_are_never_hashed(self):
+        # every 0-byte file hashes to d41d8cd9...: a broken copy must not claim that id
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".kobo" / "Kobo").mkdir(parents=True)
+            (root / ".kobo" / "Kobo" / "A - Empty.epub").write_bytes(b"")
+            (root / ".kobo" / "Kobo" / "B - Real.epub").write_bytes(b"x" * 4096)
+            old = reading.load_index, reading.save_index, reading.map_device_files, reading.build_index
+            found = []
+            reading.load_index, reading.save_index = (lambda: {"version": 1, "books": {}}), (lambda i: None)
+            reading.map_device_files, reading.build_index = (lambda index, files: found.extend(files) or []), (lambda i, *a: i)
+            try:
+                reading.cmd_index(argparse.Namespace(device_dir=str(root), device_ssh=None, ssh_key=None))
+            finally:
+                reading.load_index, reading.save_index, reading.map_device_files, reading.build_index = old
+            self.assertEqual([Path(p).name for _, p in found], ["B - Real.epub"])
 
     def test_auto_device_index_only_when_a_device_answers(self):
         self.assertFalse(reading.auto_device_index({"books": {}}, []))
