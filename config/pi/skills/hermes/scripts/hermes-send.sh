@@ -97,9 +97,24 @@ interrupt) prefix="" ;;
 esac
 
 tmux send-keys -t "$target" -l "${prefix}${message}"
-sleep 0.5
+# Long messages take the TUI a while to ingest; an Enter that arrives before it
+# finishes is swallowed and the message sits unsubmitted (seen 3x on 2026-10-15).
+sleep "$(awk -v n="${#message}" 'BEGIN { printf "%.1f", 0.5 + n / 1500 }')"
 tmux send-keys -t "$target" Enter
 sleep 2
+# An idle Hermes that was sent a message should be busy now. If it is still idle,
+# the Enter was swallowed: press it once more (Enter on an empty prompt is a no-op).
+if [ "$state" = idle ] && [ -z "$prefix" ]; then
+	for _ in 1 2 3; do
+		[ "$(hermes_state)" = busy ] && break
+		sleep 2
+	done
+	if [ "$(hermes_state)" != busy ]; then
+		tmux send-keys -t "$target" Enter
+		sleep 2
+		echo "hermes-send: re-pressed Enter (first one was swallowed)" >&2
+	fi
+fi
 
 delivered=queued
 [ -z "$prefix" ] && delivered=sent

@@ -14,7 +14,13 @@ log="$FAKE_TMUX_LOG"
 case "$1" in
 list-windows) printf '%s\\n' $FAKE_WINDOWS ;;
 list-panes) echo x ;;
-capture-pane) printf '%b\\n' "$FAKE_PANE" ;;
+capture-pane)
+	# Once Enter lands, the pane shows FAKE_PANE_AFTER_ENTER (default: Hermes working).
+	if grep -q ' Enter$' "$log" 2>/dev/null; then
+		printf '%b\\n' "${FAKE_PANE_AFTER_ENTER-working · Ctrl+C cancel}"
+	else
+		printf '%b\\n' "$FAKE_PANE"
+	fi ;;
 send-keys) shift; printf '%s\\n' "$*" >> "$log" ;;
 esac
 """
@@ -61,6 +67,15 @@ class HermesSendTest(unittest.TestCase):
         result = self.run_send("hello there")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.sent(), ["-t Work:hermes -l hello there", "-t Work:hermes Enter"])
+
+    def test_swallowed_enter_is_pressed_once_more(self):
+        result = self.run_send("hello there", FAKE_PANE_AFTER_ENTER="idle prompt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.sent(),
+            ["-t Work:hermes -l hello there", "-t Work:hermes Enter", "-t Work:hermes Enter"],
+        )
+        self.assertIn("re-pressed Enter", result.stderr)
 
     def test_busy_hermes_gets_a_queued_message_so_its_run_is_not_interrupted(self):
         result = self.run_send("status?", FAKE_PANE="working\\n msg=interrupt · /queue · Ctrl+C cancel")
