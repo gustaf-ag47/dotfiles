@@ -13,7 +13,11 @@ alsa-ucm-conf
 iw
 # Webcam: IPU7 + OV08X40 has a kernel driver (>= 7.2) but needs libcamera's
 # software ISP in userspace; apps reach it through the PipeWire camera portal.
+# The raw /dev/video* nodes are unusable: Firefox needs
+# media.webrtc.camera.allow-pipewire (files/etc/firefox/policies).
+# libcamera-tools: `cam -l` / qcam to test the sensor without a browser.
 libcamera
+libcamera-tools
 pipewire-libcamera
 # Battery: TLP with host overrides in files/etc/tlp.d/10-xps14.conf.
 tlp
