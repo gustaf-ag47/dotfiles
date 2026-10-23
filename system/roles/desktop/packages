@@ -33,9 +33,9 @@ pamixer
 pulsemixer
 # PipeWire-native TUI mixer (routing, profiles; replaced pavucontrol).
 wiremix
-# rtkit: realtime scheduling for PipeWire threads (without it, xruns/crackles
-# under CPU load; journal shows "mod.rt: RTKit error: ServiceUnknown").
-rtkit
+# NO rtkit: with it PipeWire clients get SCHED_RR + RLIMIT_RTTIME (50/200 ms);
+# libcamera's soft ISP threads inherit RR, overrun it and the kernel SIGKILLs
+# WirePlumber and Firefox the moment a webcam stream starts (xps14, 2026-10-23).
 pipewire
 pipewire-alsa
 pipewire-audio
