@@ -33,6 +33,9 @@ pamixer
 pulsemixer
 # PipeWire-native TUI mixer (routing, profiles; replaced pavucontrol).
 wiremix
+# rtkit: realtime scheduling for PipeWire threads (without it, xruns/crackles
+# under CPU load; journal shows "mod.rt: RTKit error: ServiceUnknown").
+rtkit
 pipewire
 pipewire-alsa
 pipewire-audio

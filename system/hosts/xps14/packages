@@ -25,3 +25,6 @@ tlp-rdw
 # Power diagnostics (turbostat: PkgWatt/C-states; powertop: wakeups, tunables).
 powertop
 turbostat
+# Mic: RNNoise LADSPA for the "Microphone (clean)" filter-chain source
+# (files/etc/pipewire/pipewire.conf.d/50-mic-clean.conf; limiter is lsp-plugins).
+noise-suppression-for-voice
