@@ -1,0 +1,189 @@
+;; eww -- the waybar drop-down panels (bin/popover). One window per pill,
+;; anchored under the right end of the bar like the swaync control centre.
+;; Data comes from `popover data <topic>` as JSON; buttons call
+;; `popover act <topic> <action> [arg]`. Polls only run while a panel is open.
+
+(defvar open "")        ; which panel is open ("" = none); set by bin/popover
+(defvar tick 0)         ; bumped by actions to refresh a panel immediately
+
+(defpoll sys :interval "2s" :run-while {open == "sys"}
+  :initial '{"cpu":0,"mem":0,"disk":0,"temp":"","load":"","up":"","procs":[]}'
+  "popover data sys")
+(defpoll net :interval "8s" :run-while {open == "net"}
+  :initial '{"wifi":false,"ssid":"","signal":0,"ip":"","nets":[]}'
+  "popover data net")
+(defpoll bt :interval "3s" :run-while {open == "bt"}
+  :initial '{"powered":false,"devs":[]}'
+  "popover data bt")
+(defpoll audio :interval "2s" :run-while {open == "audio"}
+  :initial '{"vol":0,"muted":false,"mic":0,"mic_muted":false,"sinks":[]}'
+  "popover data audio")
+(defpoll battery :interval "3s" :run-while {open == "battery"}
+  :initial '{"status":"","cap":0,"watts":"","time":"","mode":"","mode_desc":"","pd":"","health":"","cycles":"","icon":"󰁹","can_set":false}'
+  "popover data battery")
+(defpoll llm :interval "30s" :run-while {open == "llm"}
+  :initial '{"percent":0,"class":"unknown","lines":[]}'
+  "popover data llm")
+
+;; ---------------------------------------------------------------- pieces --
+(defwidget panel [title ?icon]
+  (box :class "panel" :orientation "v" :space-evenly false
+    (box :class "title" :orientation "h" :space-evenly false
+      (label :class "title-icon" :text {icon ?: ""})
+      (label :class "title-text" :text title :halign "start" :hexpand true))
+    (children)))
+
+(defwidget row [?class]
+  (box :class "row ${class}" :orientation "h" :space-evenly false (children)))
+
+(defwidget kv [k v]
+  (row (label :class "k" :text k :halign "start")
+       (label :class "v" :text v :halign "end" :hexpand true :limit-width 34)))
+
+(defwidget meter [label value ?unit ?warn ?crit]
+  (box :class "meter ${value >= (crit ?: 90) ? 'crit' : value >= (warn ?: 70) ? 'warn' : ''}"
+       :orientation "h" :space-evenly false
+    (label :class "k" :text label :width 56 :halign "start")
+    (scale :class "bar" :value value :min 0 :max 100 :active false :hexpand true)
+    (label :class "v" :text "${value}${unit ?: '%'}" :width 46 :halign "end")))
+
+(defwidget toggle [label icon on cmd]
+  (button :class "toggle ${on ? 'on' : ''}" :onclick cmd
+    (box :orientation "h" :space-evenly false
+      (label :class "ti" :text icon)
+      (label :class "tl" :text label :halign "start" :hexpand true)
+      (label :class "ts" :text {on ? "on" : "off"}))))
+
+(defwidget action [label icon cmd]
+  (button :class "action" :onclick cmd
+    (box :orientation "h" :space-evenly false
+      (label :class "ai" :text icon)
+      (label :class "al" :text label :halign "start" :hexpand true))))
+
+(defwidget item [label icon ?sub ?active cmd]
+  (button :class "item ${active ? 'active' : ''}" :onclick cmd
+    (box :orientation "h" :space-evenly false
+      (label :class "ii" :text icon)
+      (label :class "il" :text label :halign "start" :hexpand true :limit-width 28)
+      (label :class "is" :text {sub ?: ""}))))
+
+(defwidget actions []
+  (box :class "actions" :orientation "h" :space-evenly true :spacing 6 (children)))
+
+;; ---------------------------------------------------------------- panels --
+(defwidget sys-panel []
+  (panel :title "System" :icon "󰍛"
+    (meter :label "cpu"  :value {sys.cpu ?: 0})
+    (meter :label "mem"  :value {sys.mem ?: 0} :warn 75)
+    (meter :label "disk" :value {sys.disk ?: 0} :warn 85 :crit 95)
+    (meter :label "temp" :value {sys.temp != "" ? sys.temp : 0} :unit "°C" :warn 80 :crit 95)
+    (kv :k "load" :v {sys.load ?: ""})
+    (kv :k "up" :v {sys.up ?: ""})
+    (label :class "section" :text "top by cpu" :halign "start")
+    (box :orientation "v" :space-evenly false
+      (for p in {sys.procs ?: []}
+        (row :class "proc"
+          (label :class "il" :text {p.name} :halign "start" :hexpand true :limit-width 28)
+          (label :class "is" :text "${p.cpu}% cpu  ${p.mem}% mem"))))
+    (actions (action :label "btop" :icon "󰒓" :cmd "popover act sys btop"))))
+
+(defwidget net-panel []
+  (panel :title "Network" :icon "󰤨"
+    (toggle :label "Wi-Fi" :icon "󰤨" :on {net.wifi ?: false}
+            :cmd "popover act net wifi ${net.wifi ? 'off' : 'on'}")
+    (kv :k "ip" :v {net.ip != "" ? net.ip : "—"})
+    (label :class "section" :text "networks" :halign "start" :visible {net.wifi ?: false})
+    (box :orientation "v" :space-evenly false :visible {net.wifi ?: false}
+      (for n in {net.nets ?: []}
+        (item :label {n.ssid} :icon {n.signal > 66 ? "󰤨" : n.signal > 33 ? "󰤥" : "󰤟"}
+              :sub "${n.signal}%${n.secure ? '  󰌾' : ''}" :active {n.active}
+              :cmd "popover act net connect '${n.ssid}'")))
+    (actions (action :label "rescan" :icon "󰑓" :cmd "popover act net rescan")
+             (action :label "nmtui"  :icon "󰒓" :cmd "popover act net nmtui"))))
+
+(defwidget bt-panel []
+  (panel :title "Bluetooth" :icon "󰂯"
+    (toggle :label "Bluetooth" :icon "󰂯" :on {bt.powered ?: false}
+            :cmd "popover act bt power ${bt.powered ? 'off' : 'on'}")
+    (label :class "section" :text "paired devices" :halign "start" :visible {bt.powered ?: false})
+    (box :orientation "v" :space-evenly false :visible {bt.powered ?: false}
+      (for d in {bt.devs ?: []}
+        (item :label {d.name} :icon {d.connected ? "󰂱" : "󰂯"}
+              :sub {d.connected ? (d.battery != "" ? "${d.battery}%  connected" : "connected") : ""}
+              :active {d.connected}
+              :cmd "popover act bt ${d.connected ? 'disconnect' : 'connect'} ${d.mac}"))
+      (label :class "empty" :text "no paired devices" :visible {arraylength(bt.devs ?: []) == 0}))
+    (actions (action :label "pair new…" :icon "󰂰" :cmd "popover act bt pair"))))
+
+(defwidget audio-panel []
+  (panel :title "Sound" :icon "󰕾"
+    (row :class "slider"
+      (button :class "mute ${audio.muted ? 'on' : ''}" :onclick "popover act audio mute"
+        (label :text {audio.muted ? "󰝟" : audio.vol > 50 ? "󰕾" : audio.vol > 0 ? "󰖀" : "󰕿"}))
+      (scale :class "vol" :value {audio.vol ?: 0} :min 0 :max 100 :hexpand true
+             :onchange "popover act audio vol {}")
+      (label :class "v" :text "${audio.vol ?: 0}%" :width 46 :halign "end"))
+    (row :class "slider"
+      (button :class "mute ${audio.mic_muted ? 'on' : ''}" :onclick "popover act audio micmute"
+        (label :text {audio.mic_muted ? "󰍭" : "󰍬"}))
+      (scale :class "vol mic" :value {audio.mic ?: 0} :min 0 :max 100 :hexpand true
+             :onchange "popover act audio mic {}")
+      (label :class "v" :text "${audio.mic ?: 0}%" :width 46 :halign "end"))
+    (label :class "section" :text "output" :halign "start")
+    (box :orientation "v" :space-evenly false
+      (for s in {audio.sinks ?: []}
+        (item :label {s.name} :icon "󰓃" :sub {s.default ? "active" : ""} :active {s.default}
+              :cmd "popover act audio sink ${s.id}")))
+    (actions (action :label "mixer" :icon "󰒓" :cmd "popover act audio mixer"))))
+
+(defwidget battery-panel []
+  (panel :title "Battery" :icon {battery.icon ?: "󰁹"}
+    (box :class "hero" :orientation "h" :space-evenly false
+      (label :class "big" :text "${battery.cap ?: 0}%")
+      (box :orientation "v" :space-evenly false :valign "center" :hexpand true
+        (label :class "hl" :text "${battery.status ?: ''}${battery.watts != '' ? '  ·  ' + battery.watts + ' W' : ''}" :halign "start")
+        (label :class "hs" :text {battery.time ?: ""} :halign "start")))
+    (kv :k "input" :v {battery.pd != "" ? battery.pd : "none"})
+    (kv :k "health" :v "${battery.health ?: '?'}%  ·  ${battery.cycles ?: '?'} cycles")
+    (label :class "section" :text "charge mode" :halign "start")
+    (box :class "radio" :orientation "h" :space-evenly true :spacing 6
+      (button :class "chip ${battery.mode == 'Fast' ? 'on' : ''}"     :onclick "popover act battery mode Fast"     "󱐋 Fast")
+      (button :class "chip ${battery.mode == 'Standard' ? 'on' : ''}" :onclick "popover act battery mode Standard" "󰂀 Standard")
+      (button :class "chip ${battery.mode == 'Custom' ? 'on' : ''}"   :onclick "popover act battery mode Custom"   "󰁼 50–75 %"))
+    (label :class "hint" :halign "start" :xalign 0
+           :text {battery.mode == "Custom" ? "Holding 50–75 %; charging is slow (~9 W)." : "Fast = ExpressCharge, ~23 W.  50–75 % = kinder when docked."})
+    (actions (action :label "full charge" :icon "󰁹" :cmd "popover act battery full")
+             (action :label "tlp"         :icon "󰍛" :cmd "popover act battery tlp")
+             (action :label "power…"      :icon "󰐥" :cmd "popover act battery power"))))
+
+(defwidget llm-panel []
+  (panel :title "LLM usage" :icon "󰚩"
+    (meter :label "left" :value {llm.percent ?: 0} :warn 101 :crit 101)
+    (box :orientation "v" :space-evenly false
+      (for l in {llm.lines ?: []}
+        (row :class "proc"
+          (label :class "il" :text {l.name} :halign "start" :width 110 :xalign 0)
+          (label :class "is" :text {l.state} :halign "start" :hexpand true :limit-width 40 :tooltip {l.state}))))
+    (actions (action :label "refresh" :icon "󰑓" :cmd "popover act llm refresh")
+             (action :label "report"  :icon "󰒓" :cmd "popover act llm report"))))
+
+;; --------------------------------------------------------------- windows --
+;; Backdrop: full-output transparent layer under the panel; a click anywhere
+;; outside closes everything (same feel as the swaync control centre).
+(defwindow backdrop
+  :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-backdrop"
+  :geometry (geometry :x "0" :y "0" :width "100%" :height "100%" :anchor "top left")
+  (eventbox :onclick "popover close" (box :class "backdrop")))
+
+(defwindow sys     :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-popover"
+  :geometry (geometry :anchor "top right" :x "8px" :y "6px" :width "380px") (sys-panel))
+(defwindow net     :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-popover"
+  :geometry (geometry :anchor "top right" :x "8px" :y "6px" :width "380px") (net-panel))
+(defwindow bt      :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-popover"
+  :geometry (geometry :anchor "top right" :x "8px" :y "6px" :width "380px") (bt-panel))
+(defwindow audio   :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-popover"
+  :geometry (geometry :anchor "top right" :x "8px" :y "6px" :width "380px") (audio-panel))
+(defwindow battery :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-popover"
+  :geometry (geometry :anchor "top right" :x "8px" :y "6px" :width "380px") (battery-panel))
+(defwindow llm     :monitor 0 :stacking "overlay" :exclusive false :focusable false :namespace "eww-popover"
+  :geometry (geometry :anchor "top right" :x "8px" :y "6px" :width "420px") (llm-panel))

@@ -1,0 +1,166 @@
+#!/bin/bash
+# popover -- the waybar drop-downs (eww). Every right-side pill opens a panel
+# under the bar styled like the swaync control centre, with real toggles,
+# sliders and lists. Config: config/gui/Wayland/eww/{eww.yuck,eww.scss}.
+#
+#   popover <sys|net|bt|audio|battery|llm>   toggle that panel (closes others)
+#   popover close                            close whatever is open
+#   popover data <topic>                     JSON the panel polls (see below)
+#   popover act <topic> <action> [arg]       button/slider handlers
+#
+# Data is JSON per topic so the yuck stays declarative and the tests can run
+# the script headless (POWER_SUPPLY_DIR etc. are honoured through the helpers).
+# shellcheck disable=SC2016  # jq programs use $vars on purpose
+set -euo pipefail
+
+PANELS="sys net bt audio battery llm"
+
+json() { jq -nc "$@"; }
+
+# ---------------------------------------------------------------- data ----
+data_sys() {
+	local cpu mem disk temp l1 l5 l15 up procs
+	read -r l1 l5 l15 _ </proc/loadavg
+	up=$(uptime -p 2>/dev/null | sed 's/^up //')
+	# sysstat does the sampling + thresholds; reuse its tooltip numbers.
+	read -r _ cpu _ mem _ disk temp < <(sysstat 2>/dev/null | sed 's/(.*)//; s/[%°C]//g')
+	procs=$(ps -eo pcpu,pmem,comm --sort=-pcpu --no-headers | head -6 |
+		jq -Rnc '[inputs | capture("^ *(?<cpu>[0-9.]+) +(?<mem>[0-9.]+) +(?<name>.+)$") | .cpu |= tonumber | .mem |= tonumber]')
+	json --argjson cpu "${cpu:-0}" --argjson mem "${mem:-0}" --argjson disk "${disk:-0}" \
+		--arg temp "${temp:-}" --arg load "$l1 $l5 $l15" --arg up "${up:-?}" --argjson procs "$procs" \
+		'{cpu:$cpu, mem:$mem, disk:$disk, temp:$temp, load:$load, up:$up, procs:$procs}'
+}
+
+data_net() {
+	local wifi=false ssid="" signal=0 ip="" nets="[]" known
+	[[ "$(nmcli -t radio wifi 2>/dev/null)" == enabled ]] && wifi=true
+	ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4; exit}')
+	if $wifi; then
+		known=$(nmcli -t -f NAME con show 2>/dev/null | jq -Rnc '[inputs]')
+		nets=$(nmcli -t -f ACTIVE,SSID,SIGNAL,SECURITY dev wifi list 2>/dev/null |
+			sort -t: -k1,1r -k3,3nr | awk -F: '$2 != "" && !seen[$2]++' | head -8 |
+			jq -Rnc --argjson known "$known" '[inputs | split(":") |
+				{active: (.[0]=="yes"), ssid: .[1], signal: (.[2]|tonumber),
+				 secure: (.[3] != "" and .[3] != "--")} | .known = (.ssid as $s | $known | index($s) != null)]')
+		ssid=$(jq -r '.[] | select(.active) | .ssid' <<<"$nets" | head -1)
+		signal=$(jq -r '.[] | select(.active) | .signal' <<<"$nets" | head -1)
+	fi
+	json --argjson wifi "$wifi" --arg ssid "$ssid" --argjson signal "${signal:-0}" --arg ip "${ip:-}" --argjson nets "$nets" \
+		'{wifi:$wifi, ssid:$ssid, signal:$signal, ip:$ip, nets:$nets}'
+}
+
+data_bt() {
+	local powered=false devs="[]" mac name info
+	bluetoothctl show 2>/dev/null | grep -q "Powered: yes" && powered=true
+	if $powered; then
+		devs=$(while read -r _ mac name; do
+			[[ -z "$mac" ]] && continue
+			info=$(bluetoothctl info "$mac" 2>/dev/null)
+			json --arg mac "$mac" --arg name "$name" \
+				--argjson connected "$(grep -q 'Connected: yes' <<<"$info" && echo true || echo false)" \
+				--arg battery "$(sed -n 's/.*Battery Percentage.*(\([0-9]*\)).*/\1/p' <<<"$info")" \
+				'{mac:$mac, name:$name, connected:$connected, battery:$battery}'
+		done < <(bluetoothctl devices Paired 2>/dev/null) | jq -sc '.')
+	fi
+	json --argjson powered "$powered" --argjson devs "$devs" '{powered:$powered, devs:$devs}'
+}
+
+data_audio() {
+	local v vol=0 muted=false mic=0 mic_muted=false sinks
+	v=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)
+	[[ "$v" == *MUTED* ]] && muted=true
+	[[ -n "$v" ]] && vol=$(awk '{printf "%d", $2*100}' <<<"$v")
+	v=$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null || true)
+	[[ "$v" == *MUTED* ]] && mic_muted=true
+	[[ -n "$v" ]] && mic=$(awk '{printf "%d", $2*100}' <<<"$v")
+	sinks=$(wpctl status 2>/dev/null | sed -n '/Sinks:/,/Sources:/p' |
+		jq -Rnc '[inputs | capture("^[ │]*(?<def>\\*?) *(?<id>[0-9]+)\\. +(?<name>.+?) +\\[vol:") |
+			{id: (.id|tonumber), default: (.def=="*"),
+			 name: (.name | sub("^Core Ultra Processors \\(Series [0-9]+\\) HD Audio "; "") | sub(" Output \\(Stereo\\)$"; ""))}]')
+	json --argjson vol "$vol" --argjson muted "$muted" --argjson mic "$mic" --argjson mic_muted "$mic_muted" --argjson sinks "${sinks:-[]}" \
+		'{vol:$vol, muted:$muted, mic:$mic, mic_muted:$mic_muted, sinks:$sinks}'
+}
+
+data_battery() { battery-menu --json; }
+
+data_llm() {
+	local w
+	w=$(llm-usage --waybar 2>/dev/null || printf '{"text":"","percentage":0,"tooltip":"LLM usage\\nunavailable"}')
+	jq -c '{percent: .percentage, class: (.class // "unknown"),
+		lines: (.tooltip | split("\n") | .[1:] | map(capture("^(?<name>[^:]+): (?<state>.*)$") // {name: ., state: ""}))}' <<<"$w"
+}
+
+# -------------------------------------------------------------- actions ----
+act() {
+	local topic=$1 action=$2 arg=${3:-}
+	case "$topic:$action" in
+	sys:btop) terminal -e btop ;;
+	net:wifi) nmcli radio wifi "$arg" ;;
+	net:connect)
+		if nmcli -t -f NAME con show | grep -qxF "$arg"; then
+			nmcli con up id "$arg" >/dev/null || notify-send -u normal "Wi-Fi" "Could not connect to $arg"
+		else
+			terminal -e nmtui-connect "$arg" # password prompt
+		fi
+		;;
+	net:rescan) nmcli dev wifi rescan 2>/dev/null || true ;;
+	net:nmtui) terminal -e nmtui ;;
+	bt:power) bluetoothctl power "$arg" >/dev/null ;;
+	bt:connect) bluetoothctl connect "$arg" >/dev/null || notify-send -u normal "Bluetooth" "Could not connect" ;;
+	bt:disconnect) bluetoothctl disconnect "$arg" >/dev/null ;;
+	bt:pair) terminal -e bluetooth ;;
+	audio:vol) wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ "${arg%.*}%" ;;
+	audio:mute) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+	audio:mic) wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SOURCE@ "${arg%.*}%" ;;
+	audio:micmute) wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
+	audio:sink) wpctl set-default "$arg" ;;
+	audio:mixer) terminal -e pulsemixer ;;
+	battery:mode) battery-menu --set "$arg" ;;
+	battery:full) battery-menu --fullcharge ;;
+	battery:tlp) terminal -e sh -c 'sudo tlp-stat -b; read -r _' ;;
+	battery:power) popover close; power ;;
+	llm:refresh) llm-usage --refresh >/dev/null 2>&1 || true; pkill -RTMIN+8 waybar 2>/dev/null || true ;;
+	llm:report) terminal -e sh -c 'llm-usage; printf "\n[press enter]"; read -r _' ;;
+	*) echo "popover: unknown action $topic:$action" >&2; exit 2 ;;
+	esac
+	# Refresh the panel right away instead of waiting for the next poll.
+	case "$action" in btop | nmtui | pair | mixer | tlp | report | power) ;; *) eww update "tick=$RANDOM" 2>/dev/null || true ;; esac
+}
+
+# ------------------------------------------------------------ open/close --
+open_panel() {
+	local want=$1 cur
+	eww ping >/dev/null 2>&1 || eww daemon
+	cur=$(eww get open 2>/dev/null || echo "")
+	if [[ "$cur" == "$want" ]]; then
+		close_all
+		return
+	fi
+	# eww 0.5 addresses outputs by GDK index; Hyprland's monitor id matches
+	# that order on a single-seat session.
+	local mon
+	mon=$(hyprctl -j monitors 2>/dev/null | jq -r '.[] | select(.focused) | .id' || true)
+	eww update "open=$want"
+	swaync-client --close-panel >/dev/null 2>&1 || true
+	# Backdrop first (below), then the panel; both on the overlay layer.
+	eww open backdrop ${mon:+--screen "$mon"} >/dev/null 2>&1 || true
+	# shellcheck disable=SC2086
+	eww close $PANELS >/dev/null 2>&1 || true
+	eww open "$want" ${mon:+--screen "$mon"}
+}
+close_all() {
+	eww update "open=" 2>/dev/null || true
+	# shellcheck disable=SC2086
+	eww close $PANELS backdrop >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+data) "data_$2" ;;
+act) shift; act "$@" ;;
+close) close_all ;;
+sys | net | bt | audio | battery | llm) open_panel "$1" ;;
+*)
+	sed -n '2,12p' "$0" >&2
+	exit 2
+	;;
+esac

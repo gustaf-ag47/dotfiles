@@ -40,7 +40,8 @@
   },
 
   // Right side is three labelled pills (see style.css #sys/#conn/#pwr):
-  // system load | connectivity | battery. Each value has an icon and a unit.
+  // system load | connectivity | battery. Each value has an icon and a unit,
+  // and each click opens an eww drop-down panel (bin/popover).
   "group/sys": {
     "orientation": "inherit",
     "modules": ["custom/sys", "custom/llm-usage"]
@@ -101,7 +102,6 @@
     "format": "{icon} {capacity}%",
     "format-charging": "󰂄 {capacity}% <span color='#565f89'>{power:.0f}W</span>",
     "format-plugged": "󰚥 {capacity}%",
-    "format-alt": "{icon} {time}",
     "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
     "tooltip-format": "{timeTo}\n{power:.1f} W · {cycles} cycles · health {health}%",
     "on-click": "battery-menu"
@@ -115,7 +115,7 @@
     "format-connected": "󰂱",
     "format-connected-battery": "󰂱",
     "interval": 10,
-    "on-click": "terminal -e bluetooth",
+    "on-click": "popover bt",
     "tooltip-format": "{controller_alias}\t{controller_address}\n\n{num_connections} connected",
     "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{num_connections} connected\n\n{device_enumerate}",
     "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
@@ -127,12 +127,11 @@
     "format-ethernet": "󰈀 LAN",
     "format-linked": "󱘖 no IP",
     "format-disconnected": "󰤭 off",
-    "format-alt": "{ifname}: {ipaddr}/{cidr}",
     "tooltip-format": "{ifname} via {gwaddr}",
     "tooltip-format-wifi": "󰤨 {essid} ({signalStrength}%)\n󰩟 {frequency}MHz\n󰩠 {ipaddr}",
     "tooltip-format-ethernet": "󰈀 {ifname}\n󰩠 {ipaddr}",
     "tooltip-format-disconnected": "󰤭 Disconnected",
-    "on-click": "terminal -e nmtui"
+    "on-click": "popover net"
   },
   
   "pulseaudio": {
@@ -151,8 +150,8 @@
       "car": "󰄋",
       "default": ["󰕿", "󰖀", "󰕾"]
     },
-    "on-click": "terminal -e pulsemixer",
-    "on-click-right": "terminal -e wiremix",
+    "on-click": "popover audio",
+    "on-click-right": "volume --toggle",
     "scroll-step": 5,
     "smooth-scrolling-threshold": 1
   },
@@ -161,7 +160,8 @@
     "format": "󰌌 {}",
     "format-en": "EN",
     "format-sv": "SV",
-    "on-click": "hyprctl switchxkblayout at-translated-set-2-keyboard next"
+    "tooltip-format": "Keyboard layout: {long}",
+    "on-click": "hyprctl switchxkblayout main next"
   },
   
   "idle_inhibitor": {
@@ -175,7 +175,7 @@
     "return-type": "json",
     "interval": 300,
     "tooltip": true,
-    "on-click": "terminal -e llm-usage"
+    "on-click": "popover llm"
   },
 
   // cpu/mem/disk collapsed into one chip; detail in the tooltip, colour by state.
@@ -183,7 +183,7 @@
     "exec": "sysstat --waybar",
     "return-type": "json",
     "interval": 5,
-    "on-click": "terminal -e btop"
+    "on-click": "popover sys"
   },
   "privacy": {
     "icon-spacing": 6,

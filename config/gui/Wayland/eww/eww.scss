@@ -1,0 +1,294 @@
+// eww popovers -- Tokyo Night, flat. Same tokens as swaync/style.css and
+// waybar/style.css so the drop-downs read as part of the same shell.
+
+$bg: #16161e;
+$bg2: #1a1b26;
+$bg3: #24283b;
+$line: #2a2d44;
+$fg: #c0caf5;
+$fg2: #a9b1d6;
+$mute: #565f89;
+$blue: #7aa2f7;
+$green: #9ece6a;
+$yellow: #e0af68;
+$red: #f7768e;
+
+* {
+  all: unset;
+  font-family: "Inter", "JetBrainsMono Nerd Font", sans-serif;
+  font-size: 13px;
+  color: $fg;
+}
+
+window {
+  background: transparent;
+}
+.backdrop {
+  background: transparent;
+}
+
+.panel {
+  background: $bg;
+  border: 1px solid $line;
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.title {
+  margin-bottom: 8px;
+  .title-icon {
+    color: $blue;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 15px;
+    margin-right: 8px;
+  }
+  .title-text {
+    font-weight: 600;
+    font-size: 14px;
+  }
+}
+
+.section {
+  color: $mute;
+  font-size: 11px;
+  margin: 10px 0 4px 2px;
+}
+.hint {
+  margin: 6px 2px 0;
+}
+.hint,
+.empty {
+  color: $mute;
+  font-size: 11px;
+  margin: 6px 2px 0;
+}
+
+// --- rows -----------------------------------------------------------------
+.row {
+  padding: 4px 2px;
+  .k {
+    color: $mute;
+    min-width: 56px;
+  }
+  .v {
+    color: $fg2;
+  }
+}
+.proc {
+  padding: 3px 10px;
+  .il {
+    color: $fg2;
+  }
+  .is {
+    color: $mute;
+    font-size: 11px;
+  }
+}
+
+// --- meters (read-only scales) ----------------------------------------------
+.meter {
+  padding: 4px 2px;
+  .k {
+    color: $mute;
+  }
+  .v {
+    color: $fg2;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 12px;
+  }
+  .bar {
+    margin: 0 10px;
+    trough {
+      background: $bg3;
+      border-radius: 999px;
+      min-height: 5px;
+      highlight {
+        background: $blue;
+        border-radius: 999px;
+        min-height: 5px;
+      }
+    }
+  }
+  &.warn .bar trough highlight {
+    background: $yellow;
+  }
+  &.crit .bar trough highlight {
+    background: $red;
+  }
+}
+
+// --- live sliders -------------------------------------------------------------
+.slider {
+  padding: 4px 0;
+  .mute {
+    min-width: 30px;
+    min-height: 30px;
+    border-radius: 8px;
+    background: $bg3;
+    label {
+      font-family: "JetBrainsMono Nerd Font";
+      font-size: 15px;
+    }
+    &.on label {
+      color: $red;
+    }
+    &:hover {
+      background: $line;
+    }
+  }
+  .vol {
+    margin: 0 10px;
+    trough {
+      background: $bg3;
+      border-radius: 999px;
+      min-height: 6px;
+      highlight {
+        background: $blue;
+        border-radius: 999px;
+        min-height: 6px;
+      }
+    }
+    slider {
+      background: $fg;
+      border-radius: 999px;
+      min-width: 12px;
+      min-height: 12px;
+      margin: -4px;
+    }
+    &.mic trough highlight {
+      background: $green;
+    }
+  }
+  .v {
+    color: $fg2;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 12px;
+  }
+}
+
+// --- toggle (like the swaync buttons-grid) --------------------------------------
+.toggle {
+  padding: 9px 12px;
+  margin: 2px 0;
+  border-radius: 9px;
+  border: 1px solid $line;
+  background: $bg2;
+  .ti {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 15px;
+    margin-right: 10px;
+    color: $mute;
+  }
+  .tl {
+    font-weight: 500;
+  }
+  .ts {
+    color: $mute;
+    font-size: 11px;
+  }
+  &:hover {
+    background: $bg3;
+  }
+  &.on {
+    background: rgba(122, 162, 247, 0.12);
+    border-color: rgba(122, 162, 247, 0.6);
+    .ti {
+      color: $blue;
+    }
+    .ts {
+      color: $blue;
+    }
+  }
+}
+
+// --- list items ------------------------------------------------------------------
+.item {
+  padding: 7px 10px;
+  border-radius: 8px;
+  .ii {
+    font-family: "JetBrainsMono Nerd Font";
+    margin-right: 10px;
+    color: $mute;
+  }
+  .il {
+    color: $fg2;
+  }
+  .is {
+    color: $mute;
+    font-size: 11px;
+    font-family: "JetBrainsMono Nerd Font";
+  }
+  &:hover {
+    background: $bg3;
+  }
+  &.active {
+    .ii,
+    .is {
+      color: $blue;
+    }
+    .il {
+      color: $fg;
+      font-weight: 500;
+    }
+  }
+}
+
+// --- bottom action buttons -----------------------------------------------------
+.actions {
+  margin-top: 12px;
+}
+.action {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: $bg2;
+  border: 1px solid $line;
+  .ai {
+    font-family: "JetBrainsMono Nerd Font";
+    margin-right: 8px;
+    color: $mute;
+  }
+  .al {
+    color: $fg2;
+  }
+  &:hover {
+    background: $bg3;
+    .ai,
+    .al {
+      color: $fg;
+    }
+  }
+}
+
+// --- battery -----------------------------------------------------------------------
+.hero {
+  margin: 2px 0 8px;
+  .big {
+    font-size: 30px;
+    font-weight: 600;
+    margin-right: 14px;
+  }
+  .hl {
+    color: $fg2;
+  }
+  .hs {
+    color: $mute;
+    font-size: 11px;
+  }
+}
+.radio .chip {
+  padding: 8px 6px;
+  border-radius: 8px;
+  background: $bg2;
+  border: 1px solid $line;
+  color: $fg2;
+  &:hover {
+    background: $bg3;
+  }
+  &.on {
+    background: rgba(122, 162, 247, 0.12);
+    border-color: rgba(122, 162, 247, 0.6);
+    color: $blue;
+    font-weight: 500;
+  }
+}

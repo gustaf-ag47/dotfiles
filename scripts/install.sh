@@ -293,6 +293,7 @@ link_config "$DOTFILES/config/gui/Wayland/wofi" "$XDG_CONFIG_HOME/wofi"
 link_config "$DOTFILES/config/gui/Wayland/swaync" "$XDG_CONFIG_HOME/swaync"
 link_config "$DOTFILES/config/gui/Wayland/wlogout" "$XDG_CONFIG_HOME/wlogout"
 link_config "$DOTFILES/config/gui/Wayland/swayosd" "$XDG_CONFIG_HOME/swayosd"
+link_config "$DOTFILES/config/gui/Wayland/eww" "$XDG_CONFIG_HOME/eww"
 
 # --- machine profile ------------------------------------------------------
 # One file per machine describing what it IS (class, battery, gpu, disk), read

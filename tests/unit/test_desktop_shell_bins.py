@@ -1,4 +1,4 @@
-"""bin/keys, bin/sysstat, bin/battery-menu: pure text paths, no desktop needed."""
+"""bin/keys, bin/sysstat, bin/battery-menu, bin/popover: text/JSON paths, no desktop needed."""
 
 import json
 import os
@@ -71,9 +71,7 @@ class SysstatTest(unittest.TestCase):
         self.assertIn("󰘚", json.loads(hot.stdout)["text"])
 
 
-class BatteryMenuTest(unittest.TestCase):
-    def test_text_reads_fake_sysfs(self):
-        with tempfile.TemporaryDirectory() as tmp:
+def fake_power_supply(tmp):
             ps = Path(tmp)
             bat = ps / "BAT0"
             bat.mkdir()
@@ -95,6 +93,13 @@ class BatteryMenuTest(unittest.TestCase):
             (mouse / "type").write_text("Battery\n")
             (mouse / "scope").write_text("Device\n")
             (mouse / "capacity").write_text("3\n")
+            return ps
+
+
+class BatteryMenuTest(unittest.TestCase):
+    def test_text_reads_fake_sysfs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ps = fake_power_supply(tmp)
             r = run("battery-menu", "--text", env={"POWER_SUPPLY_DIR": str(ps), "PATH": "/usr/bin:/bin"})
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
@@ -104,6 +109,52 @@ class BatteryMenuTest(unittest.TestCase):
         self.assertIn("18 V · 5 A", lines[2])
         self.assertIn("100% · 10 cycles", lines[3])
         self.assertNotIn("3%", r.stdout)
+
+    def test_json_for_the_eww_panel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ps = fake_power_supply(tmp)
+            r = run("battery-menu", "--json", env={"POWER_SUPPLY_DIR": str(ps), "PATH": "/usr/bin:/bin"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual((d["cap"], d["status"], d["mode"], d["pd"]), (74, "charging", "Fast", "18 V · 5 A"))
+        self.assertEqual(d["watts"], "21.8")
+        self.assertIsInstance(d["can_set"], bool)
+
+    def test_set_rejects_unknown_mode(self):
+        r = run("battery-menu", "--set", "Turbo", env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(r.returncode, 2)
+
+
+class PopoverDataTest(unittest.TestCase):
+    """`popover data <topic>` feeds eww; each must be one JSON object with the
+    keys the yuck dereferences, even when the backing tool is absent."""
+
+    def test_sys_shape(self):
+        r = run("popover", "data", "sys", env={"PATH": f"{BIN}:/usr/bin:/bin"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual(set(d), {"cpu", "mem", "disk", "temp", "load", "up", "procs"})
+        self.assertTrue(all({"name", "cpu", "mem"} <= set(p) for p in d["procs"]))
+
+    def test_llm_shape_without_providers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp) / "llm-usage"
+            stub.write_text("#!/bin/sh\nexit 1\n")
+            stub.chmod(0o755)
+            r = run("popover", "data", "llm", env={"PATH": f"{tmp}:/usr/bin:/bin"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual(d["percent"], 0)
+        self.assertEqual(d["lines"][0]["name"], "unavailable")
+
+    def test_yuck_only_references_known_topics_and_actions(self):
+        yuck = (Path(__file__).resolve().parents[2] / "config/gui/Wayland/eww/eww.yuck").read_text()
+        popover = (BIN / "popover").read_text()
+        import re
+        for topic, action in set(re.findall(r"popover act (\w+) (\w+)", yuck)):
+            self.assertIn(f"{topic}:{action})", popover, f"{topic}:{action} has no handler in bin/popover")
+        for topic in set(re.findall(r"popover data (\w+)", yuck)):
+            self.assertIn(f"data_{topic}()", popover)
 
 
 if __name__ == "__main__":

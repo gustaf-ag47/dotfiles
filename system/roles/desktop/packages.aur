@@ -8,3 +8,5 @@ rdrview
 pandoc-bin
 tokyonight-gtk-theme-git
 bibata-cursor-theme-bin
+# eww: the waybar drop-down panels (bin/popover, config/gui/Wayland/eww)
+eww
