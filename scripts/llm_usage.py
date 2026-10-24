@@ -1368,12 +1368,12 @@ def waybar_payload(report):
                 remaining.append(max(0, min(100, float(value))))
     if remaining:
         percent = min(remaining)
-        text_value = f"LLM {percent:.0f}%" + (' ~' if stale else '') + ('!' if failed else '')
+        text_value = f"󰚩 {percent:.0f}%" + (' ~' if stale else '') + ('!' if failed else '')
         css_class = 'critical' if percent < 20 else 'warning' if percent < 60 or stale or failed else 'normal'
         payload = {'text': text_value, 'percentage': round(percent)}
     else:
-        payload = {'text': 'LLM ?' + ('!' if failed else ''), 'percentage': 0}
-        css_class = 'error' if failed else 'warning'
+        payload = {'text': '󰚩 --', 'percentage': 0}
+        css_class = 'unknown'
     payload.update({'class': css_class, 'tooltip': 'LLM usage\n' + '\n'.join(details)})
     return payload
 

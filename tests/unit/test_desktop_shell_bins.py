@@ -65,7 +65,7 @@ class SysstatTest(unittest.TestCase):
             "SYSSTAT_CRIT_DISK": "101", "SYSSTAT_CRIT_TEMP": "1000",
         })
         self.assertEqual(json.loads(calm.stdout)["class"], "ok")
-        self.assertEqual(json.loads(calm.stdout)["text"], "󰍛 ok")
+        self.assertRegex(json.loads(calm.stdout)["text"], r"^󰍛 \d+%  ?󰘚 \d+%$")
         hot = run("sysstat", "--waybar", env={"SYSSTAT_WARN_MEM": "0", "SYSSTAT_CRIT_MEM": "0"})
         self.assertEqual(json.loads(hot.stdout)["class"], "crit")
         self.assertIn("󰘚", json.loads(hot.stdout)["text"])

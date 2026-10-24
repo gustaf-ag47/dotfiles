@@ -94,7 +94,19 @@ window#waybar.empty #window {
   color: @fg;
 }
 
-/* --- right group ---------------------------------------------------------- */
+/* --- right side: three pills + layout + bell ------------------------------ */
+/* Each pill is a waybar group (config "group/sys" etc.); the modules inside
+   are plain labels separated by a little space, so a value never runs into
+   its neighbour. */
+#sys,
+#conn,
+#pwr {
+  background: @bg2;
+  border: 1px solid @line;
+  border-radius: 8px;
+  margin: 4px 3px;
+  padding: 0 4px;
+}
 #tray,
 #custom-sys,
 #privacy,
@@ -106,8 +118,15 @@ window#waybar.empty #window {
 #idle_inhibitor,
 #custom-llm-usage,
 #custom-notification {
-  padding: 0 2px;
   color: @fg2;
+  padding: 0 6px;
+}
+#tray {
+  margin-right: 4px;
+}
+#language,
+#custom-notification {
+  padding: 0 7px;
 }
 
 #tray > .passive {
@@ -118,7 +137,7 @@ window#waybar.empty #window {
 }
 
 #custom-sys {
-  color: @mute;
+  color: @fg2;
 }
 #custom-sys.warn {
   color: @yellow;
@@ -128,7 +147,7 @@ window#waybar.empty #window {
 }
 
 #privacy {
-  padding: 0 4px;
+  padding: 0 2px;
 }
 #privacy-item.screenshare {
   color: @yellow;
@@ -176,7 +195,8 @@ window#waybar.empty #window {
   color: @yellow;
 }
 
-#custom-llm-usage {
+#custom-llm-usage,
+#custom-llm-usage.unknown {
   color: @mute;
 }
 #custom-llm-usage.warning {
@@ -187,9 +207,6 @@ window#waybar.empty #window {
   color: @red;
 }
 
-#custom-notification {
-  padding-left: 4px;
-}
 #custom-notification.dnd-none,
 #custom-notification.dnd-notification {
   color: @mute;

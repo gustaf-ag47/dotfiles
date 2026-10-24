@@ -1,6 +1,6 @@
-// Laptop overlay: battery module (click -> bin/battery-menu) and keyboard
-// backlight keys handle brightness; the OSD (swayosd) shows the level, so no
-// backlight module. Power menu is Super+Ctrl+Q (wlogout) or via swaync.
+// Laptop overlay: battery pill (click -> bin/battery-menu); brightness keys
+// show the level via swayosd so there is no backlight module. Power menu is
+// Super+Ctrl+Q (wlogout) or via swaync. Groups are defined in ../config.
 {
-  "modules-right": ["tray", "custom/sys", "privacy", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "idle_inhibitor", "custom/llm-usage", "custom/notification"]
+  "modules-right": ["tray", "group/sys", "group/conn", "group/pwr", "hyprland/language", "custom/notification"]
 }

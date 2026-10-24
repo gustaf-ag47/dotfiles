@@ -39,6 +39,21 @@
     "show-passive-items": true
   },
 
+  // Right side is three labelled pills (see style.css #sys/#conn/#pwr):
+  // system load | connectivity | battery. Each value has an icon and a unit.
+  "group/sys": {
+    "orientation": "inherit",
+    "modules": ["custom/sys", "custom/llm-usage"]
+  },
+  "group/conn": {
+    "orientation": "inherit",
+    "modules": ["network", "bluetooth", "pulseaudio", "privacy"]
+  },
+  "group/pwr": {
+    "orientation": "inherit",
+    "modules": ["battery", "idle_inhibitor"]
+  },
+
   "cpu": {
     "format": " {usage}%",
     "tooltip": true,
@@ -83,9 +98,9 @@
       "warning": 30,
       "critical": 15
     },
-    "format": "{icon} {capacity}",
-    "format-charging": "󰂄 {capacity} <span color='#565f89'>{power:.0f}W</span>",
-    "format-plugged": "󰚥 {capacity}",
+    "format": "{icon} {capacity}%",
+    "format-charging": "󰂄 {capacity}% <span color='#565f89'>{power:.0f}W</span>",
+    "format-plugged": "󰚥 {capacity}%",
     "format-alt": "{icon} {time}",
     "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
     "tooltip-format": "{timeTo}\n{power:.1f} W · {cycles} cycles · health {health}%",
@@ -108,10 +123,10 @@
   },
   
   "network": {
-    "format-wifi": "󰤨",
-    "format-ethernet": "󰈀",
-    "format-linked": "󱘖",
-    "format-disconnected": "󰤭",
+    "format-wifi": "󰤨 {signalStrength}%",
+    "format-ethernet": "󰈀 LAN",
+    "format-linked": "󱘖 no IP",
+    "format-disconnected": "󰤭 off",
     "format-alt": "{ifname}: {ipaddr}/{cidr}",
     "tooltip-format": "{ifname} via {gwaddr}",
     "tooltip-format-wifi": "󰤨 {essid} ({signalStrength}%)\n󰩟 {frequency}MHz\n󰩠 {ipaddr}",
@@ -121,8 +136,8 @@
   },
   
   "pulseaudio": {
-    "format": "{icon} {volume}",
-    "format-bluetooth": "{icon} {volume}",
+    "format": "{icon} {volume}%",
+    "format-bluetooth": "{icon} {volume}%",
     "format-bluetooth-muted": "󰂯 󰝟",
     "format-muted": "󰝟",
     "format-source": "󰍬 {volume}%",
