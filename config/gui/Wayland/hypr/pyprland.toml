@@ -2,7 +2,12 @@
 # Scratchpads and other Hyprland extensions
 
 [pyprland]
-plugins = ["scratchpads"]
+# expose: Super+E shows every window on the current workspace (overview).
+# toggle_special: stash a window to the special workspace and back.
+plugins = ["scratchpads", "expose", "toggle_special"]
+
+[expose]
+include_special = false
 
 [scratchpads.term]
 command = "alacritty --class=scratchpad"

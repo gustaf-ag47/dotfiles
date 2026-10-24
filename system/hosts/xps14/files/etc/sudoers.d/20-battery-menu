@@ -1,0 +1,8 @@
+# bin/battery-menu: switch the Dell EC charge mode (Fast / Standard / Custom
+# 50-75) and run `tlp fullcharge` from the waybar battery popover without a
+# password prompt. Only these exact commands. Research:
+# $NOTES/Homelab/dotfiles/runs/2026-10-17-xps14-battery/20-tlp-config.md
+%wheel ALL=(root) NOPASSWD: /usr/bin/tlp fullcharge, /usr/bin/tlp start, \
+    /usr/bin/tee /sys/class/power_supply/BAT0/charge_types, \
+    /usr/bin/tee /sys/class/power_supply/BAT0/charge_control_start_threshold, \
+    /usr/bin/tee /sys/class/power_supply/BAT0/charge_control_end_threshold

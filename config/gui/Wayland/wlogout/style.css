@@ -1,0 +1,48 @@
+/* wlogout -- five keys in a row, hotkey letters s/l/e/r/p (layout). Launched by
+ * bin/power with -b 5 (one row). Tokyo Night, flat; destructive keys red. */
+
+* {
+  background-image: none;
+  font-family: "Inter", "JetBrainsMono Nerd Font", sans-serif;
+}
+
+window {
+  background-color: rgba(10, 11, 18, 0.55);
+}
+
+button {
+  margin: 0 8px;
+  padding: 0;
+  min-width: 140px;
+  min-height: 140px;
+  border-radius: 16px;
+  background-color: rgba(22, 22, 30, 0.95);
+  border: 1px solid #2a2d44;
+  color: #a9b1d6;
+  font-size: 14px;
+  background-repeat: no-repeat;
+  background-position: center 36%;
+  background-size: 36px;
+  text-shadow: none;
+  box-shadow: none;
+  transition: all 0.12s ease;
+}
+button:focus,
+button:hover {
+  background-color: #24283b;
+  border-color: #7aa2f7;
+  color: #c0caf5;
+}
+#reboot:focus,
+#reboot:hover,
+#shutdown:focus,
+#shutdown:hover {
+  background-color: #2d2230;
+  border-color: #f7768e;
+}
+
+#sleep    { background-image: image(url("/usr/share/wlogout/icons/suspend.png")); }
+#lock     { background-image: image(url("/usr/share/wlogout/icons/lock.png")); }
+#logout   { background-image: image(url("/usr/share/wlogout/icons/logout.png")); }
+#reboot   { background-image: image(url("/usr/share/wlogout/icons/reboot.png")); }
+#shutdown { background-image: image(url("/usr/share/wlogout/icons/shutdown.png")); }

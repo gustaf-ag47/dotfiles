@@ -6,29 +6,17 @@
   "include": ["~/.config/waybar-host.jsonc"],
   "layer": "top",
   "position": "top", 
-  "height": 50,
-  "spacing": 8,
+  // Slim unified bar (30 px, no pills). Research + mockups:
+  // $NOTES/Homelab/dotfiles/runs/2026-10-24-hyprland-ui-options/
+  "height": 30,
+  "spacing": 14,
   "modules-left": ["hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
   "hyprland/workspaces": {
     "disable-scroll": true,
     "all-outputs": true,
     "swap-icon-label": false,
-    "format": "{icon}",
-    "format-icons": {
-      "1": "󰎤",
-      "2": "󰎧", 
-      "3": "󰎪",
-      "4": "󰎭",
-      "5": "󰎱",
-      "6": "󰎳",
-      "7": "󰎶",
-      "8": "󰎹",
-      "9": "󰎼",
-      "10": "󰎡",
-      "urgent": "󰗖",
-      "default": "󰊠"
-    },
+    "format": "{id}",
     "persistent-workspaces": {
       "1": [],
       "2": [],
@@ -39,8 +27,9 @@
   },
   
   "hyprland/window": {
-    "format": "󰖯 {}",
-    "max-length": 60,
+    "format": "{title}",
+    "max-length": 48,
+    "rewrite": { "(.*) — Mozilla Firefox": "$1", "(.*) - Alacritty": "$1" },
     "separate-outputs": true
   },
   
@@ -72,9 +61,9 @@
   },
 
   "clock": {
-    "format": "󰃭 {:%a %b %d  󰥔 %H:%M}",
+    "format": "{:%H:%M  <span color='#565f89'>%a %d %b</span>}",
+    "format-alt": "{:%Y-%m-%d %H:%M}",
     "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
-    "format-alt": "󰸗 {:%Y-%m-%d}",
     "calendar": {
       "mode": "month",
       "mode-mon-col": 3,
@@ -94,12 +83,13 @@
       "warning": 30,
       "critical": 15
     },
-    "format": "{icon} {capacity}%",
-    "format-charging": "󰂄 {capacity}%",
-    "format-plugged": "󰚥 {capacity}%",
+    "format": "{icon} {capacity}",
+    "format-charging": "󰂄 {capacity} <span color='#565f89'>{power:.0f}W</span>",
+    "format-plugged": "󰚥 {capacity}",
     "format-alt": "{icon} {time}",
     "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
-    "on-click": "power"
+    "tooltip-format": "{timeTo}\n{power:.1f} W · {cycles} cycles · health {health}%",
+    "on-click": "battery-menu"
   },
   
   "bluetooth": {
@@ -107,8 +97,8 @@
     "format-disabled": "󰂲",
     "format-off": "󰂲",
     "format-on": "󰂯",
-    "format-connected": "󰂱 {num_connections}",
-    "format-connected-battery": "󰂱 {device_battery_percentage}%",
+    "format-connected": "󰂱",
+    "format-connected-battery": "󰂱",
     "interval": 10,
     "on-click": "terminal -e bluetooth",
     "tooltip-format": "{controller_alias}\t{controller_address}\n\n{num_connections} connected",
@@ -118,7 +108,7 @@
   },
   
   "network": {
-    "format-wifi": "󰤨 {signalStrength}%",
+    "format-wifi": "󰤨",
     "format-ethernet": "󰈀",
     "format-linked": "󱘖",
     "format-disconnected": "󰤭",
@@ -131,8 +121,8 @@
   },
   
   "pulseaudio": {
-    "format": "{icon} {volume}%",
-    "format-bluetooth": "󰂯 {icon} {volume}%",
+    "format": "{icon} {volume}",
+    "format-bluetooth": "{icon} {volume}",
     "format-bluetooth-muted": "󰂯 󰝟",
     "format-muted": "󰝟",
     "format-source": "󰍬 {volume}%",
@@ -173,10 +163,39 @@
     "on-click": "terminal -e llm-usage"
   },
 
-  "custom/power": {
-    "format": "⏻",
-    "tooltip": "Power Menu",
-    "on-click": "power",
-    "on-click-right": "systemctl poweroff"
+  // cpu/mem/disk collapsed into one chip; detail in the tooltip, colour by state.
+  "custom/sys": {
+    "exec": "sysstat --waybar",
+    "return-type": "json",
+    "interval": 5,
+    "on-click": "terminal -e btop"
+  },
+  "privacy": {
+    "icon-spacing": 6,
+    "icon-size": 13,
+    "transition-duration": 200,
+    "modules": [
+      { "type": "screenshare", "tooltip": true },
+      { "type": "audio-in", "tooltip": true }
+    ]
+  },
+  "custom/notification": {
+    "exec": "swaync-client -swb",
+    "return-type": "json",
+    "format": "{icon}",
+    "format-icons": {
+      "notification": "󰂚<span color='#f7768e'>●</span>",
+      "none": "󰂚",
+      "dnd-notification": "󰂛<span color='#f7768e'>●</span>",
+      "dnd-none": "󰂛",
+      "inhibited-notification": "󰂚<span color='#f7768e'>●</span>",
+      "inhibited-none": "󰂚",
+      "dnd-inhibited-notification": "󰂛<span color='#f7768e'>●</span>",
+      "dnd-inhibited-none": "󰂛"
+    },
+    "tooltip": false,
+    "on-click": "swaync-client -t -sw",
+    "on-click-right": "swaync-client -d -sw",
+    "escape": true
   }
 }

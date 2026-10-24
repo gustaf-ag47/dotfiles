@@ -1,0 +1,253 @@
+/* swaync -- Tokyo Night, flat. Notification cards + control centre.
+ * Matches waybar/style.css (slim bar) and the wlogout grid. */
+
+@define-color bg      #16161e;
+@define-color bg2     #1a1b26;
+@define-color bg3     #24283b;
+@define-color line    #2a2d44;
+@define-color fg      #c0caf5;
+@define-color fg2     #a9b1d6;
+@define-color mute    #565f89;
+@define-color blue    #7aa2f7;
+@define-color green   #9ece6a;
+@define-color yellow  #e0af68;
+@define-color red     #f7768e;
+
+* {
+  font-family: "Inter", "JetBrainsMono Nerd Font", sans-serif;
+  font-size: 13px;
+  color: @fg;
+}
+
+/* --- toast / card --------------------------------------------------------- */
+.notification-row {
+  outline: none;
+  background: transparent;
+}
+.notification-row:focus,
+.notification-row:hover {
+  background: transparent;
+}
+.notification {
+  margin: 4px 8px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid @line;
+  background: alpha(@bg, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.notification.critical {
+  border-color: @red;
+}
+.notification-content {
+  padding: 10px 12px;
+}
+.notification-default-action,
+.notification-action {
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  color: @fg;
+}
+.notification-default-action:hover,
+.notification-action:hover {
+  background: alpha(@blue, 0.08);
+}
+.notification-action {
+  margin: 0 8px 8px;
+  padding: 6px;
+  border: 1px solid @line;
+  border-radius: 8px;
+  font-size: 12px;
+  color: @fg2;
+}
+.image {
+  margin-right: 10px;
+  border-radius: 9px;
+}
+.summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: @fg;
+}
+.time {
+  font-size: 11px;
+  color: @mute;
+  margin-right: 24px;
+}
+.body {
+  font-size: 12.5px;
+  color: @fg2;
+}
+.body-image {
+  margin-top: 6px;
+  border-radius: 8px;
+}
+.close-button {
+  background: transparent;
+  color: @mute;
+  border-radius: 99px;
+  margin: 6px;
+  min-width: 20px;
+  min-height: 20px;
+}
+.close-button:hover {
+  background: alpha(@red, 0.2);
+  color: @red;
+}
+.inline-reply-entry {
+  background: @bg2;
+  color: @fg;
+  caret-color: @fg;
+  border: 1px solid @line;
+  border-radius: 8px;
+}
+.inline-reply-button {
+  background: @bg3;
+  color: @fg;
+  border: none;
+  border-radius: 8px;
+}
+
+/* --- control centre ------------------------------------------------------- */
+.control-center {
+  background: alpha(@bg, 0.97);
+  border: 1px solid @line;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  padding: 6px;
+}
+.control-center-list {
+  background: transparent;
+}
+.control-center .notification {
+  box-shadow: none;
+  background: alpha(@bg2, 0.9);
+}
+.control-center-list-placeholder {
+  color: @mute;
+  opacity: 1;
+}
+
+.widget-title {
+  margin: 10px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: @mute;
+}
+.widget-title > button {
+  font-size: 11px;
+  color: @fg2;
+  background: transparent;
+  border: 1px solid @line;
+  border-radius: 6px;
+  padding: 2px 10px;
+}
+.widget-title > button:hover {
+  border-color: @blue;
+  color: @fg;
+}
+
+.widget-dnd {
+  margin: 4px 10px 8px;
+  font-size: 12px;
+  color: @fg2;
+}
+.widget-dnd > switch {
+  background: @bg3;
+  border: 1px solid @line;
+  border-radius: 99px;
+}
+.widget-dnd > switch:checked {
+  background: @blue;
+}
+.widget-dnd > switch slider {
+  background: @fg;
+  border-radius: 99px;
+}
+
+.widget-buttons-grid {
+  margin: 4px 8px;
+  padding: 0;
+  background: transparent;
+}
+.widget-buttons-grid > flowbox > flowboxchild {
+  margin: 3px;
+}
+.widget-buttons-grid > flowbox > flowboxchild > button {
+  min-width: 120px;
+  padding: 9px 6px;
+  border-radius: 10px;
+  background: alpha(@fg, 0.04);
+  border: 1px solid alpha(@fg, 0.06);
+  color: @fg2;
+  font-size: 12px;
+}
+.widget-buttons-grid > flowbox > flowboxchild > button:hover {
+  background: alpha(@blue, 0.1);
+}
+.widget-buttons-grid > flowbox > flowboxchild > button.toggle:checked,
+.widget-buttons-grid > flowbox > flowboxchild > button.active {
+  background: alpha(@blue, 0.18);
+  border-color: @blue;
+  color: @fg;
+}
+
+.widget-backlight,
+.widget-volume {
+  margin: 2px 12px;
+  padding: 2px 0;
+  background: transparent;
+  color: @mute;
+  font-family: "JetBrainsMono Nerd Font";
+}
+.widget-backlight scale trough,
+.widget-volume scale trough {
+  background: @line;
+  border-radius: 2px;
+  min-height: 4px;
+}
+.widget-backlight scale highlight,
+.widget-volume scale highlight {
+  background: @blue;
+  border-radius: 2px;
+}
+.widget-backlight scale slider,
+.widget-volume scale slider {
+  background: @fg;
+  border: none;
+  border-radius: 99px;
+  min-width: 12px;
+  min-height: 12px;
+  margin: -5px;
+}
+
+.widget-mpris {
+  margin: 6px 10px;
+  background: transparent;
+}
+.widget-mpris-player {
+  padding: 10px;
+  border-radius: 10px;
+  background: alpha(@fg, 0.03);
+  border: 1px solid alpha(@fg, 0.05);
+}
+.widget-mpris-album-art {
+  border-radius: 8px;
+}
+.widget-mpris-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.widget-mpris-subtitle {
+  font-size: 11.5px;
+  color: @mute;
+}
+.widget-mpris button {
+  background: transparent;
+  border: none;
+  color: @fg2;
+}
+.widget-mpris button:hover {
+  color: @fg;
+}

@@ -1,0 +1,59 @@
+#!/bin/bash
+# keys -- searchable keybind cheatsheet (Super+/), generated from the Hyprland
+# keymap so it can never drift. "## Section" comment lines become headers, bind
+# lines become "mods key   action". Host binds (hypr-host.conf) are appended.
+#
+#   keys            wofi list
+#   keys --text     plain text (the same lines)
+set -euo pipefail
+
+KEYMAP=${HYPR_KEYMAP:-$HOME/.config/hypr/keymap.conf}
+HOST=${HYPR_HOST_CONF:-$HOME/.config/hypr-host.conf}
+
+render() {
+	awk '
+	function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+	function mods(s,  n, i, a, out) {
+		gsub(/\$mainMod/, "SUPER", s)
+		n = split(s, a, /[ \t]+/); out = ""
+		for (i = 1; i <= n; i++) {
+			if (a[i] == "") continue
+			if (a[i] == "SUPER") a[i] = "󰘳"
+			else if (a[i] == "SHIFT") a[i] = "⇧"
+			else if (a[i] == "CTRL") a[i] = "⌃"
+			else if (a[i] == "ALT") a[i] = "⌥"
+			out = out a[i] " "
+		}
+		return out
+	}
+	function key(k) {
+		if (k == "RETURN") return "⏎"; if (k == "SPACE") return "␣"
+		if (k == "grave") return "`"; if (k == "slash") return "/"
+		if (k == "Tab") return "⇥"
+		sub(/^XF86/, "", k); return k
+	}
+	/^[ \t]*##[ \t]/ { h = $0; sub(/^[ \t]*##[ \t]*/, "", h); section = h; next }
+	/^[ \t]*#/ { next }
+	/^[ \t]*bind[a-z]*[ \t]*=/ {
+		line = $0; sub(/^[ \t]*bind[a-z]*[ \t]*=/, "", line)
+		n = split(line, f, ",")
+		if (n < 3) next
+		m = trim(f[1]); k = trim(f[2]); d = trim(f[3]); a = ""
+		for (i = 4; i <= n; i++) a = a (i > 4 ? "," : "") f[i]
+		a = trim(a)
+		if (d == "exec") what = a
+		else if (a == "") what = d
+		else what = d " " a
+		if (section != last) { printf "\n%s\n", toupper(section); last = section }
+		printf "  %-14s %s\n", mods(m) key(k), what
+	}' "$@"
+}
+
+text=$(render "$KEYMAP" "$HOST" 2>/dev/null | sed '1{/^$/d}')
+
+if [[ "${1:-}" == --text ]]; then
+	printf '%s\n' "$text"
+	exit 0
+fi
+
+printf '%s\n' "$text" | wofi --show dmenu -i -p "Keys" --width 560 --height 640 --lines 24 >/dev/null 2>&1 || true

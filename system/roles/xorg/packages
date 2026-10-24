@@ -20,3 +20,5 @@ xorg-xkill
 xorg-xdpyinfo
 xorg-xhost
 xf86-input-synaptics
+# Notifications under i3 (Hyprland uses swaync, desktop role).
+dunst

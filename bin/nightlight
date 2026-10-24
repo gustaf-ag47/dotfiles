@@ -1,0 +1,22 @@
+#!/bin/bash
+# nightlight -- toggle hyprsunset's warm profile by hand (swaync control-centre
+# button). Profiles in hypr/hyprsunset.conf still switch on schedule; this only
+# overrides until the next profile boundary.
+#
+#   nightlight            toggle
+#   nightlight --status   "on" | "off"  (waybar/swaync state)
+set -euo pipefail
+
+STATE="${XDG_RUNTIME_DIR:-/tmp}/nightlight.on"
+
+case "${1:-}" in
+--status) [[ -e "$STATE" ]] && echo on || echo off ;;
+"")
+	if [[ -e "$STATE" ]]; then
+		hyprctl hyprsunset identity >/dev/null && rm -f "$STATE"
+	else
+		hyprctl hyprsunset temperature 5000 >/dev/null && touch "$STATE"
+	fi
+	;;
+*) echo "nightlight: unknown argument '$1'" >&2; exit 2 ;;
+esac

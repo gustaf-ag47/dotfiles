@@ -1,0 +1,5 @@
+{ "label": "sleep",    "action": "systemctl suspend",     "text": "Sleep",     "keybind": "s" }
+{ "label": "lock",     "action": "lock",                  "text": "Lock",      "keybind": "l" }
+{ "label": "logout",   "action": "pkill -KILL -u $USER",  "text": "Log out",   "keybind": "e" }
+{ "label": "reboot",   "action": "systemctl reboot",      "text": "Reboot",    "keybind": "r" }
+{ "label": "shutdown", "action": "systemctl poweroff",    "text": "Power off", "keybind": "p" }

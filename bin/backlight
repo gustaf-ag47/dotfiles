@@ -1,4 +1,11 @@
 #!/bin/bash
+# Brightness keys. swayosd (Hyprland) draws the OSD and drives brightnessctl;
+# the notify-send path remains for i3/X11.
+
+osd() {
+	command -v swayosd-client >/dev/null && pgrep -x swayosd-server >/dev/null || return 1
+	swayosd-client "$@" >/dev/null 2>&1
+}
 
 get_backlight() {
 	# Percentage, not the raw device value: max varies per panel.
@@ -13,10 +20,12 @@ notify_user() {
 }
 
 inc_backlight() {
+	osd --brightness +5 && return
 	brightnessctl s +5% && notify_user
 }
 
 dec_backlight() {
+	osd --brightness -5 && return
 	brightnessctl s 5%- && notify_user
 }
 

@@ -289,6 +289,10 @@ link_config "$DOTFILES/config/gui/jetbrains/ideavim" "$XDG_CONFIG_HOME/ideavim"
 link_config "$DOTFILES/config/gui/Wayland/hypr" "$XDG_CONFIG_HOME/hypr"
 link_config "$DOTFILES/config/gui/Wayland/waybar" "$XDG_CONFIG_HOME/waybar"
 link_config "$DOTFILES/config/gui/Wayland/wofi" "$XDG_CONFIG_HOME/wofi"
+# Notifications + control centre, power menu grid (Hyprland; dunst serves i3).
+link_config "$DOTFILES/config/gui/Wayland/swaync" "$XDG_CONFIG_HOME/swaync"
+link_config "$DOTFILES/config/gui/Wayland/wlogout" "$XDG_CONFIG_HOME/wlogout"
+link_config "$DOTFILES/config/gui/Wayland/swayosd" "$XDG_CONFIG_HOME/swayosd"
 
 # --- machine profile ------------------------------------------------------
 # One file per machine describing what it IS (class, battery, gpu, disk), read

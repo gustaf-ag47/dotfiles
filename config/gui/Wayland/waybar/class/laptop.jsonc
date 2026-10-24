@@ -1,10 +1,6 @@
-// Laptop overlay: keeps the battery module and adds backlight control.
+// Laptop overlay: battery module (click -> bin/battery-menu) and keyboard
+// backlight keys handle brightness; the OSD (swayosd) shows the level, so no
+// backlight module. Power menu is Super+Ctrl+Q (wlogout) or via swaync.
 {
-  "modules-right": ["tray", "cpu", "memory", "disk", "hyprland/language", "network", "bluetooth", "backlight", "pulseaudio", "battery", "idle_inhibitor", "custom/llm-usage", "custom/power"],
-  "backlight": {
-    "format": "{icon} {percent}%",
-    "format-icons": ["", "", "", "", "", "", "", "", ""],
-    "on-scroll-up": "brightnessctl set +5%",
-    "on-scroll-down": "brightnessctl set 5%-"
-  }
+  "modules-right": ["tray", "custom/sys", "privacy", "hyprland/language", "network", "bluetooth", "pulseaudio", "battery", "idle_inhibitor", "custom/llm-usage", "custom/notification"]
 }

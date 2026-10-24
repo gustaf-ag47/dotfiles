@@ -1,7 +1,7 @@
 #!/bin/bash
 # hypr-power-profile -- trim Hyprland's GPU-hungry effects on battery, restore
-# them on AC. Blur and shadows are Hyprland's own first answer to "least power
-# on a laptop"; animations are already off globally. Only runtime keywords are
+# them on AC. Blur, shadows and animations are Hyprland's own first answer to
+# "least power on a laptop". Only runtime keywords are
 # touched, so `hyprctl reload` restores the config and --watch re-applies.
 #
 #   hypr-power-profile            apply once for the current power source
@@ -38,10 +38,10 @@ current_profile() {
 apply_profile() {
 	case "$1" in
 	battery)
-		hyprctl --batch "keyword decoration:blur:enabled false; keyword decoration:shadow:enabled false" >/dev/null
+		hyprctl --batch "keyword decoration:blur:enabled false; keyword decoration:shadow:enabled false; keyword animations:enabled false" >/dev/null
 		;;
 	ac)
-		hyprctl --batch "keyword decoration:blur:enabled true; keyword decoration:shadow:enabled true" >/dev/null
+		hyprctl --batch "keyword decoration:blur:enabled true; keyword decoration:shadow:enabled true; keyword animations:enabled true" >/dev/null
 		;;
 	*)
 		echo "hypr-power-profile: unknown profile '$1'" >&2

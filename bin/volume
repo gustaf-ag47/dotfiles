@@ -1,6 +1,13 @@
 #!/bin/bash
 
 # Use standard icon-theme names; no mako icon directory is installed.
+# With swayosd-server running (Hyprland), changes show as an OSD pill instead
+# of a notification; the notify-send path remains for i3/X11.
+
+osd() { # subcommand args...  -> 0 if the OSD handled it
+	command -v swayosd-client >/dev/null && pgrep -x swayosd-server >/dev/null || return 1
+	swayosd-client "$@" >/dev/null 2>&1
+}
 
 get_volume() {
 	volume=$(pulsemixer --get-volume | awk '{print $1}')
@@ -25,14 +32,17 @@ notify_user() {
 }
 
 inc_volume() {
+	osd --output-volume raise && return
 	pulsemixer --change-volume +5 && notify_user
 }
 
 dec_volume() {
+	osd --output-volume lower && return
 	pulsemixer --change-volume -5 && notify_user
 }
 
 toggle_mute() {
+	osd --output-volume mute-toggle && return
 	if [ "$(pulsemixer --get-mute)" == "0" ]; then
 		pulsemixer --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i audio-volume-muted "Volume Switched OFF"
 	elif [ "$(pulsemixer --get-mute)" == "1" ]; then
@@ -41,6 +51,7 @@ toggle_mute() {
 }
 
 toggle_mic() {
+	osd --input-volume mute-toggle && return
 	if [ "$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-mute)" == "0" ]; then
 		pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --toggle-mute && notify-send -h string:x-canonical-private-synchronous:sys-notify -u low -i microphone-sensitivity-muted "Microphone Switched OFF"
 	elif [ "$(pulsemixer --id "source-$(pulsemixer --list-sources | awk '{print $2}' | head -n 1)" --get-mute)" == "1" ]; then

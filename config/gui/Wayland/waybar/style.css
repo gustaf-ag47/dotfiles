@@ -1,362 +1,202 @@
-/* Modern Tokyo Night Waybar Theme */
+/* Waybar -- slim unified bar, Tokyo Night.
+ *
+ * One 30 px strip flush with the top edge; no pills, gradients or shadows
+ * (they fought the 1 px window borders and cost GPU on 2x4K). Numbers only
+ * where they change a decision (volume, battery); icon + colour for state.
+ * Mockups and rationale: $NOTES/Homelab/dotfiles/runs/2026-10-24-hyprland-ui-options/
+ */
+
+@define-color bg      #16161e;
+@define-color bg2     #1a1b26;
+@define-color line    #22243a;
+@define-color fg      #c0caf5;
+@define-color fg2     #a9b1d6;
+@define-color mute    #565f89;
+@define-color blue    #7aa2f7;
+@define-color cyan    #7dcfff;
+@define-color green   #9ece6a;
+@define-color yellow  #e0af68;
+@define-color red     #f7768e;
+@define-color purple  #bb9af7;
 
 * {
   border: none;
   border-radius: 0;
-  font-family: "Inter", "JetBrainsMono Nerd Font", sans-serif;
-  font-size: 14px;
-  min-height: 0;
+  font-family: "JetBrainsMono Nerd Font", "Inter", monospace;
+  font-size: 12.5px;
   font-weight: 500;
+  min-height: 0;
 }
 
 window#waybar {
-  background: transparent;
-  padding: 8px 12px;
+  background: alpha(@bg, 0.92);
+  border-bottom: 1px solid @line;
+  color: @fg;
 }
 
-/* Module groups with modern glassmorphism effect */
-.modules-left {
-  background: rgba(26, 27, 38, 0.9);
-  border-radius: 16px;
-  margin: 0 8px 0 0;
-  padding: 4px 16px;
-  border: 1px solid rgba(122, 162, 247, 0.2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+tooltip {
+  background: @bg;
+  border: 1px solid @line;
+  border-radius: 10px;
+}
+tooltip label {
+  color: @fg2;
+  padding: 4px;
 }
 
-.modules-center {
-  background: rgba(26, 27, 38, 0.9);
-  border-radius: 16px;
-  margin: 0 8px;
-  padding: 4px 20px;
-  border: 1px solid rgba(122, 162, 247, 0.2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-
+.modules-left,
+.modules-center,
 .modules-right {
-  background: rgba(26, 27, 38, 0.9);
-  border-radius: 16px;
-  margin: 0 0 0 8px;
-  padding: 4px 16px;
-  border: 1px solid rgba(122, 162, 247, 0.2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-
-/* Workspaces - Modern pill design */
-#workspaces {
   background: transparent;
   margin: 0;
-  padding: 0;
+  padding: 0 10px;
 }
 
+/* --- workspaces: number, active = underline ----------------------------- */
+#workspaces {
+  margin: 0 8px 0 0;
+}
 #workspaces button {
-  background: rgba(86, 95, 137, 0.3);
-  color: #565f89;
-  border: none;
-  border-radius: 12px;
-  margin: 4px 3px;
-  padding: 6px 12px;
-  min-width: 30px;
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  font-weight: 600;
+  padding: 0 7px;
+  margin: 0 1px;
+  color: @mute;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s ease;
 }
-
-#workspaces button.active {
-  background: linear-gradient(135deg, #7aa2f7, #7dcfff);
-  color: #1a1b26;
-  box-shadow: 0 4px 12px rgba(122, 162, 247, 0.4);
+#workspaces button.empty {
+  color: alpha(@mute, 0.5);
 }
-
+#workspaces button.visible,
 #workspaces button:hover {
-  background: rgba(122, 162, 247, 0.4);
-  color: #c0caf5;
+  color: @fg2;
 }
-
+#workspaces button.active {
+  color: @blue;
+  border-bottom-color: @blue;
+}
 #workspaces button.urgent {
-  background: linear-gradient(135deg, #f7768e, #ff9e64);
-  color: #1a1b26;
-  animation: urgent-blink 1s infinite;
+  color: @red;
+  border-bottom-color: @red;
 }
 
-@keyframes urgent-blink {
-  0% { opacity: 1; }
-  50% { opacity: 0.8; }
-  100% { opacity: 1; }
-}
-
-/* Window title */
 #window {
-  color: #c0caf5;
-  font-style: italic;
-  font-weight: 400;
-  margin: 0 12px;
-  opacity: 0.9;
+  color: @fg2;
+  padding-left: 10px;
+  border-left: 1px solid @line;
+}
+window#waybar.empty #window {
+  border-left: none;
 }
 
-/* Clock - Premium styling */
+/* --- centre --------------------------------------------------------------- */
 #clock {
-  color: #c0caf5;
-  padding: 8px 16px;
-  font-weight: 600;
-  font-size: 15px;
-  background: linear-gradient(135deg, rgba(122, 162, 247, 0.1), rgba(125, 207, 255, 0.05));
-  border-radius: 12px;
-  margin: 0 4px;
+  color: @fg;
 }
 
-/* System tray */
-#tray {
-  padding: 0 8px;
-}
-
-#tray > .passive {
-  opacity: 0.6;
-}
-
-#tray > .needs-attention {
-  background: #f7768e;
-  border-radius: 8px;
-  padding: 2px;
-}
-
-/* Network with modern icons */
-#network {
-  color: #7aa2f7;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-}
-
-#network.wifi {
-  background: rgba(122, 162, 247, 0.1);
-}
-
-#network.ethernet {
-  background: rgba(158, 206, 106, 0.1);
-  color: #9ece6a;
-}
-
-#network.disconnected {
-  background: rgba(247, 118, 142, 0.1);
-  color: #f7768e;
-}
-
-/* Bluetooth - Enhanced styling */
-#bluetooth {
-  color: #7dcfff;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-
-#bluetooth.on {
-  background: rgba(125, 207, 255, 0.1);
-  color: #7dcfff;
-}
-
-#bluetooth.off {
-  background: rgba(86, 95, 137, 0.1);
-  color: #565f89;
-}
-
-#bluetooth.connected {
-  background: rgba(158, 206, 106, 0.1);
-  color: #9ece6a;
-}
-
-#bluetooth.discovering {
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0% { opacity: 1; }
-  50% { opacity: 0.5; }
-  100% { opacity: 1; }
-}
-
-/* CPU - System monitoring */
-#cpu {
-  color: #9ece6a;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  background: rgba(158, 206, 106, 0.1);
-}
-
-/* Memory - System monitoring */
-#memory {
-  color: #e0af68;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  background: rgba(224, 175, 104, 0.1);
-}
-
-/* Disk - System monitoring */
-#disk {
-  color: #7dcfff;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  background: rgba(125, 207, 255, 0.1);
-}
-
-/* Audio - Dynamic styling */
-#pulseaudio {
-  color: #bb9af7;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-}
-
-#pulseaudio.muted {
-  background: rgba(247, 118, 142, 0.1);
-  color: #f7768e;
-}
-
-#pulseaudio.bluetooth {
-  background: rgba(125, 207, 255, 0.1);
-  color: #7dcfff;
-}
-
-/* Battery - Gradient based on level */
-#battery {
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-
-#battery.charging {
-  background: linear-gradient(135deg, rgba(158, 206, 106, 0.2), rgba(224, 175, 104, 0.1));
-  color: #9ece6a;
-}
-
-#battery.full {
-  background: rgba(158, 206, 106, 0.1);
-  color: #9ece6a;
-}
-
-#battery.good {
-  background: rgba(224, 175, 104, 0.1);
-  color: #e0af68;
-}
-
-#battery.warning {
-  background: rgba(255, 158, 100, 0.1);
-  color: #ff9e64;
-}
-
-#battery.critical {
-  background: rgba(247, 118, 142, 0.1);
-  color: #f7768e;
-  animation: battery-blink 1s infinite;
-}
-
-@keyframes battery-blink {
-  0% { opacity: 1; }
-  50% { opacity: 0.7; }
-  100% { opacity: 1; }
-}
-
-/* Claude Code usage widget */
-#custom-llm-usage {
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-
-#custom-llm-usage.normal {
-  color: #bb9af7;
-  background: rgba(187, 154, 247, 0.1);
-}
-
-#custom-llm-usage.warning {
-  color: #e0af68;
-  background: rgba(224, 175, 104, 0.15);
-}
-
-#custom-llm-usage.critical {
-  color: #f7768e;
-  background: rgba(247, 118, 142, 0.15);
-  animation: pulse 2s infinite;
-}
-
-#custom-llm-usage.error {
-  color: #565f89;
-  background: rgba(86, 95, 137, 0.1);
-}
-
-/* Power button - Stylish hover effect */
-#custom-power {
-  color: #f7768e;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-size: 16px;
-  font-weight: 600;
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-#custom-power:hover {
-  background: linear-gradient(135deg, #f7768e, #ff9e64);
-  color: #1a1b26;
-  box-shadow: 0 4px 12px rgba(247, 118, 142, 0.4);
-}
-
-/* Language indicator */
-#language {
-  color: #bb9af7;
-  padding: 8px 12px;
-  margin: 0 2px;
-  border-radius: 10px;
-  font-weight: 500;
-  background: rgba(187, 154, 247, 0.1);
-}
-
-/* Tooltips */
-tooltip {
-  background: rgba(26, 27, 38, 0.95);
-  border: 1px solid rgba(122, 162, 247, 0.3);
-  border-radius: 12px;
-  color: #c0caf5;
-  font-size: 13px;
-  padding: 8px 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-tooltip label {
-  color: #c0caf5;
-}
-
-/* Smooth transitions for all interactive elements */
-#workspaces button,
-#clock,
+/* --- right group ---------------------------------------------------------- */
+#tray,
+#custom-sys,
+#privacy,
+#language,
 #network,
 #bluetooth,
 #pulseaudio,
 #battery,
-#custom-power,
-#language {
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+#idle_inhibitor,
+#custom-llm-usage,
+#custom-notification {
+  padding: 0 2px;
+  color: @fg2;
 }
 
-#workspaces button:hover,
-#clock:hover,
-#network:hover,
-#bluetooth:hover,
-#pulseaudio:hover,
-#battery:hover,
-#language:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+#tray > .passive {
+  -gtk-icon-effect: dim;
+}
+#tray > .needs-attention {
+  -gtk-icon-effect: highlight;
+}
+
+#custom-sys {
+  color: @mute;
+}
+#custom-sys.warn {
+  color: @yellow;
+}
+#custom-sys.crit {
+  color: @red;
+}
+
+#privacy {
+  padding: 0 4px;
+}
+#privacy-item.screenshare {
+  color: @yellow;
+}
+#privacy-item.audio-in {
+  color: @red;
+}
+
+#language {
+  color: @mute;
+}
+
+#network.disconnected,
+#bluetooth.off,
+#bluetooth.disabled {
+  color: @mute;
+}
+#bluetooth.connected {
+  color: @cyan;
+}
+
+#pulseaudio.muted {
+  color: @mute;
+}
+
+#battery {
+  color: @fg;
+}
+#battery.charging,
+#battery.plugged {
+  color: @green;
+}
+#battery.warning:not(.charging) {
+  color: @yellow;
+}
+#battery.critical:not(.charging) {
+  color: @red;
+  animation: blink 1s steps(2) infinite;
+}
+
+#idle_inhibitor {
+  color: @mute;
+}
+#idle_inhibitor.activated {
+  color: @yellow;
+}
+
+#custom-llm-usage {
+  color: @mute;
+}
+#custom-llm-usage.warning {
+  color: @yellow;
+}
+#custom-llm-usage.critical,
+#custom-llm-usage.error {
+  color: @red;
+}
+
+#custom-notification {
+  padding-left: 4px;
+}
+#custom-notification.dnd-none,
+#custom-notification.dnd-notification {
+  color: @mute;
+}
+
+@keyframes blink {
+  to {
+    color: @fg;
+  }
 }

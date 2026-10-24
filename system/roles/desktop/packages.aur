@@ -1,5 +1,7 @@
 # role: desktop -- AUR packages, built with paru as the invoking user.
 pyprland
+# Power menu key grid (bin/power); Super+Ctrl+Q.
+wlogout
 # Readability extractor for bin/readurl (articles in the terminal).
 rdrview
 # Static pandoc: the repo pandoc-cli drags in ~100 versioned haskell-* libs.

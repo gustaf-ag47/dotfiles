@@ -1,0 +1,46 @@
+/* swayosd -- Tokyo Night pill, flat, matches the waybar strip. */
+window#osd {
+  border-radius: 999px;
+  border: 1px solid #2a2d44;
+  background: alpha(#16161e, 0.94);
+}
+window#osd #container {
+  margin: 10px 18px;
+}
+window#osd image,
+window#osd label {
+  color: #c0caf5;
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 13px;
+}
+window#osd progressbar:disabled,
+window#osd image:disabled {
+  opacity: 0.4;
+}
+window#osd progressbar,
+window#osd segmentedprogress {
+  min-height: 4px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+}
+window#osd trough,
+window#osd segment {
+  min-height: inherit;
+  border-radius: inherit;
+  border: none;
+  background: #2a2d44;
+}
+window#osd progress,
+window#osd segment.active {
+  min-height: inherit;
+  border-radius: inherit;
+  border: none;
+  background: #7aa2f7;
+}
+window#osd segment {
+  margin-left: 6px;
+}
+window#osd segment:first-child {
+  margin-left: 0;
+}

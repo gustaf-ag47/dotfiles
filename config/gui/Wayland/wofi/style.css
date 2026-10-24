@@ -1,103 +1,75 @@
-/* Tokyo Night Wofi Theme - Enhanced Aesthetics */
+/* wofi -- Tokyo Night, flat. Used by launch-apps, bwf, battery-menu, keys and
+ * the dmenu scripts. One surface, one border, selection = tint + left rule
+ * (same language as the waybar strip and the swaync panel). */
 
 * {
   font-family: "JetBrainsMono Nerd Font", monospace;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 500;
 }
 
 window {
-  margin: 0px;
-  border: 2px solid rgba(122, 162, 247, 0.6);
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(26, 27, 38, 0.95), rgba(22, 22, 30, 0.9));
-  backdrop-filter: blur(20px);
-  box-shadow: 0 16px 48px rgba(26, 27, 38, 0.8);
+  margin: 0;
+  border: 1px solid #2a2d44;
+  border-radius: 12px;
+  background-color: #16161e;
 }
 
 #input {
-  margin: 8px 16px;
-  padding: 12px 16px;
-  border: 2px solid rgba(122, 162, 247, 0.3);
-  border-radius: 12px;
+  margin: 10px 12px 6px;
+  padding: 9px 14px;
+  border: 1px solid #2a2d44;
+  border-radius: 8px;
   color: #c0caf5;
-  background: linear-gradient(135deg, rgba(65, 72, 104, 0.8), rgba(59, 66, 97, 0.8));
-  font-size: 18px;
-  font-weight: 600;
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  background-color: #1a1b26;
+  font-size: 15px;
 }
-
-/* --prompt text (placeholder). GTK3 draws it in the entry's insensitive
-   colour, which the default theme makes a near-invisible grey on our
-   #input gradient; the second selector covers newer GTK placeholder nodes. */
+#input:focus {
+  border-color: #7aa2f7;
+  box-shadow: none;
+}
 #input:disabled,
 #input placeholder {
-  color: #9aa5ce;
-  font-style: italic;
-  font-weight: 500;
+  color: #565f89;
+}
+#input image {
+  color: #565f89;
 }
 
-#input:focus {
-  border-color: rgba(122, 162, 247, 0.8);
-  box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.2);
-  background: linear-gradient(135deg, rgba(65, 72, 104, 0.9), rgba(59, 66, 97, 0.9));
-}
-
-#inner-box {
-  margin: 0px 8px 8px 8px;
-  border: none;
-  background-color: transparent;
-}
-
-#outer-box {
-  margin: 0px;
-  border: none;
-  background-color: transparent;
-}
-
+#outer-box,
+#inner-box,
 #scroll {
-  margin: 0px;
+  margin: 0;
   border: none;
+  background-color: transparent;
 }
-
-#text {
-  margin: 12px 16px;
-  border: none;
-  color: #c0caf5;
-  font-weight: 500;
+#inner-box {
+  margin: 0 6px 8px;
 }
 
 #entry {
-  margin: 2px 8px;
-  padding: 8px 0px;
+  margin: 1px 0;
+  padding: 7px 10px;
   border: none;
-  border-radius: 8px;
+  border-left: 2px solid transparent;
+  border-radius: 6px;
   background-color: transparent;
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
-
-#entry.activatable #text {
-  color: #c0caf5;
-}
-
+#entry #text,
 #entry > * {
+  color: #a9b1d6;
+}
+#entry:hover {
+  background-color: rgba(122, 162, 247, 0.06);
+}
+#entry:selected {
+  background-color: rgba(122, 162, 247, 0.12);
+  border-left-color: #7aa2f7;
+  outline: none;
+}
+#entry:selected #text {
   color: #c0caf5;
 }
-
-#entry:selected {
-  background: linear-gradient(135deg, rgba(122, 162, 247, 0.2), rgba(125, 207, 255, 0.1));
-  border: 1px solid rgba(122, 162, 247, 0.4);
-  box-shadow: 0 4px 16px rgba(122, 162, 247, 0.2);
-  transform: translateY(-1px);
-}
-
-#entry:selected #text {
-  font-weight: bold;
-  color: #7aa2f7;
-}
-
-#entry:hover {
-  background: linear-gradient(135deg, rgba(122, 162, 247, 0.1), rgba(125, 207, 255, 0.05));
-  border: 1px solid rgba(122, 162, 247, 0.2);
-  transform: translateY(-1px);
+#entry image {
+  margin-right: 8px;
 }

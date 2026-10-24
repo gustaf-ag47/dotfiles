@@ -1,0 +1,88 @@
+#!/bin/bash
+# sysstat -- cpu / memory / disk / temperature in one line, for the waybar
+# "custom/sys" chip. Prints "ok" (muted) unless something is worth a glance,
+# then the offending values in yellow (warn) or red (crit). Detail in the tooltip.
+#
+#   sysstat            human one-liner
+#   sysstat --waybar   {"text","class","tooltip"} JSON
+set -euo pipefail
+
+WARN_CPU=${SYSSTAT_WARN_CPU:-70}  CRIT_CPU=${SYSSTAT_CRIT_CPU:-90}
+WARN_MEM=${SYSSTAT_WARN_MEM:-75}  CRIT_MEM=${SYSSTAT_CRIT_MEM:-90}
+WARN_DISK=${SYSSTAT_WARN_DISK:-85} CRIT_DISK=${SYSSTAT_CRIT_DISK:-95}
+WARN_TEMP=${SYSSTAT_WARN_TEMP:-80} CRIT_TEMP=${SYSSTAT_CRIT_TEMP:-95}
+
+# CPU busy % over a short window (two /proc/stat samples).
+cpu_pct() {
+	local a b
+	read -r _ a <<<"$(head -1 /proc/stat)"
+	sleep 0.3
+	read -r _ b <<<"$(head -1 /proc/stat)"
+	awk -v a="$a" -v b="$b" 'BEGIN {
+		split(a, x, " "); split(b, y, " ");
+		ta = 0; tb = 0; for (i = 1; i <= 8; i++) { ta += x[i]; tb += y[i] }
+		ia = x[4] + x[5]; ib = y[4] + y[5];
+		d = tb - ta; if (d <= 0) { print 0; exit }
+		printf "%d", 100 * (d - (ib - ia)) / d }'
+}
+
+mem_pct() {
+	awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END { printf "%d", 100*(t-a)/t }' /proc/meminfo
+}
+
+disk_pct() {
+	df --output=pcent / | tail -1 | tr -dc '0-9'
+}
+
+# Hottest CPU package/core sensor, degrees C; empty if none.
+temp_c() {
+	local f best=""
+	for f in /sys/class/hwmon/hwmon*/temp*_input; do
+		[[ -r "$f" ]] || continue
+		case "$(cat "$(dirname "$f")/name" 2>/dev/null)" in coretemp | k10temp | zenpower | x86_pkg_temp | acpitz) ;; *) continue ;; esac
+		local v
+		v=$(($(<"$f") / 1000))
+		[[ -z "$best" || "$v" -gt "$best" ]] && best=$v
+	done
+	echo "$best"
+}
+
+level() { # value warn crit -> ok|warn|crit
+	if [[ "$1" -ge "$3" ]]; then echo crit; elif [[ "$1" -ge "$2" ]]; then echo warn; else echo ok; fi
+}
+
+worst() { # fold ok<warn<crit
+	local w=ok l
+	for l in "$@"; do
+		[[ "$l" == crit ]] && { echo crit; return; }
+		[[ "$l" == warn ]] && w=warn
+	done
+	echo "$w"
+}
+
+cpu=$(cpu_pct) mem=$(mem_pct) disk=$(disk_pct) temp=$(temp_c)
+lc=$(level "$cpu" "$WARN_CPU" "$CRIT_CPU")
+lm=$(level "$mem" "$WARN_MEM" "$CRIT_MEM")
+ld=$(level "$disk" "$WARN_DISK" "$CRIT_DISK")
+lt=ok; [[ -n "$temp" ]] && lt=$(level "$temp" "$WARN_TEMP" "$CRIT_TEMP")
+class=$(worst "$lc" "$lm" "$ld" "$lt")
+
+# Text: muted "ok" normally; only the values that crossed a threshold otherwise.
+parts=()
+[[ "$lc" != ok ]] && parts+=("󰍛 ${cpu}%")
+[[ "$lm" != ok ]] && parts+=("󰘚 ${mem}%")
+[[ "$ld" != ok ]] && parts+=("󰋊 ${disk}%")
+[[ "$lt" != ok ]] && parts+=("󰔏 ${temp}°")
+if ((${#parts[@]})); then text="${parts[*]}"; else text="󰍛 ok"; fi
+
+tooltip="cpu ${cpu}%  mem ${mem}%  disk ${disk}%"
+[[ -n "$temp" ]] && tooltip+="  ${temp}°C"
+
+case "${1:-}" in
+--waybar)
+	printf '{"text":"%s","class":"%s","tooltip":"%s"}\n' "$text" "$class" "$tooltip"
+	;;
+*)
+	echo "$tooltip ($class)"
+	;;
+esac

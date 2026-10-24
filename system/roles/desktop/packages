@@ -6,7 +6,11 @@ hyprlock
 hyprpaper
 waybar
 wofi
-dunst
+# Notifications + control centre (toggles, sliders, history). dunst stays in
+# the xorg role for i3. Night light: hyprsunset (first-party, not in captures).
+swaync
+swayosd
+hyprsunset
 libnotify
 cliphist
 wl-clipboard
@@ -62,7 +66,6 @@ nsxiv
 mpv
 ffmpegthumbnailer
 zathura-pdf-mupdf
-gammastep
 geoclue
 # xfreerdp (CLI) for RDP; remmina gone.
 freerdp

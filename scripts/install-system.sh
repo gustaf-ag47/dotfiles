@@ -349,6 +349,8 @@ for rel in "${dest_order[@]}"; do
 	dest="$ROOT/$rel"
 	mode=0644
 	[ -x "$src" ] && mode=0755
+	# sudo refuses group/world-writable drop-ins and warns on 0644; keep 0440.
+	case "$rel" in etc/sudoers.d/*) mode=0440 ;; esac
 
 	rendered="$stage/$(printf '%s' "$rel" | tr '/' '_')"
 	sed "s#@DOTFILES@#$DOTFILES#g" "$src" >"$rendered"

@@ -1,10 +1,30 @@
 #!/bin/bash
+# Power menu. Bound to Super+Ctrl+Q in hypr/keymap.conf and reachable from the
+# battery popover. Under Hyprland: wlogout key grid (s/l/e/r/p, config in
+# config/gui/Wayland/wlogout); elsewhere a wofi/dmenu list.
+# Sleep needs no explicit lock: hypridle's before_sleep_cmd locks the session
+# and holds a sleep inhibitor until hyprlock is up.
 
-options="Shutdown\nReboot\nLog Out"
+if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v wlogout >/dev/null; then
+	pgrep -x wlogout >/dev/null && { pkill -x wlogout; exit 0; }
+	# wlogout stretches its buttons to the whole output; margins (logical px)
+	# from the focused monitor keep the five keys ~150 px square and centred.
+	read -r w h < <(hyprctl -j monitors 2>/dev/null |
+		jq -r '.[] | select(.focused) | "\(.width / .scale | floor) \(.height / .scale | floor)"' 2>/dev/null)
+	w=${w:-1920} h=${h:-1200}
+	key=150 gap=16 n=5
+	lr=$(((w - n * (key + gap)) / 2)); tb=$(((h - key) / 2))
+	[ "$lr" -lt 0 ] && lr=0
+	[ "$tb" -lt 0 ] && tb=0
+	exec wlogout -b "$n" -p layer-shell -L "$lr" -R "$lr" -T "$tb" -B "$tb"
+fi
 
-chosen=$(echo -e "$options" | wofi --show dmenu -i)
+options="Sleep\nLock\nShutdown\nReboot\nLog Out"
+chosen=$(echo -e "$options" | wofi --show dmenu -i -p Power)
 
 case $chosen in
+Sleep) systemctl suspend ;;
+Lock) lock ;;
 Shutdown) systemctl poweroff ;;
 Reboot) systemctl reboot ;;
 "Log Out") pkill -KILL -u "$USER" ;;

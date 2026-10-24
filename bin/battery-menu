@@ -1,0 +1,123 @@
+#!/bin/bash
+# battery-menu -- the battery popover: state, charge rate, EC charge mode,
+# USB-C PD contract, and one-tap actions. Click the waybar battery module.
+#
+# Why: the Dell EC only honours charge thresholds in "Custom" mode, and Custom
+# disables ExpressCharge (~9 W instead of ~23 W). Fast vs. Custom is therefore
+# a daily choice, not a config edit. Rows marked "sudo" use the NOPASSWD rules
+# in system/hosts/xps14/files/etc/sudoers.d/20-battery-menu.
+#
+#   battery-menu          wofi dmenu popover
+#   battery-menu --text   print the status block and exit
+set -euo pipefail
+
+PS=${POWER_SUPPLY_DIR:-/sys/class/power_supply}
+
+find_bat() {
+	local d
+	for d in "$PS"/*; do
+		[[ -r "$d/type" && "$(<"$d/type")" == Battery ]] || continue
+		[[ -r "$d/scope" && "$(<"$d/scope")" == Device ]] && continue
+		echo "$d"
+		return
+	done
+	return 1
+}
+
+rd() { [[ -r "$1" ]] && cat "$1" || echo ""; }
+
+BAT=$(find_bat) || { notify-send -u low "Battery" "No system battery found"; exit 0; }
+BN=$(basename "$BAT")
+
+status=$(rd "$BAT/status")
+cap=$(rd "$BAT/capacity")
+cycles=$(rd "$BAT/cycle_count")
+cur=$(rd "$BAT/current_now")
+volt=$(rd "$BAT/voltage_now")
+full=$(rd "$BAT/charge_full")
+design=$(rd "$BAT/charge_full_design")
+types=$(rd "$BAT/charge_types")
+start=$(rd "$BAT/charge_control_start_threshold")
+stop=$(rd "$BAT/charge_control_end_threshold")
+
+watts=""
+if [[ -n "$cur" && -n "$volt" ]]; then
+	watts=$(awk -v c="$cur" -v v="$volt" 'BEGIN { printf "%.1f", c / 1e6 * v / 1e6 }')
+fi
+health=""
+if [[ -n "$full" && -n "$design" && "$design" -gt 0 ]]; then
+	health=$((100 * full / design))
+fi
+mode=$(sed -n 's/.*\[\([A-Za-z]*\)\].*/\1/p' <<<"$types")
+case "$mode" in
+Fast) mode_desc="Fast (ExpressCharge)" ;;
+Custom) mode_desc="Custom ${start:-?}–${stop:-?} % (slow)" ;;
+"") mode_desc="n/a" ;;
+*) mode_desc="$mode" ;;
+esac
+
+# Strongest active USB-C PD source (ucsi-source-psy-*): "18 V · 5 A".
+pd=""
+for d in "$PS"/ucsi-source-psy-*; do
+	[[ -r "$d/online" && "$(<"$d/online")" == 1 ]] || continue
+	v=$(rd "$d/voltage_now"); a=$(rd "$d/current_now")
+	[[ -n "$v" && -n "$a" ]] || continue
+	cand="$((v / 1000000)) V · $((a / 1000000)) A"
+	pd="$cand"
+done
+
+time_to=""
+if command -v upower >/dev/null; then
+	time_to=$(upower -i "$(upower -e | grep -m1 "$BN")" 2>/dev/null |
+		awk -F: '/time to (full|empty)/ { gsub(/^ +/, "", $2); print $2 }')
+fi
+
+icon=""
+case "$status" in Charging) icon="󰂄 " ;; Full) icon="󰁹 " ;; *) icon="󰁿 " ;; esac
+head="${icon}${cap}%  ${status,,}"
+[[ -n "$watts" ]] && head+="  ${watts} W"
+[[ -n "$time_to" ]] && head+="  ${time_to}"
+
+info=(
+	"$head"
+	"mode     $mode_desc"
+	"input    ${pd:-none}"
+	"health   ${health:-?}% · ${cycles:-?} cycles"
+)
+
+if [[ "${1:-}" == --text ]]; then
+	printf '%s\n' "${info[@]}"
+	exit 0
+fi
+
+actions=(
+	"󱐋  Fast charge (ExpressCharge)"
+	"󰂀  Standard charge"
+	"󰁼  Custom 50–75 % (docked for days)"
+	"󰁹  Full charge once (tlp fullcharge)"
+	"󰍛  TLP status"
+	"󰐥  Power menu…"
+)
+
+chosen=$(printf '%s\n' "${info[@]}" "" "${actions[@]}" |
+	wofi --show dmenu -i -p "Battery" --width 420 --height 380 --lines 12 2>/dev/null || true)
+
+set_mode() { # Fast|Standard|Custom
+	echo "$1" | sudo -n tee "$BAT/charge_types" >/dev/null &&
+		notify-send -u low -i battery "Battery" "Charge mode: $1"
+}
+
+case "$chosen" in
+*"Fast charge"*) set_mode Fast ;;
+*"Standard charge"*) set_mode Standard ;;
+*"Custom 50"*)
+	echo 50 | sudo -n tee "$BAT/charge_control_start_threshold" >/dev/null
+	echo 75 | sudo -n tee "$BAT/charge_control_end_threshold" >/dev/null
+	set_mode Custom
+	;;
+*"Full charge once"*)
+	sudo -n tlp fullcharge >/dev/null && set_mode Fast
+	;;
+*"TLP status"*) terminal -e sh -c 'sudo tlp-stat -b; read -r _' ;;
+*"Power menu"*) power ;;
+esac

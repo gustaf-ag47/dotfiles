@@ -1,0 +1,44 @@
+#!/bin/bash
+# cc-toggle -- the swaync control-centre toggles. swaync splits "command" on
+# whitespace (no shell), so each toggle is one word here.
+#
+#   cc-toggle <wifi|bluetooth|nightlight|caffeine>           flip (reads SWAYNC_TOGGLE_STATE)
+#   cc-toggle <wifi|bluetooth|nightlight|caffeine> --status  echo true|false
+set -euo pipefail
+
+what=${1:-}
+want=${SWAYNC_TOGGLE_STATE:-}   # "true" when the button was just switched on
+
+status() {
+	case "$what" in
+	wifi) [[ "$(nmcli radio wifi 2>/dev/null)" == enabled ]] ;;
+	bluetooth) bluetoothctl show 2>/dev/null | grep -q "Powered: yes" ;;
+	nightlight) [[ "$(nightlight --status)" == on ]] ;;
+	caffeine) ! pgrep -x hypridle >/dev/null ;;
+	*) echo "cc-toggle: unknown toggle '$what'" >&2; exit 2 ;;
+	esac
+}
+
+if [[ "${2:-}" == --status ]]; then
+	if status; then echo true; else echo false; fi
+	exit 0
+fi
+
+# No state from swaync (run by hand): flip relative to the current state.
+if [[ -z "$want" ]]; then
+	if status; then want=false; else want=true; fi
+fi
+
+case "$what" in
+wifi) if [[ "$want" == true ]]; then nmcli radio wifi on; else nmcli radio wifi off; fi ;;
+bluetooth) if [[ "$want" == true ]]; then bluetoothctl power on >/dev/null; else bluetoothctl power off >/dev/null; fi ;;
+nightlight)
+	if [[ "$want" == true && "$(nightlight --status)" == off ]] || [[ "$want" == false && "$(nightlight --status)" == on ]]; then
+		nightlight
+	fi
+	;;
+caffeine)
+	if [[ "$want" == true ]]; then pkill -x hypridle || true; else pgrep -x hypridle >/dev/null || setsid -f hypridle >/dev/null 2>&1; fi
+	;;
+*) echo "cc-toggle: unknown toggle '$what'" >&2; exit 2 ;;
+esac

@@ -39,7 +39,7 @@ echo "-- core symlinks --"
 check "HOME/.zshenv -> repo" is_link_to "$HOME/.zshenv" "$DOTFILES/config/zsh/.zshenv"
 check "GTK2 default config -> repo" is_link_to "$HOME/.gtkrc-2.0" "$DOTFILES/config/gui/gtk-2.0/gtkrc"
 check "\$ZDOTDIR/.zshrc -> repo" is_link_to "$ZDOTDIR/.zshrc" "$DOTFILES/config/zsh/.zshrc"
-for c in nvim git tmux lf hypr waybar alacritty dunst atuin; do
+for c in nvim git tmux lf hypr waybar alacritty dunst swaync wlogout swayosd atuin; do
 	check "config/$c is a symlink" test -L "$XDG_CONFIG_HOME/$c"
 done
 check "local/bin/git-setup-hooks exists" test -e "$HOME/.local/bin/git-setup-hooks"
