@@ -344,7 +344,7 @@ class WaybarProjectionTests(unittest.TestCase):
             'deepseek': {'status': 'unavailable', 'reason': 'HTTP 429', 'checked_at': int(NOW)},
         }}
         payload = usage.waybar_payload(report)
-        self.assertEqual(payload['text'], 'LLM 62% ~!')
+        self.assertEqual(payload['text'], '󰚩 62% ~!')
         self.assertEqual(payload['class'], 'warning')
         self.assertIn('anthropic: stale', payload['tooltip'])
         self.assertIn('deepseek: HTTP 429', payload['tooltip'])
@@ -354,8 +354,8 @@ class WaybarProjectionTests(unittest.TestCase):
             'freshness': {'state': 'fresh'}, 'confidence': 'high', 'unknowns': ['credits'],
             'quota': {'windows': []}}, 'checked_at': int(NOW)}}}
         payload = usage.waybar_payload(report)
-        self.assertEqual(payload['text'], 'LLM ?')
-        self.assertEqual(payload['class'], 'warning')
+        self.assertEqual(payload['text'], '󰚩 --')
+        self.assertEqual(payload['class'], 'unknown')
         self.assertIn('unknown=credits', payload['tooltip'])
 
 
