@@ -261,6 +261,15 @@ test('registry failures and binding limits are surfaced without hiding tracked t
     assert.ok(entries.at(-1).data.bindings.includes('z50'));
     assert.ok(!entries.at(-1).data.bindings.includes('z0'));
     assert.doesNotMatch(listed.metadataErrors.join(), /lane limit/);
+    // Manual-only IDs never consume dismissal slots; lane IDs do, oldest dropped first.
+    for (let n = 0; n < 3; n++) {
+      await tool.execute('x', { action: 'update', ...record({ id: `m${n}` }) });
+      await tool.execute('x', { action: 'remove', id: `m${n}` });
+    }
+    await tool.execute('x', { action: 'remove', id: 'manual' });
+    const dismissed = entries.at(-1).data.dismissed;
+    assert.deepEqual(dismissed, ['z0']);
+    assert.equal(JSON.parse((await tool.execute('x', { action: 'list' })).content[0].text).tasks.length, 50);
   } finally {
     events.session_shutdown?.();
     for (const [key, value] of [['PI_DELEGATE_REGISTRY', previous.registry], ['TMUX_PANE', previous.pane]]) {
