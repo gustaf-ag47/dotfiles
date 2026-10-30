@@ -1,8 +1,10 @@
 """Reusable offline fixtures for Python unit tests."""
 
 import base64
+import importlib.machinery
 import importlib.util
 import json
+import sys
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -10,10 +12,28 @@ from threading import Thread
 
 
 def load_script(name, path):
-    """Load a .py script by path without modifying sys.path."""
-    spec = importlib.util.spec_from_file_location(name, Path(path))
+    """Load a Python source file by path, including extensionless bin/ scripts.
+
+    Replaces SourceFileLoader.load_module(), removed in Python 3.15. Like that
+    API, the module is registered in sys.modules while it executes (dataclasses
+    and pickling resolve classes through it); a failed load restores the prior
+    entry so a broken script cannot leave a half-initialised module behind.
+    sys.path is never modified.
+    """
+    loader = importlib.machinery.SourceFileLoader(name, str(Path(path)))
+    spec = importlib.util.spec_from_loader(name, loader)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    missing = object()
+    previous = sys.modules.get(name, missing)
+    sys.modules[name] = module
+    try:
+        loader.exec_module(module)
+    except BaseException:
+        if previous is missing:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+        raise
     return module
 
 

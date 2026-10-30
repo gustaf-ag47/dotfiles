@@ -6,15 +6,15 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 from scripts import llm_usage
 
-proxy = SourceFileLoader('proxy_5h', str(Path(__file__).parents[2] / 'bin/claude-token-proxy')).load_module()
+proxy = load_script('proxy_5h', Path(__file__).parents[2] / 'bin/claude-token-proxy')
 
 
 class CapacityTests(unittest.TestCase):

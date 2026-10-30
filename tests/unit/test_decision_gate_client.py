@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the vendorable config/decision-gate/decision_gate_client.py.
 
-Loaded by path (SourceFileLoader) the same way other single-file tools in
+Loaded by path (tests.unit._helpers.load_script) the same way other single-file tools in
 this repo are tested, since it is meant to be copied standalone into other
 projects rather than imported as part of this package.
 """
@@ -9,11 +9,12 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
+from tests.unit._helpers import load_script
+
 CLIENT_PATH = Path(__file__).parents[2] / "config" / "decision-gate" / "decision_gate_client.py"
-client = SourceFileLoader("decision_gate_client", str(CLIENT_PATH)).load_module()
+client = load_script("decision_gate_client", CLIENT_PATH)
 
 
 class EchoHandler(BaseHTTPRequestHandler):

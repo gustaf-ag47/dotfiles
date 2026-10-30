@@ -9,16 +9,15 @@ import time
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main, mock
-from tests.unit._helpers import fake_jwt as make_jwt
+from tests.unit._helpers import fake_jwt as make_jwt, load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
 PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
-proxy = SourceFileLoader("claude_token_proxy", str(PROXY_PATH)).load_module()
+proxy = load_script("claude_token_proxy", PROXY_PATH)
 
 
 class UsagePersistenceTests(ProxyIsolationMixin, TestCase):

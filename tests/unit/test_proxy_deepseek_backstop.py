@@ -2,14 +2,14 @@
 
 import json
 import unittest
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import mock
+from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
 PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
-proxy = SourceFileLoader("claude_token_proxy_deepseek_tests", str(PROXY_PATH)).load_module()
+proxy = load_script("claude_token_proxy_deepseek_tests", PROXY_PATH)
 
 
 class DeepseekBackstopTests(ProxyIsolationMixin, unittest.TestCase):

@@ -1,11 +1,10 @@
 """API-key-style clients (Hermes) must use the proxy's subscription transport."""
-import importlib.machinery
 from pathlib import Path
 from unittest import TestCase, mock
 
-proxy = importlib.machinery.SourceFileLoader(
-    "proxy_oauth_headers", str(Path(__file__).parents[2] / "bin/claude-token-proxy")
-).load_module()
+from tests.unit._helpers import load_script
+
+proxy = load_script("proxy_oauth_headers", Path(__file__).parents[2] / "bin/claude-token-proxy")
 
 
 class OAuthTransportTests(TestCase):

@@ -6,14 +6,14 @@ import io
 import socket
 import unittest
 from email.message import Message
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import mock
 
+from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 PROXY_PATH = Path(__file__).resolve().parents[2] / "bin" / "claude-token-proxy"
-proxy = SourceFileLoader("claude_token_proxy_offline_tests", str(PROXY_PATH)).load_module()
+proxy = load_script("claude_token_proxy_offline_tests", PROXY_PATH)
 
 
 class OfflineClassifierTests(unittest.TestCase):
