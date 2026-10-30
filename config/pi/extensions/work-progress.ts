@@ -186,8 +186,8 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 			if (["toggle", "show", "hide"].includes(command)) {
 				a.state.hidden = command === "toggle" ? !a.state.hidden : command === "hide";
 				persist(a);
-				draw(a); // hide takes effect at once
-				if (!a.state.hidden) {
+				if (a.state.hidden) draw(a); // hide takes effect at once
+				else {
 					// Show current rows, not whatever an in-flight startup scan has so far.
 					await a.scanDone;
 					await refresh(a);

@@ -121,8 +121,16 @@ test('extension persists, guards no-UI, reloads, bounds width, and cleans shutdo
     assert.equal(widgets.at(-1), undefined);
     events.session_shutdown(); events.session_shutdown();
     events.session_start({}, ctx);
-    await tools.work_progress.execute('x', { action: 'list' });
+    // Startup scan in flight: show must not synchronously draw empty rows.
+    const drawn = widgets.length;
+    const showing = commands['work-progress'].handler('show', ctx);
+    assert.equal(widgets.length, drawn);
+    await showing;
+    assert.match(render(), /awaiting-operator/);
+    // Hide takes effect synchronously, before any scan completes.
+    const hiding = commands['work-progress'].handler('hide', ctx);
     assert.equal(widgets.at(-1), undefined);
+    await hiding;
     await commands['work-progress'].handler('show', ctx);
     assert.match(render(), /awaiting-operator/);
     events.session_shutdown();
