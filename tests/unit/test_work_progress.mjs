@@ -269,6 +269,13 @@ test('registry failures and binding limits are surfaced without hiding tracked t
     await tool.execute('x', { action: 'remove', id: 'manual' });
     const dismissed = entries.at(-1).data.dismissed;
     assert.deepEqual(dismissed, ['z0']);
+    // A session switch during remove's lane lookup must not persist the old branch.
+    const before = entries.length;
+    const pending = tool.execute('x', { action: 'remove', id: 'm-race' });
+    events.session_tree({}, ctx);
+    await assert.rejects(pending, /Session changed/);
+    assert.ok(entries.slice(before).every(e => !e.data.dismissed.includes('m-race')));
+    assert.equal(entries.length, before);
     assert.equal(JSON.parse((await tool.execute('x', { action: 'list' })).content[0].text).tasks.length, 50);
   } finally {
     events.session_shutdown?.();

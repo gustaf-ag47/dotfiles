@@ -62,7 +62,8 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 				const names = await discover(registry);
 				const listed = new Set(names);
 				for (const name of a.waiting) if (!listed.has(name)) a.waiting.delete(name);
-				// Newest first: run IDs are timestamp-prefixed and only recent lanes can bind.
+				// Newest first: run IDs are timestamp-prefixed (queued-<uuid>
+				// names sort first, harmlessly) and only recent lanes can bind.
 				for (const name of names.reverse()) {
 					if (a.settled.has(name)) continue;
 					if (budget-- <= 0) break;
@@ -159,9 +160,10 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 					// Dismiss even if not yet bound, so a pending auto-bind cannot resurrect it.
 					// Manual-only IDs are not dismissed, and a full list drops its oldest entry,
 					// so removing a task can never be blocked.
-					if (!a.state.dismissed.includes(params.id) &&
-						(a.state.bindings.includes(params.id) || await isLane(params.id))) {
-						if (active !== a) throw new Error("Session changed; retry");
+					const lane = a.state.bindings.includes(params.id) || await isLane(params.id);
+					// The await may span a session switch; never persist a stale branch's state.
+					if (active !== a) throw new Error("Session changed; retry");
+					if (lane && !a.state.dismissed.includes(params.id)) {
 						a.state.dismissed = [...a.state.dismissed, params.id].slice(-2000);
 					}
 					a.state.bindings = a.state.bindings.filter((id: string) => id !== params.id);
@@ -183,14 +185,17 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 			const [command = "toggle", id] = args.trim().split(/\s+/).filter(Boolean);
 			if (["toggle", "show", "hide"].includes(command)) {
 				a.state.hidden = command === "toggle" ? !a.state.hidden : command === "hide";
-				persist(a); draw(a);
+				persist(a);
+				// Draw with current rows, not whatever an in-flight startup scan has so far.
+				await a.scanDone;
+				await refresh(a);
 			} else if (command === "attach") {
 				if (!validId(id)) throw new Error("Expected a delegate run ID");
 				const { data } = await readJson(join(registry, `${id}.json`));
 				if (!pane || data.run_id !== id || data.parent_pane !== pane) throw new Error("Lane is not addressed to this pane");
 				if (active !== a) return;
 				if (!a.state.bindings.includes(id)) {
-					if (a.state.bindings.length >= 50) throw new Error("Lane limit reached");
+					if (a.state.bindings.length >= MAX_BINDINGS) throw new Error("Lane limit reached");
 					a.state.bindings.push(id);
 					a.state.dismissed = a.state.dismissed.filter((value: string) => value !== id);
 					persist(a);
