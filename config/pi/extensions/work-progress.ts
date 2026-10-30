@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -23,6 +24,10 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 		pi.appendEntry("work-progress", structuredClone(a.state));
 		// A valid entry now supersedes any corrupt one, so a reload would restore cleanly.
 		a.restoreError = false;
+	}
+
+	async function isLane(id: string) {
+		try { return (await stat(join(registry, `${id}.json`))).isFile(); } catch { return false; }
 	}
 
 	function problems(a: any) {
@@ -54,18 +59,24 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 			// Discovery failures must not hide manual or already bound tasks.
 			try {
 				let budget = SCAN_BUDGET;
-				for (const name of await discover(registry)) {
+				const names = await discover(registry);
+				const listed = new Set(names);
+				for (const name of a.waiting) if (!listed.has(name)) a.waiting.delete(name);
+				// Newest first: run IDs are timestamp-prefixed and only recent lanes can bind.
+				for (const name of names.reverse()) {
 					if (a.settled.has(name)) continue;
 					if (budget-- <= 0) break;
+					a.waiting.delete(name);
 					try {
 						const { data } = await readJson(join(registry, name));
 						const created = Date.parse(data?.created_at);
 						const id = data?.run_id;
 						if (autoBind(data, pane, a.startedAt, Date.now()) && name === `${id}.json` &&
 							!a.state.bindings.includes(id) && !a.state.dismissed.includes(id)) {
-							if (a.state.bindings.length >= MAX_BINDINGS) { a.limited = true; continue; }
+							if (a.state.bindings.length >= MAX_BINDINGS) { a.waiting.add(name); continue; }
 							a.state.bindings.push(id); changed = true; a.settled.add(name);
-						} else if (!pane || data?.parent_pane !== pane || created < a.startedAt ||
+						} else if (!pane || data?.parent_pane !== pane || !Number.isFinite(created) ||
+							created < a.startedAt || !validId(id) ||
 							name !== `${id}.json` || a.state.bindings.includes(id) || a.state.dismissed.includes(id)) {
 							// Immutable lane identity: this file can never auto-bind; skip rereading it.
 							a.settled.add(name);
@@ -79,7 +90,7 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 					}
 				}
 			} catch { errors.push("lane registry unreadable; new delegate lanes are not being detected"); }
-			if (a.limited) errors.push(`lane limit (${MAX_BINDINGS}) reached; new lanes are not tracked — remove finished ones`);
+			if (a.waiting.size) errors.push(`lane limit (${MAX_BINDINGS}) reached; new lanes are not tracked — remove finished ones`);
 			const rows = new Map(a.state.tasks.map((t: any) => [t.id, t]));
 			for (const id of a.state.bindings) {
 				let row;
@@ -115,7 +126,7 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 		// Lane created_at has second precision; floor so a lane started in the same second binds.
 		if (!firstStart.has(session)) firstStart.set(session, Math.floor(Date.now() / 1000) * 1000);
 		const a = { ctx, state, restoreError: error, errors: [] as string[], rows: [], scanning: false,
-			startedAt: firstStart.get(session)!, settled: new Set<string>(), failures: new Map<string, number>(), limited: false };
+			startedAt: firstStart.get(session)!, settled: new Set<string>(), failures: new Map<string, number>(), waiting: new Set<string>() };
 		active = a;
 		void refresh(a);
 		// No background timer in print/RPC mode. Tools still persist session state.
@@ -146,12 +157,14 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 					remaining.push(task({ ...params, updatedAt: Date.now() }));
 				} else {
 					// Dismiss even if not yet bound, so a pending auto-bind cannot resurrect it.
-					if (!a.state.dismissed.includes(params.id)) {
-						if (a.state.dismissed.length >= 2000) throw new Error("Dismissed lane limit reached");
-						a.state.dismissed.push(params.id);
+					// Manual-only IDs are not dismissed, and a full list drops its oldest entry,
+					// so removing a task can never be blocked.
+					if (!a.state.dismissed.includes(params.id) &&
+						(a.state.bindings.includes(params.id) || await isLane(params.id))) {
+						if (active !== a) throw new Error("Session changed; retry");
+						a.state.dismissed = [...a.state.dismissed, params.id].slice(-2000);
 					}
 					a.state.bindings = a.state.bindings.filter((id: string) => id !== params.id);
-					a.limited = false;
 				}
 				a.state.tasks = remaining;
 				persist(a);
