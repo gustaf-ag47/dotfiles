@@ -120,9 +120,28 @@ class BatteryMenuTest(unittest.TestCase):
         self.assertEqual(d["watts"], "21.8")
         self.assertIsInstance(d["can_set"], bool)
 
-    def test_set_rejects_unknown_mode(self):
-        r = run("battery-menu", "--set", "Turbo", env={"PATH": "/usr/bin:/bin"})
-        self.assertEqual(r.returncode, 2)
+    def test_bad_arguments_fail_before_any_probe_or_action(self):
+        # No battery and poisoned tools: argument errors must not depend on the
+        # host (CI runners have no battery and no notify-send) and must never
+        # reach sysfs consumers, the notifier, upower or sudo.
+        with tempfile.TemporaryDirectory() as tmp:
+            stubs, marker = Path(tmp) / "bin", Path(tmp) / "called"
+            stubs.mkdir()
+            for tool in ("notify-send", "sudo", "upower", "popover", "jq"):
+                stub = stubs / tool
+                stub.write_text(f"#!/bin/sh\necho {tool} >> '{marker}'\nexit 99\n")
+                stub.chmod(0o755)
+            empty = Path(tmp) / "power_supply"
+            empty.mkdir()
+            env = {"POWER_SUPPLY_DIR": str(empty), "PATH": f"{stubs}:/usr/bin:/bin"}
+            for args, usage in ((("--set", "Turbo"), "--set Fast|Standard|Custom"),
+                                (("--set",), "--set Fast|Standard|Custom"),
+                                (("--bogus",), "unknown option --bogus")):
+                with self.subTest(args=args):
+                    r = run("battery-menu", *args, env=env)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn(usage, r.stderr)
+            self.assertFalse(marker.exists(), marker.read_text() if marker.exists() else "")
 
 
 class PopoverDataTest(unittest.TestCase):

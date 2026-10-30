@@ -7,9 +7,10 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
-from importlib.machinery import SourceFileLoader
 
-proxy=SourceFileLoader('proxy_no_starvation',str(Path(__file__).parents[2]/'bin/claude-token-proxy')).load_module()
+from tests.unit._helpers import load_script
+
+proxy=load_script('proxy_no_starvation', Path(__file__).parents[2]/'bin/claude-token-proxy')
 
 class SpendTests(unittest.TestCase):
  def setUp(self):

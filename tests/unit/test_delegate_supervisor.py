@@ -35,8 +35,11 @@ class SupervisorTests(unittest.TestCase):
             "created_at": "1970-01-01T00:15:00Z", "cwd": str(self.root), "task": name, "goal": "/goal test"}))
         return path
 
-    def scan(self):
+    def scan(self, parent_present=False):
+        # parent_exists asks the real tmux server; pin it so results do not
+        # depend on which panes happen to exist on the machine running tests.
         with patch.object(self.mod, "capture", side_effect=lambda *args: self.pane), \
+             patch.object(self.mod, "parent_exists", return_value=parent_present), \
              patch.object(self.mod, "window_exists", return_value=True), \
              patch.object(self.mod, "send", side_effect=lambda target, message: self.sent.append((target, message))), \
              patch.object(self.mod, "watchdog", return_value=False), \
@@ -72,6 +75,19 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("waiting on CI", records[0].read_text())
         self.assertEqual(self.sent, [])
 
+    def test_ci_wait_nudges_a_present_parent_without_closing(self):
+        path = self.lane("ci")
+        self.pane = "1.0%/1.0M\nci_wait registered"
+        for _ in range(4):
+            self.now += 20
+            self.scan(parent_present=True)
+        self.assertEqual(json.loads(path.read_text())["status"], "open")
+        self.assertEqual(len(self.sent), 1)
+        target, message = self.sent[0]
+        self.assertEqual(target, "%8")
+        self.assertIn("DELEGATION WAITING ON CI (nudge 1/8)", message)
+        self.assertIn("ci-waiting-ci.md", message)
+
     def test_ci_wait_then_result_closes(self):
         path = self.lane("ci")
         self.pane = "1.0%/1.0M\nci_wait registered"
@@ -105,15 +121,13 @@ class SupervisorTests(unittest.TestCase):
             self.now += 20
             self.scan()
         self.now += 400
-        with patch.object(self.mod, "parent_exists", return_value=True):
-            self.scan()
+        self.scan(parent_present=True)
         self.assertEqual(len(self.sent), 1)
         record = next(self.mailbox.glob("*.md"))
         (self.mailbox / "ack").mkdir(exist_ok=True)
         record.rename(self.mailbox / "ack" / record.name)
         self.now += 400
-        with patch.object(self.mod, "parent_exists", return_value=True):
-            self.scan()
+        self.scan(parent_present=True)
         self.assertEqual(len(self.sent), 1)
 
 

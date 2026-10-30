@@ -17,6 +17,23 @@ set -euo pipefail
 
 PS=${POWER_SUPPLY_DIR:-/sys/class/power_supply}
 
+# Validate arguments before probing sysfs, upower, sudo or the notifier: a
+# bad invocation must fail with usage (exit 2) on any machine, battery or not.
+case "${1:-}" in
+--text | --json | --fullcharge | "") ;;
+--set)
+	case "${2:-}" in Fast | Standard | Custom) ;; *)
+		echo "battery-menu --set Fast|Standard|Custom" >&2
+		exit 2
+		;;
+	esac
+	;;
+*)
+	echo "battery-menu: unknown option $1" >&2
+	exit 2
+	;;
+esac
+
 find_bat() {
 	local d
 	for d in "$PS"/*; do
@@ -107,10 +124,7 @@ case "${1:-}" in
 		'{status:$status, cap:$cap, watts:$watts, time:$time, mode:$mode, mode_desc:$mode_desc,
 		  pd:$pd, health:$health, cycles:$cycles, icon:$icon, can_set:$can_set}'
 	;;
---set)
-	case "${2:-}" in Fast | Standard | Custom) set_mode "$2" ;; *) echo "battery-menu --set Fast|Standard|Custom" >&2; exit 2 ;; esac
-	;;
+--set) set_mode "$2" ;; # mode validated at the top
 --fullcharge) sudo -n tlp fullcharge >/dev/null && set_mode Fast ;;
 "") popover battery ;;
-*) echo "battery-menu: unknown option $1" >&2; exit 2 ;;
 esac
