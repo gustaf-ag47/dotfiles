@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { STAGES, STALE_MS, task, lines, restore, autoBind, laneTask, discover } from '../../config/pi/lib/work-progress.mjs';
+import { STAGES, STALE_MS, task, lines, restore, autoBind, laneTask, discover, age } from '../../config/pi/lib/work-progress.mjs';
 import { setup } from '../../config/pi/extensions/work-progress.ts';
 
 const now = Date.now();
@@ -22,8 +22,11 @@ test('all explicit stages render without invented percentage or ETA', () => {
 
 test('stale, future and malformed timestamps never display as current completion', () => {
   for (const updatedAt of [now - STALE_MS - 1, now + 1000, NaN]) {
-    assert.match(lines([record({ stage: 'verified', updatedAt })], now)[1], /^stale \(verified\)/);
+    assert.match(lines([record({ stage: 'verified', updatedAt })], now)[1], /^stale \(independently verified\)/);
   }
+  assert.match(lines([record({ stage: 'verified' })], now)[1], /^independently verified · 0m ago/);
+  assert.deepEqual([59, 61, 120, 2879, 2880].map(m => age(m * 60000)), ['59m ago', '1h1m ago', '2h ago', '47h59m ago', '2d ago']);
+  assert.equal(age(-1), 'age unknown');
   assert.notEqual(lines([record({ stage: 'reported-complete' })], now)[1], lines([record({ stage: 'verified' })], now)[1]);
 });
 
@@ -72,6 +75,10 @@ test('lane statuses never imply independent verification, CI timestamps do not u
     }
     await put({ status: 'closed' });
     assert.equal((await laneTask(root, root, 'lane')).stage, 'unknown');
+    for (const verdict of ['window-gone', 'never-started (prompt dropped - child has NO task)', 'watch-timeout-8h']) {
+      await put({ status: 'closed', result_status: verdict });
+      assert.equal((await laneTask(root, root, 'lane')).stage, 'error', verdict);
+    }
     await put({});
     await writeFile(join(root, 'supervisor/lane.json'), JSON.stringify({ verdict: 'waiting-on-ci', record: 'pointer' }));
     await writeFile(join(root, 'lane-waiting-ci.md'), 'Never parse this pane transcript');
@@ -191,6 +198,69 @@ test('timer reads attached lanes, dismissal survives reload, and foreign panes c
     assert.ok(cleared >= 1);
     events.session_shutdown();
     assert.equal(widget, undefined);
+  } finally {
+    events.session_shutdown?.();
+    for (const [key, value] of [['PI_DELEGATE_REGISTRY', previous.registry], ['TMUX_PANE', previous.pane]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('registry failures and binding limits are surfaced without hiding tracked tasks', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'work-progress-limits-'));
+  const previous = { registry: process.env.PI_DELEGATE_REGISTRY, pane: process.env.TMUX_PANE };
+  process.env.TMUX_PANE = '%7';
+  t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  t.mock.method(globalThis, 'clearInterval', () => {});
+  const events = {}, entries = [];
+  let tool, widget;
+  const pi = { on: (name, fn) => { events[name] = fn; }, registerTool: value => { tool = value; },
+    registerCommand() {}, appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }) };
+  const ctx = { mode: 'tui', hasUI: true, sessionManager: { getBranch: () => entries, getSessionId: () => 'limits' },
+    ui: { setWidget: (_key, value) => { widget = value; }, notify() {} } };
+  const view = () => widget().render(300).join('\n');
+  try {
+    // Registry path is a file: discovery fails (ENOTDIR), the manual task must stay visible.
+    const registry = join(root, 'lanes');
+    process.env.PI_DELEGATE_REGISTRY = registry; // read once by setup()
+    await writeFile(registry, 'not a directory');
+    setup(pi, Type, (s, w) => s.slice(0, w));
+    events.session_start({}, ctx);
+    const result = JSON.parse((await tool.execute('x', { action: 'update',
+      ...record({ id: 'manual', stage: 'awaiting-operator', reason: 'Approve apply' }) })).content[0].text);
+    assert.equal(result.tasks.length, 1);
+    assert.match(result.metadataErrors.join(), /registry unreadable/);
+    assert.match(view(), /Work: error — lane registry unreadable/);
+    assert.match(view(), /awaiting-operator/);
+    assert.doesNotMatch(view(), /no tracked tasks/);
+    events.session_shutdown();
+
+    // More than 2000 registry entries (it is never pruned) must not fail the scan,
+    // and new lanes beyond the binding limit are reported, not silently dropped.
+    await rm(registry);
+    await mkdir(registry);
+    await Promise.all(Array.from({ length: 2001 }, (_, n) => writeFile(join(registry, `old-${n}.json`), '{}')));
+    const created = new Date(Date.now() + 1000).toISOString();
+    await Promise.all(Array.from({ length: 51 }, (_, n) => writeFile(join(registry, `z${n}.json`),
+      JSON.stringify({ run_id: `z${n}`, parent_pane: '%7', status: 'open', created_at: created }))));
+    await writeFile(join(registry, 'foreign.json'), JSON.stringify({ run_id: 'foreign', parent_pane: '%8', created_at: created }));
+    events.session_start({}, ctx);
+    await new Promise(resolve => setTimeout(resolve, 1100)); // let created_at fall inside the runtime window
+    let listed;
+    for (let n = 0; n < 30; n++) { // scan budget works through the backlog over ticks
+      listed = JSON.parse((await tool.execute('x', { action: 'list' })).content[0].text);
+      if (listed.metadataErrors.some(e => /lane limit/.test(e))) break;
+    }
+    assert.equal(entries.at(-1).data.bindings.length, 50);
+    assert.ok(!entries.at(-1).data.bindings.includes('foreign'));
+    assert.match(view(), /lane limit \(50\) reached/);
+    assert.match(view(), /awaiting-operator/);
+    await tool.execute('x', { action: 'remove', id: 'z0' });
+    listed = JSON.parse((await tool.execute('x', { action: 'list' })).content[0].text);
+    assert.ok(entries.at(-1).data.bindings.includes('z50'));
+    assert.ok(!entries.at(-1).data.bindings.includes('z0'));
+    assert.doesNotMatch(listed.metadataErrors.join(), /lane limit/);
   } finally {
     events.session_shutdown?.();
     for (const [key, value] of [['PI_DELEGATE_REGISTRY', previous.registry], ['TMUX_PANE', previous.pane]]) {

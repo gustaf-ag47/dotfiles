@@ -1,7 +1,11 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { STAGES, autoBind, clean, discover, laneTask, lines, readJson, restore, task, validId } from "../lib/work-progress.mjs";
+import { STAGES, autoBind, clean, discover, label, laneTask, lines, readJson, restore, task, validId } from "../lib/work-progress.mjs";
+
+const MAX_BINDINGS = 50;
+// Uncached lane reads per refresh; a large backlog is worked through over later ticks.
+const SCAN_BUDGET = 200;
 
 // Exported injection seam keeps lifecycle tests independent of installed Pi packages.
 export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, w: number) => string) {
@@ -10,9 +14,19 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 	const pane = process.env.TMUX_PANE || "";
 	let active: any;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	// First runtime start per session ID, so a session_tree restart keeps the auto-bind window.
+	const firstStart = new Map<string, number>();
+	// StringEnum shape (plain string enum): providers such as Google reject anyOf/const unions.
+	const stringEnum = (values: string[]) => Type.Unsafe({ type: "string", enum: values });
 
 	function persist(a: any) {
 		pi.appendEntry("work-progress", structuredClone(a.state));
+		// A valid entry now supersedes any corrupt one, so a reload would restore cleanly.
+		a.restoreError = false;
+	}
+
+	function problems(a: any) {
+		return [...(a.restoreError ? ["saved work-progress state was malformed and was reset"] : []), ...a.errors];
 	}
 
 	function draw(a: any) {
@@ -20,7 +34,7 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 		if (a.state.hidden) { a.ctx.ui.setWidget("work-progress", undefined); return; }
 		a.ctx.ui.setWidget("work-progress", () => ({
 			render(width: number) {
-				return [...(a.error ? ["Work: unknown/error — metadata unavailable or malformed"] : []),
+				return [...problems(a).map(p => `Work: error — ${p}`),
 					...lines(a.rows)].map(line => truncateToWidth(line, Math.max(0, width)));
 			},
 			invalidate() {},
@@ -33,19 +47,39 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 		let finish!: () => void;
 		a.scanDone = new Promise<void>(resolve => { finish = resolve; });
 		try {
-			let changed = false, error = a.restoreError;
+			let changed = false;
+			const errors: string[] = [];
 			// Legacy lanes lack parent session IDs. Only auto-bind lanes created while
 			// this runtime is active in this pane. Older lanes need explicit attachment.
-			for (const name of await discover(registry)) {
-				if (a.state.bindings.length >= 50) break;
-				try {
-					const { data } = await readJson(join(registry, name));
-					if (autoBind(data, pane, a.startedAt, Date.now()) && name === `${data.run_id}.json` &&
-						!a.state.bindings.includes(data.run_id) && !a.state.dismissed.includes(data.run_id)) {
-						a.state.bindings.push(data.run_id); changed = true;
+			// Discovery failures must not hide manual or already bound tasks.
+			try {
+				let budget = SCAN_BUDGET;
+				for (const name of await discover(registry)) {
+					if (a.settled.has(name)) continue;
+					if (budget-- <= 0) break;
+					try {
+						const { data } = await readJson(join(registry, name));
+						const created = Date.parse(data?.created_at);
+						const id = data?.run_id;
+						if (autoBind(data, pane, a.startedAt, Date.now()) && name === `${id}.json` &&
+							!a.state.bindings.includes(id) && !a.state.dismissed.includes(id)) {
+							if (a.state.bindings.length >= MAX_BINDINGS) { a.limited = true; continue; }
+							a.state.bindings.push(id); changed = true; a.settled.add(name);
+						} else if (!pane || data?.parent_pane !== pane || created < a.startedAt ||
+							name !== `${id}.json` || a.state.bindings.includes(id) || a.state.dismissed.includes(id)) {
+							// Immutable lane identity: this file can never auto-bind; skip rereading it.
+							a.settled.add(name);
+						}
+					} catch {
+						// Cannot attribute a corrupt unbound lane; never import it. Retry a few ticks
+						// (a writer may be mid-update), then stop spending scan budget on it.
+						const failures = (a.failures.get(name) || 0) + 1;
+						a.failures.set(name, failures);
+						if (failures >= 3) a.settled.add(name);
 					}
-				} catch { /* Cannot attribute a corrupt unbound lane; never import it. */ }
-			}
+				}
+			} catch { errors.push("lane registry unreadable; new delegate lanes are not being detected"); }
+			if (a.limited) errors.push(`lane limit (${MAX_BINDINGS}) reached; new lanes are not tracked — remove finished ones`);
 			const rows = new Map(a.state.tasks.map((t: any) => [t.id, t]));
 			for (const id of a.state.bindings) {
 				let row;
@@ -58,9 +92,12 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 				if (!manual || !Number.isFinite(row.updatedAt) || row.updatedAt > manual.updatedAt) rows.set(id, row);
 			}
 			if (active !== a) return;
-			a.rows = [...rows.values()]; a.error = error;
+			a.rows = [...rows.values()]; a.errors = errors;
 			if (changed) persist(a);
-		} catch { if (active === a) { a.error = true; a.rows = []; } }
+		} catch {
+			// Last resort: keep previous rows visible rather than blanking the panel.
+			if (active === a) a.errors = ["work progress refresh failed; rows may be outdated"];
+		}
 		finally { a.scanning = false; draw(a); finish(); }
 	}
 
@@ -73,8 +110,12 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 
 	function start(_event: any, ctx: any) {
 		stop();
-		const { state, error } = restore(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId());
-		const a = { ctx, state, restoreError: error, error, rows: [], scanning: false, startedAt: Date.now() };
+		const session = ctx.sessionManager.getSessionId();
+		const { state, error } = restore(ctx.sessionManager.getBranch(), session);
+		// Lane created_at has second precision; floor so a lane started in the same second binds.
+		if (!firstStart.has(session)) firstStart.set(session, Math.floor(Date.now() / 1000) * 1000);
+		const a = { ctx, state, restoreError: error, errors: [] as string[], rows: [], scanning: false,
+			startedAt: firstStart.get(session)!, settled: new Set<string>(), failures: new Map<string, number>(), limited: false };
 		active = a;
 		void refresh(a);
 		// No background timer in print/RPC mode. Tools still persist session state.
@@ -88,9 +129,9 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 		name: "work_progress", label: "Work progress", executionMode: "sequential",
 		description: "Persist an honest task stage in this session's work widget. Use stable IDs; for attached delegates use their run ID. Actions: update, remove, list. Awaiting stages require a reason. Evidence and source are required for updates. 'reported-complete' is a claim; 'verified' means this parent independently checked the stated evidence, never child DONE/PASS alone. Named milestones are explicit accomplishments, not percent/ETA. Do not store secrets. Use /work-progress attach <run-id> for older delegated lanes.",
 		parameters: Type.Object({
-			action: Type.Union(["update", "remove", "list"].map(v => Type.Literal(v))),
+			action: stringEnum(["update", "remove", "list"]),
 			id: Type.Optional(Type.String()), title: Type.Optional(Type.String()),
-			stage: Type.Optional(Type.Union(STAGES.map((v: string) => Type.Literal(v)))),
+			stage: Type.Optional(stringEnum(STAGES)),
 			reason: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), source: Type.Optional(Type.String()),
 			milestones: Type.Optional(Type.Array(Type.Object({ label: Type.String(), done: Type.Boolean() }), { maxItems: 8 })),
 		}),
@@ -104,18 +145,20 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 					if (remaining.length >= 50) throw new Error("Task limit reached; remove old tasks");
 					remaining.push(task({ ...params, updatedAt: Date.now() }));
 				} else {
-					if (a.state.bindings.includes(params.id) && !a.state.dismissed.includes(params.id)) {
+					// Dismiss even if not yet bound, so a pending auto-bind cannot resurrect it.
+					if (!a.state.dismissed.includes(params.id)) {
 						if (a.state.dismissed.length >= 2000) throw new Error("Dismissed lane limit reached");
 						a.state.dismissed.push(params.id);
 					}
 					a.state.bindings = a.state.bindings.filter((id: string) => id !== params.id);
+					a.limited = false;
 				}
 				a.state.tasks = remaining;
 				persist(a);
 			}
 			await a.scanDone;
 			await refresh(a);
-			return { content: [{ type: "text", text: JSON.stringify({ tasks: a.rows, metadataError: a.error }) }], details: { tasks: a.rows } };
+			return { content: [{ type: "text", text: JSON.stringify({ tasks: a.rows, metadataErrors: problems(a) }) }], details: { tasks: a.rows } };
 		},
 	});
 
@@ -144,8 +187,8 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 			} else if (command === "list") {
 				await a.scanDone;
 				await refresh(a);
-				if (ctx.hasUI) ctx.ui.notify(a.rows.map((t: any) =>
-					`${clean(t.id)}: ${t.stage} — ${clean(t.evidence, 500)}`).join("\n") || "No tracked tasks", "info");
+				if (ctx.hasUI) ctx.ui.notify([...problems(a).map(p => `error: ${p}`), ...a.rows.map((t: any) =>
+					`${clean(t.id)}: ${label(t.stage)} — ${clean(t.evidence, 500)}`)].join("\n") || "No tracked tasks", "info");
 			} else if (ctx.hasUI) ctx.ui.notify("Usage: /work-progress show|hide|toggle|list|attach <run-id>", "warning");
 		},
 	});
