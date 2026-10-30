@@ -186,9 +186,12 @@ export function setup(pi: ExtensionAPI, Type: any, truncateToWidth: (s: string, 
 			if (["toggle", "show", "hide"].includes(command)) {
 				a.state.hidden = command === "toggle" ? !a.state.hidden : command === "hide";
 				persist(a);
-				// Draw with current rows, not whatever an in-flight startup scan has so far.
-				await a.scanDone;
-				await refresh(a);
+				draw(a); // hide takes effect at once
+				if (!a.state.hidden) {
+					// Show current rows, not whatever an in-flight startup scan has so far.
+					await a.scanDone;
+					await refresh(a);
+				}
 			} else if (command === "attach") {
 				if (!validId(id)) throw new Error("Expected a delegate run ID");
 				const { data } = await readJson(join(registry, `${id}.json`));
