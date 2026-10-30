@@ -57,9 +57,8 @@ export async function readJson(file) {
 
 export async function discover(directory) {
   try {
-    const names = (await readdir(directory)).filter(n => n.endsWith('.json')).sort();
-    if (names.length > 2000) throw new Error('Lane registry too large');
-    return names;
+    // The registry is never pruned; callers bound per-scan reads instead of failing.
+    return (await readdir(directory)).filter(n => n.endsWith('.json')).sort();
   } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
 
@@ -76,6 +75,8 @@ export async function laneTask(directory, mailbox, id) {
     stage = 'awaiting-review'; reason = 'PASS is not completion'; evidence = clean(lane.result) || 'Child reported PASS';
   } else if (['FAILED', 'BLOCKER'].includes(lane.result_status)) {
     stage = 'error'; reason = 'Child reported a blocker'; evidence = clean(lane.result) || lane.result_status;
+  } else if (lane.status === 'closed' && /^(never-started|window-gone|watch-timeout)/.test(lane.result_status || '')) {
+    stage = 'error'; reason = 'Lane ended without a result'; evidence = clean(lane.result_status);
   } else if (lane.status === 'closed') {
     reason = 'Closed without completion evidence'; evidence = clean(lane.result_status) || reason;
   } else {
@@ -97,13 +98,24 @@ export async function laneTask(directory, mailbox, id) {
     source: 'delegate lane', updatedAt };
 }
 
+const LABELS = { verified: 'independently verified' };
+export const label = stage => LABELS[stage] || stage;
+
+export function age(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'age unknown';
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m}m ago`;
+  if (m < 48 * 60) return `${Math.floor(m / 60)}h${m % 60 ? `${m % 60}m` : ''} ago`;
+  return `${Math.floor(m / 1440)}d ago`;
+}
+
 export function lines(tasks, now = Date.now(), limit = 5) {
   if (!tasks.length) return ['Work: no tracked tasks · /work-progress attach <run-id>'];
   const rows = tasks.map(t => {
-    const age = now - t.updatedAt;
-    const stale = !Number.isFinite(age) || age < 0 || age > STALE_MS;
-    const stage = stale ? `stale (${t.stage})` : t.stage;
-    const elapsed = Number.isFinite(age) && age >= 0 ? `${Math.floor(age / 60000)}m ago` : 'age unknown';
+    const ms = now - t.updatedAt;
+    const stale = !Number.isFinite(ms) || ms < 0 || ms > STALE_MS;
+    const stage = stale ? `stale (${label(t.stage)})` : label(t.stage);
+    const elapsed = age(ms);
     const bar = !stale && t.milestones?.length
       ? ` [${t.milestones.map(m => m.done ? '#' : '.').join('')}] ${t.milestones.filter(m => m.done).length}/${t.milestones.length} milestones` : '';
     return { priority: stale || t.stage !== 'verified' ? 0 : 1,
