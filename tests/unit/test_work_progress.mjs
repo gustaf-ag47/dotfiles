@@ -97,8 +97,6 @@ test('lane statuses never imply independent verification, CI timestamps do not u
 // TypeBox and width utility injection avoids npm dependencies in CI; the real
 // utility is smoke-tested separately with the installed Pi runtime.
 const Type = new Proxy({}, { get: () => (...args) => args });
-const tick = () => new Promise(resolve => setImmediate(resolve));
-async function settle() { for (let n = 0; n < 30; n++) await tick(); }
 
 test('extension persists, guards no-UI, reloads, bounds width, and cleans shutdown', async () => {
   const root = await mkdtemp(join(tmpdir(), 'work-progress-ui-'));
@@ -115,9 +113,7 @@ test('extension persists, guards no-UI, reloads, bounds width, and cleans shutdo
     setup(pi, Type, (s, w) => s.slice(0, w));
     assert.equal(widgets.length, 0);
     events.session_start({}, ctx);
-    await settle();
     await tools.work_progress.execute('x', { action: 'update', ...record({ stage: 'awaiting-operator', reason: 'Approve apply' }) });
-    await settle();
     const render = () => widgets.at(-1)().render(80).join('\n');
     assert.match(render(), /awaiting-operator/);
     assert.ok(widgets.at(-1)().render(4).every(s => s.length <= 4));
@@ -125,24 +121,25 @@ test('extension persists, guards no-UI, reloads, bounds width, and cleans shutdo
     assert.equal(widgets.at(-1), undefined);
     events.session_shutdown(); events.session_shutdown();
     events.session_start({}, ctx);
-    await settle();
+    await tools.work_progress.execute('x', { action: 'list' });
     assert.equal(widgets.at(-1), undefined);
     await commands['work-progress'].handler('show', ctx);
     assert.match(render(), /awaiting-operator/);
     events.session_shutdown();
     const count = widgets.length;
     events.session_start({}, { ...ctx, mode: 'print', hasUI: false });
-    await settle();
+    await tools.work_progress.execute('x', { action: 'list' });
     await tools.work_progress.execute('x', { action: 'update', ...record({ stage: 'verified', evidence: 'Parent ran tests and checked exact SHA CI' }) });
     assert.equal(widgets.length, count);
     events.session_shutdown();
     events.session_start({}, { ...ctx, sessionManager: { getBranch: () => entries, getSessionId: () => 'two' } });
-    await settle();
+    // Wait on the scan itself, not a tick count: hosted runners are slower than laptops.
+    await tools.work_progress.execute('x', { action: 'list' });
     assert.doesNotMatch(render(), /awaiting-operator|verified/);
-    // An in-flight scan must not draw after shutdown.
+    // An in-flight scan must not draw after shutdown (real time, not ticks, so it finishes).
     events.session_start({}, ctx); events.session_shutdown();
     const closedCount = widgets.length;
-    await settle();
+    await new Promise(resolve => setTimeout(resolve, 500));
     assert.equal(widgets.length, closedCount);
   } finally {
     events.session_shutdown?.();
