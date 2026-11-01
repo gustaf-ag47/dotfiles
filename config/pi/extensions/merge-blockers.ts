@@ -21,6 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const GUIDELINES = [
 	"Merge blockers: before opening a PR, merging one, or reporting branch work as done, check CI — `gh pr checks <n>` for the PR and `gh run list --branch <base> -L1` for the target branch. A red base branch is a blocker you inherit: investigate it first, never merge onto it silently.",
 	"After you merge, confirm the post-merge run on the base branch is green before building anything on top of it.",
+	"Checking CI means one status call, not waiting: if runs are pending, end the turn or hand back the check command. Never hold a tool call open in a sleep/poll/--watch loop for CI.",
 	"Run the formatters and linters that CI gates on (check the workflows under .github/workflows) locally before committing — a clean local test run does not imply a clean lint/format gate.",
 	"Do not report delegated or sub-agent work as complete from its own claims; verify against the repo's gates (tests, linters, CI) yourself.",
 ];

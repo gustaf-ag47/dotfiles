@@ -109,12 +109,13 @@ if you started one), remove images you built (`docker rmi`, never `docker system
 prune` or anything you did not create), and confirm with `df -h /`.
 
 Parents never sleep-poll a child's pane with `tmux capture-pane` in a loop; the
-mailbox delivers completions in-band (see In-band delivery below). After push, call
-`ci_wait` with the PR number and end the turn; never sleep or poll for CI. Keep the
-interactive/RPC session open: the tool wakes it with a verdict or timeout. On a
-superseded head, register the new head. After wake-up, check the merge gates and
-continue owning the merge. If the tool is unavailable, return the verification
-command to the parent rather than blocking in `gh --watch`.
+mailbox delivers completions in-band (see In-band delivery below). After push, run
+`gh pr checks <n>` once. If checks are pending, end the turn (or, for a child, send
+`<task>: BLOCKER <sha> - waiting on CI <run-url>` per the result contract) instead of
+waiting: never `sleep`/poll loops or `gh … --watch` inside a tool call. The delegate
+watcher and supervisor wake the parent when the lane changes; on the next turn,
+check the merge gates and continue owning the merge. (`ci_wait` is not installed;
+panes printing "waiting on CI" are still recognised by the supervisor.)
 
 Merge only through `merge-pr.sh` (`scripts/merge-pr.sh`, wraps `gh pr merge`): it
 appends pane/run-id/pr/head-sha to `~/.pi/agent/merge-log.tsv`, and refuses when the
