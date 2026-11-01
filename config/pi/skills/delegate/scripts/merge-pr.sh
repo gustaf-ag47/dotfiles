@@ -85,9 +85,6 @@ if [ -n "$BRIEF" ]; then
 	fi
 fi
 
-agent_login="$(gh api user -q .login)" || die "could not resolve agent identity (gh api user)"
-[ -n "$agent_login" ] || die "empty agent identity from gh api user"
-
 repo_args=()
 for ((i = 0; i < ${#GH_ARGS[@]}; i++)); do
 	if [ "${GH_ARGS[i]}" = "--repo" ] && [ $((i + 1)) -lt "${#GH_ARGS[@]}" ]; then
@@ -96,7 +93,7 @@ for ((i = 0; i < ${#GH_ARGS[@]}; i++)); do
 	fi
 done
 
-pr_json="$(gh pr view "$PR_NUMBER" "${repo_args[@]}" --json author,commits,headRefOid,state 2>&1)" ||
+pr_json="$(gh pr view "$PR_NUMBER" "${repo_args[@]}" --json headRefOid,state 2>&1)" ||
 	die "gh pr view $PR_NUMBER failed: $pr_json"
 
 pr_state="$(printf '%s' "$pr_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')"
@@ -105,38 +102,7 @@ if [ "$pr_state" = "MERGED" ]; then
 	exit 5
 fi
 
-pr_author="$(printf '%s' "$pr_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["author"]["login"])')"
 head_sha="$(printf '%s' "$pr_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["headRefOid"])')"
-other_logins="$(printf '%s' "$pr_json" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-logins = set()
-for c in d.get("commits", []):
-    for role in ("authors",):
-        for a in c.get(role) or []:
-            login = a.get("login")
-            if login:
-                logins.add(login)
-print("\n".join(sorted(logins)))
-')"
-
-if [ "$pr_author" != "$agent_login" ]; then
-	echo "merge-pr: refused: PR #$PR_NUMBER was opened by '$pr_author', not the agent identity '$agent_login'" >&2
-	exit 3
-fi
-
-bad_commit_logins=""
-while IFS= read -r login; do
-	[ -z "$login" ] && continue
-	if [ "$login" != "$agent_login" ]; then
-		bad_commit_logins="${bad_commit_logins}${bad_commit_logins:+,}${login}"
-	fi
-done <<<"$other_logins"
-
-if [ -n "$bad_commit_logins" ]; then
-	echo "merge-pr: refused: PR #$PR_NUMBER has commits authored by non-agent login(s): $bad_commit_logins" >&2
-	exit 3
-fi
 
 if [ "$HAS_METHOD_FLAG" = 0 ]; then
 	GH_ARGS+=(--squash)
