@@ -91,10 +91,11 @@ what would unblock it; leave the work in a reviewable state; stop.
 
 ## Cost guidance
 
-After push, call `ci_wait` with the PR number and end the turn; never sleep or poll
-for CI. Keep this interactive/RPC session open for the in-band wake-up. On wake-up,
-verify the current head and merge gates, then continue under the assigned merge
-ownership. If superseded, register again; if unavailable, hand back the verification
-command instead of blocking in `gh --watch`.
+After push, run `gh pr checks <n>` once. If checks are pending, end the turn (or
+send `<task>: BLOCKER <sha> - waiting on CI <run-url>`) instead of waiting: never
+`sleep`/poll loops or `gh … --watch` inside a tool call. Keep this interactive/RPC
+session open for the in-band wake-up; then verify the current head and merge gates
+and continue under the assigned merge ownership. (`ci_wait` is not installed; panes
+printing "waiting on CI" are still recognised by the supervisor.)
 
 Target ~$<n>. If you exceed it with no clear progress, write up what you have and stop.

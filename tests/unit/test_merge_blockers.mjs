@@ -30,10 +30,10 @@ test('injects once for a checkout and a nested worktree directory', async (t) =>
   for (const cwd of [checkout, join(worktree, 'nested')]) {
     const prompt = event();
     await onStart(prompt, { cwd });
-    assert.equal(prompt.systemPromptOptions.promptGuidelines.length, 5);
+    assert.equal(prompt.systemPromptOptions.promptGuidelines.length, 6);
     assert.match(prompt.systemPromptOptions.promptGuidelines[1], /gh pr checks/);
     await onStart(prompt, { cwd });
-    assert.equal(prompt.systemPromptOptions.promptGuidelines.length, 5);
+    assert.equal(prompt.systemPromptOptions.promptGuidelines.length, 6);
   }
 });
 
