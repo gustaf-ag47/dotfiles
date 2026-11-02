@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.unit.test_claude_token_proxy import OracleFixture, codex_state, deepseek_state
-from tests.unit import test_claude_token_proxy as proxy_tests
+from tests.unit.test_llm_proxy import OracleFixture, codex_state, deepseek_state
+from tests.unit import test_llm_proxy as proxy_tests
 
 proxy = proxy_tests.proxy
 

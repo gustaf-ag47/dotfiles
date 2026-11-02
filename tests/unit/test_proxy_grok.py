@@ -1,4 +1,4 @@
-"""grok-build adapter tests for bin/claude-token-proxy's cross-provider quota oracle.
+"""grok-build adapter tests for bin/llm-proxy's cross-provider quota oracle.
 
 Offline and credential-free: every network call is mocked via `proxy.get_json`,
 the OAuth credential is an in-memory dict (never a real ~/.pi/agent/auth.json or
@@ -23,7 +23,7 @@ import urllib.error
 from tests.unit._helpers import fake_jwt as make_jwt
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
-PATH = Path(__file__).resolve().parents[2] / 'bin/claude-token-proxy'
+PATH = Path(__file__).resolve().parents[2] / 'bin/llm-proxy'
 LOADER = importlib.machinery.SourceFileLoader('proxy_grok_subject', str(PATH))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 proxy = importlib.util.module_from_spec(SPEC)

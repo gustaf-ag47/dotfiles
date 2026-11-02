@@ -178,7 +178,7 @@ link_config "$DOTFILES/config/mycli/myclirc" "$XDG_CONFIG_HOME/mycli/myclirc"
 link_config "$DOTFILES/config/xdg-user-dirs/user-dirs.dirs" "$XDG_CONFIG_HOME/user-dirs.dirs"
 
 # Claude Code auth helper: sourced by .zshenv to select the OAuth token with the
-# most quota headroom (see bin/claude-token-refresh / bin/claude-token-proxy).
+# most quota headroom (see bin/claude-token-refresh / bin/llm-proxy).
 mkdir -p "$XDG_CONFIG_HOME/claude-code"
 link_config "$DOTFILES/config/claude-code/env.sh" "$XDG_CONFIG_HOME/claude-code/env.sh"
 
@@ -314,6 +314,22 @@ echo "Profile: $PROFILE (class=${PROFILE_CLASS:-unknown} battery=${PROFILE_HAS_B
 # same system/ layers that hold its packages (see $NOTES/Homelab/dotfiles/SYSTEM_LAYER.md).
 # Called at the END of install: units ExecStart ~/.local/bin/* and
 # ~/.pi/agent/skills/* paths, which the bin/ loop and pi-setup create later.
+# Units whose file left this repo (deleted, or renamed: claude-token-proxy.service
+# became llm-proxy.service) keep a dangling link from an earlier install and may
+# still be running -- holding the port their replacement needs. Stop, disable
+# and unlink them right before enable_user_units, so the swap is near-instant.
+retire_dangling_units() {
+	local link name
+	while IFS= read -r link; do
+		name="$(basename "$link")"
+		systemctl --user stop "$name" 2>/dev/null || true
+		systemctl --user disable "$name" 2>/dev/null || true
+		find "$XDG_CONFIG_HOME/systemd/user" -mindepth 2 -maxdepth 2 -path "*.wants/$name" -delete 2>/dev/null || true
+		rm -f "$link"
+		echo "  user unit retired: $name"
+	done < <(find "$XDG_CONFIG_HOME/systemd/user" -maxdepth 1 -xtype l -lname "$DOTFILES/config/systemd/user/*" 2>/dev/null)
+}
+
 enable_user_units() {
 	command -v systemctl >/dev/null 2>&1 || return 0
 	local unit_lists role list action unit
@@ -473,6 +489,7 @@ fi
 "$DOTFILES/bin/theme-apply" || true
 
 # Last of the link steps: every ExecStart target now exists.
+command -v systemctl >/dev/null 2>&1 && retire_dangling_units
 enable_user_units
 
 # Link Claude Code user configuration (private overlay only; not in this repo)

@@ -22,7 +22,7 @@ import unittest
 PROXY_SUITES = sorted(
     "tests.unit." + path.stem
     for path in Path(__file__).parent.glob("test_*.py")
-    if path.stem != Path(__file__).stem and "claude-token-proxy" in path.read_text()
+    if path.stem != Path(__file__).stem and "llm-proxy" in path.read_text()
 )
 
 

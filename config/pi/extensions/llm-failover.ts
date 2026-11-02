@@ -19,9 +19,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { registerInspectorStatus } from "../lib/llm-inspector.mjs";
 
 export const ANTHROPIC = "anthropic";
-/** Substring of the proxy's `unavailable_message()`; see bin/claude-token-proxy. */
+/** Substring of the proxy's `unavailable_message()`; see bin/llm-proxy. */
 export const POOL_EXHAUSTED_MARKER = "no OAuth account can serve";
-/** Substring of the proxy's `offline_message()`; see bin/claude-token-proxy OFFLINE_MARKER. */
+/** Substring of the proxy's `offline_message()`; see bin/llm-proxy OFFLINE_MARKER. */
 export const OFFLINE_MARKER = "upstream unreachable: network offline";
 export const ROUTE_TIMEOUT_MS = 3_000;
 /** While offline, re-probe the local connectivity endpoint this often. */

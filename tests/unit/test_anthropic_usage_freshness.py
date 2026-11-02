@@ -19,7 +19,7 @@ def load(name, path):
     return module
 
 usage = load('usage_freshness', ROOT / 'scripts/llm_usage.py')
-proxy = load('proxy_freshness', ROOT / 'bin/claude-token-proxy')
+proxy = load('proxy_freshness', ROOT / 'bin/llm-proxy')
 
 
 class FreshnessTests(unittest.TestCase):

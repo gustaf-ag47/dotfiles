@@ -12,7 +12,7 @@ from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 ROOT = Path(__file__).resolve().parents[2]
-loader = importlib.machinery.SourceFileLoader('inspector_proxy_subject', str(ROOT / 'bin/claude-token-proxy'))
+loader = importlib.machinery.SourceFileLoader('inspector_proxy_subject', str(ROOT / 'bin/llm-proxy'))
 proxy = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(proxy)
 inspector = load_script('inspector_cli_subject', ROOT / 'scripts/llm_inspector.py')

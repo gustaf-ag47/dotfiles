@@ -27,7 +27,7 @@ export default function (pi: ExtensionAPI) {
     baseUrl: endpoint,
     auth: {
       apiKey: {
-        name: "Local Claude proxy (credentials managed by claude-token-proxy)",
+        name: "Local Claude proxy (credentials managed by llm-proxy)",
         async login() { return { type: "api_key" as const, key: PROXY_CREDENTIAL }; },
         async resolve() {
           return { auth: { apiKey: PROXY_CREDENTIAL }, source: "local Claude proxy" };

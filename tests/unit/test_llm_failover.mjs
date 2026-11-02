@@ -51,7 +51,7 @@ test('trigger matches only the proxy pool-exhausted error', () => {
 });
 
 const OFFLINE_ERROR = '503 {"type":"error","error":{"type":"overloaded_error","message":'
-  + `"claude-token-proxy: ${OFFLINE_MARKER} \u2014 3 consecutive connection failure(s) reaching api.anthropic.com"}}`;
+  + `"llm-proxy: ${OFFLINE_MARKER} \u2014 3 consecutive connection failure(s) reaching api.anthropic.com"}}`;
 
 test('offline error is distinct from pool exhaustion', () => {
   assert.equal(isOffline(OFFLINE_ERROR), true);

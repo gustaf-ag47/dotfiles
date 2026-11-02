@@ -1,4 +1,4 @@
-// anthropic-pool: make plain `pi` use the local claude-token-proxy for every
+// anthropic-pool: make plain `pi` use the local llm-proxy for every
 // Anthropic request, so no wrapper (`pi-claude-sub`) is needed.
 //
 // What this replaces (bin/pi-claude-sub, retired 2026-09-27):
@@ -86,7 +86,7 @@ export function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string
 
 /** One-line verdict for the startup check; null means nothing to say. */
 export function statusLine(status: { available?: number; tokens?: unknown[] } | null, origin: string): string | null {
-	if (status === null) return `⚠ anthropic pool: claude-token-proxy not reachable at ${origin} — Anthropic models will fail; Codex/DeepSeek unaffected (systemctl --user start claude-token-proxy)`;
+	if (status === null) return `⚠ anthropic pool: llm-proxy not reachable at ${origin} — Anthropic models will fail; Codex/DeepSeek unaffected (systemctl --user start llm-proxy)`;
 	if ((status.available ?? 0) <= 0) return "⚠ anthropic pool: no OAuth account is currently available (run llm-usage for reset times)";
 	return null;
 }

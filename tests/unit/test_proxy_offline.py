@@ -1,5 +1,5 @@
 """A Wi-Fi drop must surface as a transient offline error, never as pool
-exhaustion or a token cooldown. See bin/claude-token-proxy is_offline_error,
+exhaustion or a token cooldown. See bin/llm-proxy is_offline_error,
 offline_message and the request loop."""
 import errno
 import io
@@ -12,8 +12,8 @@ from unittest import mock
 from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
-PROXY_PATH = Path(__file__).resolve().parents[2] / "bin" / "claude-token-proxy"
-proxy = load_script("claude_token_proxy_offline_tests", PROXY_PATH)
+PROXY_PATH = Path(__file__).resolve().parents[2] / "bin" / "llm-proxy"
+proxy = load_script("llm_proxy_offline_tests", PROXY_PATH)
 
 
 class OfflineClassifierTests(unittest.TestCase):

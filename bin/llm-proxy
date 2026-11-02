@@ -1,0 +1,3043 @@
+#!/usr/bin/env python3
+"""Local hot-swapping Anthropic proxy: rotate OAuth tokens by live quota.
+
+(Formerly bin/claude-token-proxy; that name remains as a compatibility symlink.)
+
+Point Claude Code at it and it never has to restart to change tokens:
+
+    llm-proxy &                 # starts on 127.0.0.1:8788
+    ANTHROPIC_BASE_URL=http://127.0.0.1:8788 claude
+
+Per request the proxy injects the `Authorization: Bearer` of the token with the
+most weekly headroom (read live from `anthropic-ratelimit-unified-7d-utilization`
+response headers), skips tokens in 429 cooldown, and on a 429/401/403/529 from
+upstream transparently retries the SAME request with the next-best token. So a
+long-lived `claude` session rolls over to a fresh token mid-stream with no restart
+— the same idea as KarpelesLab/teamclaude, reusing the selection logic from
+claude-token-refresh, dependency-free (Python stdlib only).
+
+Tokens are read from ~/cctoken (lines containing sk-ant-oat... tokens); the file is
+re-read when its mtime changes, so adding or replacing a token needs no restart.
+A token that authenticates badly (401/403) is parked, then re-probed periodically,
+so a re-login heals the pool on its own. Comment lines are ignored, so you can
+label each token with its account email.
+
+Token values are never logged; rows are identified by a short SHA-256 fingerprint.
+
+`GET /_status` returns the live pool as JSON (fingerprints, utilization, validity,
+retry cooldowns, quota status, and local response counters) without touching upstream.
+`GET /_usage` is the same redacted per-token view intended for Waybar and scripts.
+Identity-free Messages requests are normalized to the Claude Code subscription
+shape: only the identity remains in `system`, and other system text moves into
+the first user message. `x-cc-proxy-shape: claude-code` is available to clients
+as an explicit declaration. Requests already carrying the identity are never
+reshaped.
+The proxy refreshes the read-only `/api/oauth/usage` endpoint every five minutes;
+OAuth scope failures are reported per token and never invalidate inference.
+
+Cross-provider quota oracle (operator notes: generic-llm-proxy.md, option c): on the
+same five-minute cadence the proxy polls the ChatGPT/Codex `wham/usage` and
+DeepSeek `/user/balance` endpoints with the credentials pi already holds in
+`~/.pi/agent/auth.json` (read-only; OAuth is never refreshed, `!cmd` keys are never
+executed, tokens are never logged) and exposes them under `providers` in `/_usage`.
+`GET /_route?model=<claude-model>` ranks substitutes across providers from the
+equivalence table `config/llm-proxy/routes.json` (`CC_PROXY_ROUTES` overrides the
+path; re-read on mtime change) — Anthropic pool first via the read-only pick
+preview, then the table order — and says which is routable and why not. It is a
+pure read: nothing is forwarded to another provider by this proxy unless the
+DeepSeek passthrough below is switched on.
+Readings from undocumented endpoints degrade to `unavailable`, never to 0 %.
+
+DeepSeek Anthropic-passthrough (opt-in, decision 4 in the same doc): with
+`CC_PROXY_DEEPSEEK_FALLBACK=1`, a Messages request that NO OAuth token can serve
+(`pick()` returns None: every account parked, cooling or forced down — never on
+mere pressure or threshold) is forwarded unchanged to DeepSeek's Anthropic-compatible
+endpoint `https://api.deepseek.com/anthropic` with `x-api-key` from the DeepSeek
+credential pi holds and the model rewritten per the `deepseek` entry of
+`routes.json`. Gates: the cached balance must be above
+`CC_PROXY_DEEPSEEK_MIN_BALANCE` and `is_available` must not be false, and the
+model must have a `deepseek` route; otherwise the usual "no OAuth account can
+serve" error is returned. The OAuth bearer is never sent to DeepSeek, a DeepSeek
+error (e.g. 402 on a negative balance) is returned to the client as-is and never
+retried against Anthropic, and every fallback request is logged and counted
+(`routing.fallback` in `/_usage`). This changes who is billed and who receives the
+conversation, which is why it is off by default.
+
+Env knobs: CC_PROXY_PORT, CCTOKEN_FILE, CC_PROXY_THRESHOLD (default 0.98),
+CC_PROXY_SEED (1/0), CC_PROXY_MIN_VALID (default 2, warn below this),
+CC_PROXY_WATCH_INTERVAL (default 30s), CC_PROXY_REVALIDATE_INTERVAL (default 600s).
+Token selection (see operator notes: claude-token-rotation-oss.md): CC_PROXY_PICK
+(`pressure` default — spend perishable weekly quota first, model-aware bucket;
+`headroom` — legacy lowest-7d-utilization) and CC_PROXY_PICK_TOLERANCE (default
+1.5 — stickiness band that keeps the previous token, and its prompt cache,
+unless another token's pressure is this many times better). Pressure is
+`min(7d headroom / seconds to 7d reset, 5h headroom / seconds to 5h reset)`;
+unknown utilization/reset means full headroom and a full window. Threshold preference
+applies to both the model's weekly bucket and the 5h bucket.
+429 pacing: CC_PROXY_BURST_WAIT_MAX (default 15s) — a 429 that does not mark a
+spent bucket is a per-minute burst limit, so the proxy waits out Retry-After (up
+to this cap) and retries the SAME token once instead of rotating; rotating would
+only move the burst to another account and throw away the warm prompt cache.
+A quota-429 (`anthropic-ratelimit-unified*-status: rejected`) still cools the
+token down and fails over immediately.
+A control file $XDG_CACHE_HOME/cc-proxy/force_cooldown may list fingerprints
+(whitespace-separated) to treat as cooled-down — used for testing rollover without
+burning real quota.
+Oracle knobs: CC_PROXY_ROUTES (routes.json path), CC_PROXY_DEEPSEEK_MIN_BALANCE
+(default 1.0 — DeepSeek is only routable above this balance), PI_CODING_AGENT_DIR
+(where auth.json lives), DEEPSEEK_ACCOUNT_LABEL (display label for the key),
+CC_PROXY_DEEPSEEK_FALLBACK (default 0; 1 enables the passthrough above).
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import errno
+from collections import OrderedDict
+import hashlib
+import http.client
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
+# Capture the running source revision, not whatever happens to be on disk later.
+RUNNING_REVISION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+STARTED_AT = time.time()
+CONFIG_META: dict[str, dict] = {}
+SERVED: OrderedDict[str, dict] = OrderedDict()
+INSPECT_EVENTS: list[dict] = []
+TELEMETRY_LOCK = threading.RLock()
+
+
+def serialized_config(fn):
+    def wrapped(*args, **kwargs):
+        with TELEMETRY_LOCK:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def inspect_text(value, limit=200):
+    value = re.sub(r"sk-[A-Za-z0-9_.-]+|Bearer\s+\S+", "[redacted]", str(value))
+    return "".join(c for c in value if c.isprintable())[:limit]
+
+
+def inspect_clean(value):
+    if isinstance(value, str):
+        return inspect_text(value, 500)
+    if isinstance(value, dict):
+        return {inspect_text(k): inspect_clean(v) for k, v in list(value.items())[:1000]}
+    if isinstance(value, (list, tuple)):
+        return [inspect_clean(v) for v in value[:1000]]
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return value if value is None or isinstance(value, (bool, int, float)) else None
+
+
+def inspect_event(kind, **fields):
+    with TELEMETRY_LOCK:
+        event = {"kind": kind, **{k: inspect_text(v) for k, v in fields.items()}}
+        now = time.time()
+        if INSPECT_EVENTS and all(INSPECT_EVENTS[-1].get(k) == v for k, v in event.items()):
+            INSPECT_EVENTS[-1].update(last_seen=now, count=INSPECT_EVENTS[-1]["count"] + 1)
+        else:
+            INSPECT_EVENTS.append({**event, "ts": now, "last_seen": now, "count": 1})
+            del INSPECT_EVENTS[:-100]
+
+
+def config_observation(name, path, content=None, error=None):
+    with TELEMETRY_LOCK:
+        previous = CONFIG_META.get(name, {})
+        revision = hashlib.sha256(content.encode()).hexdigest()[:12] if content is not None else None
+        item = {**previous, "path": str(path), "disk_revision": revision, "error": error}
+        if error is None:
+            item.update(loaded_revision=revision, loaded_at=time.time())
+        item["pending"] = error is not None or revision != item.get("loaded_revision")
+        CONFIG_META[name] = item
+        if previous.get("error") != error or previous.get("loaded_revision") != item.get("loaded_revision"):
+            inspect_event("config", table=name, state=error or "loaded", revision=item.get("loaded_revision"))
+
+
+def record_served(session, tok, model, status, provider="anthropic"):
+    """Evidence of upstream acceptance, not inferred affinity or completed generation."""
+    if not session or not 200 <= status < 300:
+        return
+    key = hashlib.sha256(session.encode()).hexdigest()
+    with TELEMETRY_LOCK:
+        now = time.time()
+        old = SERVED.get(key)
+        row = {"account": tok.fp if tok else None, "label": inspect_text(tok.label) if tok else None,
+               "provider": provider, "model": inspect_text(model), "accepted_at": now,
+               "evidence": "upstream HTTP 2xx; stream completion not tracked"}
+        if not old or (old["account"], old["provider"]) != (row["account"], row["provider"]):
+            inspect_event("route", account=row["account"], provider=provider, model=model)
+        SERVED[key] = row
+        SERVED.move_to_end(key)
+        for expired in [k for k, v in SERVED.items() if now - v["accepted_at"] > 21600]:
+            del SERVED[expired]
+        while len(SERVED) > 1000:
+            SERVED.popitem(last=False)
+
+UPSTREAM_HOST = "api.anthropic.com"
+ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
+SWEEP_HOURS = float(os.environ.get("CC_PROXY_SWEEP_HOURS", "12"))
+SWEEP_BOOST = float(os.environ.get("CC_PROXY_SWEEP_BOOST", "2.0"))
+PICK_MODE = os.environ.get("CC_PROXY_PICK", "pressure")  # pressure | headroom (legacy)
+PICK_TOLERANCE = float(os.environ.get("CC_PROXY_PICK_TOLERANCE", "1.5"))
+# Fable models are metered on their own weekly bucket (7d_oi =
+# seven_day_overage_included), separate from the shared 7d bucket — see
+# operator notes: anthropic-ratelimit-buckets.md.
+FABLE_MODEL_RE = re.compile(r"claude-fable", re.IGNORECASE)
+SEED = os.environ.get("CC_PROXY_SEED", "1") != "0"
+MIN_VALID = int(os.environ.get("CC_PROXY_MIN_VALID", "2"))
+WATCH_INTERVAL = float(os.environ.get("CC_PROXY_WATCH_INTERVAL", "30"))
+REVALIDATE_INTERVAL = float(os.environ.get("CC_PROXY_REVALIDATE_INTERVAL", "600"))
+USAGE_INTERVAL = float(os.environ.get("CC_PROXY_USAGE_INTERVAL", "300"))
+CONTROL_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-proxy"
+USAGE_STATE_FILE = CONTROL_DIR / "usage.json"
+# Equivalence table (decision 5 in operator notes: generic-llm-proxy.md). Resolved
+# through the symlink so the systemd unit and the checkout agree on the file.
+ROUTES_FILE = Path(os.environ.get("CC_PROXY_ROUTES")
+                   or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "routes.json")
+CLASSES_FILE = Path(os.environ.get("CC_PROXY_CLASSES")
+                    or Path(__file__).resolve().parent.parent / "config" / "llm-proxy" / "classes.json")
+DEEPSEEK_MIN_BALANCE = float(os.environ.get("CC_PROXY_DEEPSEEK_MIN_BALANCE", "1.0"))
+DEEPSEEK_MONTHLY_CAP = float(os.environ.get("CC_PROXY_DEEPSEEK_MONTHLY_CAP", "20"))
+DEEPSEEK_SPEND = {"month": datetime.now(timezone.utc).strftime("%Y-%m"), "start_balance": None, "min_balance": None}
+STARVED_COUNT = 0
+STARVED_LAST = None
+DEEPSEEK_FALLBACK = os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0") == "1"
+# A client that does its own cross-provider failover (pi's llm-failover extension)
+# sends `x-cc-proxy-fallback: none` so an exhausted pool surfaces as the normal
+# unavailable error instead of a silent DeepSeek answer priced and labelled as Claude.
+FALLBACK_OPT_OUT_HEADER = "x-cc-proxy-fallback"
+DEEPSEEK_HOST = "api.deepseek.com"
+# DeepSeek mounts its Anthropic-compatible API under this prefix; the bare
+# /v1/messages path is a 404 there (checked 2026-09-25).
+DEEPSEEK_ANTHROPIC_PREFIX = "/anthropic"
+PI_AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")).expanduser()
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CODEX_TOPUP_URL = "https://chatgpt.com/codex/settings/usage"
+DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+# Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
+OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+# Presented for every forwarded request: Anthropic gates models on this version
+# and clients (Hermes pins 2.1.83) advertise stale ones that upstream rejects.
+OAUTH_USER_AGENT = "claude-code/2.1.280"
+FAILOVER_STATUSES = {401, 403, 429, 529}
+# A 429 either means "this bucket is spent" (rotate) or "you are going too fast"
+# (wait). Only the former is worth a failover — see operator notes:
+# claude-token-rotation-oss.md and anthropic-ratelimit-buckets.md §3.
+BURST_WAIT_MAX = float(os.environ.get("CC_PROXY_BURST_WAIT_MAX", "15"))
+UNIFIED_STATUS_RE = re.compile(r"^anthropic-ratelimit-unified-(?:[a-z0-9_]+-)?status$")
+# `representative-claim` names the bucket the account-level status refers to,
+# using the long name; the per-bucket headers use these abbreviations.
+CLAIM_ABBREV = {
+    "five_hour": "5h",
+    "seven_day": "7d",
+    "seven_day_opus": "7d_opus",
+    "seven_day_sonnet": "7d_sonnet",
+    "seven_day_overage_included": "7d_oi",
+    "five_hour_overage_included": "5h_oi",
+    "overage": "overage",
+}
+HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "proxy-connection", "te", "trailer", "upgrade"}
+
+
+def fp(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def log(msg: str) -> None:
+    print(f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} cc-proxy: {msg}", file=sys.stderr, flush=True)
+
+
+def load_tokens(path: str) -> list[str]:
+    """Extract tokens from the file, ignoring comment lines so rows can be labelled."""
+    text = Path(path).read_text(encoding="utf-8")
+    out: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for m in TOKEN_RE.finditer(line):
+            if m.group(0) not in out:
+                out.append(m.group(0))
+    return out
+
+
+def load_labels(path: str) -> dict[str, str]:
+    """Map fingerprint -> trailing comment on the token's line, or the preceding one."""
+    labels: dict[str, str] = {}
+    pending = ""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return labels
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            pending = stripped.lstrip("#").strip()
+            continue
+        m = TOKEN_RE.search(line)
+        if not m:
+            pending = ""
+            continue
+        after = line[m.end():]
+        inline = after.split("#", 1)[1].strip() if "#" in after else ""
+        labels[fp(m.group(0))] = inline or pending
+        pending = ""
+    return labels
+
+
+class Tok:
+    def __init__(self, token: str):
+        self.token = token
+        self.fp = fp(token)
+        self.u5: float | None = None
+        self.u7: float | None = None
+        self.u7_oi: float | None = None
+        self.header_observed_at: dict[str, float] = {}
+        self.u5_reset: str | None = None
+        self.u7_reset: str | None = None
+        self.u7_oi_reset: str | None = None
+        self.unified_status: str | None = None
+        self.cooldown_until = 0.0  # shared/unknown limits apply to every model
+        self.model_cooldowns: dict[str, float] = {}
+        self.valid = True
+        self.last_status: int | None = None
+        self.label = ""
+        self.invalid_since = 0.0
+        self.last_revalidate = 0.0
+        self.quota: dict | None = None
+        self.quota_status: int | None = None
+        self.quota_error = ""
+        self.quota_checked_at = 0.0
+        self.quota_retry_until = 0.0
+        self.quota_scope_denied = False
+        self.requests = 0
+        self.responses = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+        self.by_model: dict[str, dict[str, int]] = {}
+        self.last_429: dict | None = None
+        self.request_scoped_429s = 0
+
+    def name(self) -> str:
+        return f"{self.fp} ({self.label})" if self.label else self.fp
+
+    def snapshot(self) -> dict:
+        now = time.time()
+        windows = {"5h": (self.u5, self.u5_reset), "7d": (self.u7, self.u7_reset),
+                   "7d_oi": (self.u7_oi, self.u7_oi_reset)}
+        forecasts = {}
+        for key, (value, reset) in windows.items():
+            quota_key = {"5h": "five_hour", "7d": "seven_day", "7d_oi": "seven_day_overage_included"}[key]
+            quota_window = (self.quota or {}).get(quota_key, {}) if isinstance(self.quota, dict) else {}
+            quota_used = quota_window.get("utilization") if isinstance(quota_window, dict) else None
+            if isinstance(quota_used, (int, float)):
+                value = quota_used / 100 if quota_used > 1 else quota_used
+                reset = quota_window.get("resets_at") or quota_window.get("reset_at") or reset
+            forecasts[key] = forecast(SAMPLES.get(self.fp, {}).get(key, []), value, _iso_epoch(reset), now)
+        return {
+            "fp": self.fp,
+            "label": self.label,
+            "valid": self.valid,
+            "u5": self.u5,
+            "u7": self.u7,
+            "u7_oi": self.u7_oi,
+            "header_observed_at": dict(self.header_observed_at),
+            "u5_reset": self.u5_reset,
+            "u7_reset": self.u7_reset,
+            "u7_oi_reset": self.u7_oi_reset,
+            "forecast": forecasts,
+            "unified_status": self.unified_status,
+            "last_status": self.last_status,
+            "cooldown_remaining": round(max(0.0, self.cooldown_until - now), 1),
+            "cooldown_until": datetime.fromtimestamp(self.cooldown_until, timezone.utc).isoformat()
+            if self.cooldown_until > now else None,
+            "model_cooldowns": {
+                scope: datetime.fromtimestamp(until, timezone.utc).isoformat()
+                for scope, until in self.model_cooldowns.items() if until > now
+            },
+            "forced_down": self.fp in forced_cooldown_fps(),
+            "quota": self.quota,
+            "quota_status": self.quota_status,
+            "quota_error": self.quota_error,
+            "quota_checked_at": datetime.fromtimestamp(self.quota_checked_at, timezone.utc).isoformat()
+            if self.quota_checked_at else None,
+            "quota_retry_until": datetime.fromtimestamp(self.quota_retry_until, timezone.utc).isoformat()
+            if self.quota_retry_until > now else None,
+            "quota_scope_denied": self.quota_scope_denied,
+            "last_429": self.last_429,
+            "request_scoped_429s": self.request_scoped_429s,
+            "counters": {
+                "requests": self.requests,
+                "responses": self.responses,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "cache_read_input_tokens": self.cache_read_input_tokens,
+                "cache_creation_input_tokens": self.cache_creation_input_tokens,
+                "by_model": self.by_model,
+            },
+        }
+
+
+STATE: list[Tok] = []
+LOCK = threading.Lock()
+TOKEN_FILE = ""
+FILE_MTIME = 0.0
+PERSISTENCE_ERROR: str | None = None
+# DeepSeek passthrough bookkeeping. `active`/`since`/`model` describe the current
+# exhaustion episode (cleared as soon as a real token is pickable again); the
+# counters survive restarts under the "_deepseek_fallback" key of usage.json.
+FALLBACK_STATE_KEY = "_deepseek_fallback"
+FALLBACK: dict = {"active": False, "since": None, "model": None, "claude_model": None,
+                  "episode_requests": 0, "requests": 0, "by_model": {}}
+SAMPLES: dict[str, dict[str, list[list[float]]]] = {}
+# P4 accounting: class -> model -> counters (persisted as _class_usage). A counter,
+# not a routing.log line: one event per request swamped `routing.recent`.
+CLASS_USAGE: dict[str, dict[str, dict[str, int]]] = {}
+ROUTING_LOG = CONTROL_DIR / "routing.log"
+MAX_SAMPLES = 200
+RAMP_CONCURRENCY = max(1, int(os.environ.get("CC_PROXY_RAMP_CONCURRENCY", "2")))
+RAMP_SECONDS = max(0, float(os.environ.get("CC_PROXY_RAMP_SECONDS", "60")))
+RAMP_LOCK = threading.Lock()
+RAMPS: dict[str, tuple[float, threading.Semaphore]] = {}
+IN_FLIGHT: dict[str, int] = {}
+
+
+def ramp_upstream(tok, method, path, headers, body):
+    """Gate new upstream calls after a move; never wait under the picker LOCK."""
+    with RAMP_LOCK:
+        until, gate = RAMPS.get(tok.fp, (0, None))
+        if until <= time.time():
+            gate = None
+    acquired = gate.acquire(timeout=5) if gate else False
+    with RAMP_LOCK:
+        IN_FLIGHT[tok.fp] = IN_FLIGHT.get(tok.fp, 0) + 1
+    try:
+        return upstream(method, path, headers, body, tok.token)
+    finally:
+        with RAMP_LOCK:
+            IN_FLIGHT[tok.fp] -= 1
+        if acquired:
+            gate.release()
+
+
+def forecast(samples, utilization, reset_at, now=None):
+    now = time.time() if now is None else now
+    points = sorted(samples or [], key=lambda p: p[0])
+    # A drop in utilization is a window reset (rolling 5h, or an early weekly
+    # reset): a slope across it is meaningless (it produced negative burn).
+    for i in range(len(points) - 1, 0, -1):
+        if points[i][1] < points[i - 1][1] - 0.005:
+            points = points[i:]
+            break
+    slope = None
+    if len(points) >= 2 and points[-1][0] - points[0][0] >= 900:
+        slope = max(0.0, (points[-1][1] - points[0][1]) / ((points[-1][0] - points[0][0]) / 3600))
+    projected = None
+    state, exhaust_at = "unknown", None
+    if slope is not None and utilization is not None and reset_at:
+        projected = max(0.0, min(1.0, utilization + slope * max(0, reset_at - now) / 3600))
+        if slope > 0 and utilization < 1 and (1-utilization)/slope * 3600 < reset_at-now:
+            state, exhaust_at = "exhaust", now + (1-utilization)/slope*3600
+        elif projected < .9:
+            state = "waste"
+        else:
+            state = "on_track"
+    needed = None
+    if utilization is not None and reset_at and reset_at > now:
+        needed = max(0.0, 1.0 - utilization) / ((reset_at - now) / 3600)
+    return {"burn_per_hour": slope, "projected_at_reset": projected,
+            "forecast": state, "exhaust_at": exhaust_at, "needed_per_hour": needed}
+
+
+def append_route(event):
+    if event.get("from_fp") and event.get("to_fp") and event.get("from_fp") != event.get("to_fp"):
+        with RAMP_LOCK:
+            RAMPS[event["to_fp"]] = (time.time() + RAMP_SECONDS, threading.Semaphore(RAMP_CONCURRENCY))
+    try:
+        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        if ROUTING_LOG.exists() and ROUTING_LOG.stat().st_size >= 1_000_000:
+            ROUTING_LOG.replace(ROUTING_LOG.with_suffix(".log.1"))
+        with ROUTING_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def recent_routes():
+    try:
+        return [json.loads(line) for line in ROUTING_LOG.read_text().splitlines()[-20:]]
+    except (OSError, ValueError):
+        return []
+
+
+def record_external_sample(series_key, bucket, utilization, reset_at=None, now=None):
+    now = time.time() if now is None else now
+    series = SAMPLES.setdefault(series_key, {}).setdefault(bucket, [])
+    reset_epoch = reset_at if isinstance(reset_at, (int, float)) else _iso_epoch(reset_at)
+    if reset_epoch is not None and now >= reset_epoch:
+        series.clear()
+    series.append([now, float(utilization)])
+    del series[:-MAX_SAMPLES]
+
+
+def record_sample(tok):
+    now = time.time()
+    buckets = (("5h", tok.u5, tok.u5_reset), ("7d", tok.u7, tok.u7_reset),
+               ("7d_oi", tok.u7_oi, tok.u7_oi_reset))
+    for name, value, reset in buckets:
+        if value is None:
+            continue
+        series = SAMPLES.setdefault(tok.fp, {}).setdefault(name, [])
+        reset_epoch = _iso_epoch(reset)
+        if reset_epoch is not None and now >= reset_epoch:
+            series.clear()
+        elif reset_epoch is not None and series and series[-1][0] >= reset_epoch:
+            series.clear()
+        series.append([now, float(value)])
+        del series[:-MAX_SAMPLES]
+
+
+def load_usage_state() -> dict:
+    try:
+        data = json.loads(USAGE_STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_usage_state() -> bool:
+    """Persist counters best-effort; telemetry must never break inference."""
+    global PERSISTENCE_ERROR
+    try:
+        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        data = {t.fp: {
+            "requests": t.requests,
+            "responses": t.responses,
+            "input_tokens": t.input_tokens,
+            "output_tokens": t.output_tokens,
+            "cache_read_input_tokens": t.cache_read_input_tokens,
+            "cache_creation_input_tokens": t.cache_creation_input_tokens,
+            "by_model": t.by_model,
+            "quota": quota_snapshot(t),
+        } for t in STATE}
+        data["_samples"] = SAMPLES
+        data["_deepseek_spend"] = DEEPSEEK_SPEND
+        data["_class_usage"] = CLASS_USAGE
+        data["_routing_starved"] = {"count": STARVED_COUNT, "last": STARVED_LAST}
+        if FALLBACK["requests"]:
+            data[FALLBACK_STATE_KEY] = {"provider": "deepseek", "requests": FALLBACK["requests"],
+                                        "by_model": FALLBACK["by_model"]}
+        tmp = USAGE_STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        tmp.replace(USAGE_STATE_FILE)
+    except OSError as exc:
+        error = f"{exc.__class__.__name__}: {exc}"
+        if error != PERSISTENCE_ERROR:
+            log(f"WARNING: usage counters could not be persisted ({error}); continuing without persistence")
+            PERSISTENCE_ERROR = error
+        return False
+    if PERSISTENCE_ERROR is not None:
+        log("usage counter persistence recovered")
+        PERSISTENCE_ERROR = None
+    return True
+
+
+# Header observations survive restarts. The seed probe is a haiku call, so it
+# refreshes 5h/7d but never the 7d_oi (fable) bucket; without this a restart
+# forgets that an account is fable-exhausted and "unknown = full headroom"
+# ranks it first. Cooldowns are kept so a restart cannot bypass upstream backoff.
+QUOTA_FIELDS = ("u5", "u7", "u7_oi", "u5_reset", "u7_reset", "u7_oi_reset", "unified_status")
+
+
+def quota_snapshot(t: Tok) -> dict:
+    snap = {key: getattr(t, key) for key in QUOTA_FIELDS}
+    snap["header_observed_at"] = dict(t.header_observed_at)
+    snap["cooldown_until"] = t.cooldown_until
+    snap["model_cooldowns"] = t.model_cooldowns
+    return snap
+
+
+def restore_quota(tok: Tok, saved: dict, now: float | None = None) -> None:
+    """Only fill fields that are still unknown; live headers always win."""
+    if not isinstance(saved, dict):
+        return
+    now = time.time() if now is None else now
+    for key in QUOTA_FIELDS:
+        if getattr(tok, key) is None and saved.get(key) is not None:
+            setattr(tok, key, saved[key])
+            observed = (saved.get("header_observed_at") or {}).get(key)
+            if isinstance(observed, (int, float)):
+                tok.header_observed_at[key] = observed
+    cooldown = saved.get("cooldown_until")
+    if isinstance(cooldown, (int, float)) and cooldown > now:
+        tok.cooldown_until = max(tok.cooldown_until, float(cooldown))
+    scoped = saved.get("model_cooldowns")
+    if isinstance(scoped, dict):
+        for scope, until in scoped.items():
+            if isinstance(until, (int, float)) and until > now:
+                tok.model_cooldowns[scope] = max(tok.model_cooldowns.get(scope, 0.0), float(until))
+
+
+def restore_usage_state() -> None:
+    data = load_usage_state()
+    for tok in STATE:
+        saved = data.get(tok.fp, {})
+        for key in ("requests", "responses", "input_tokens", "output_tokens",
+                    "cache_read_input_tokens", "cache_creation_input_tokens"):
+            setattr(tok, key, int(saved.get(key, 0) or 0))
+        models = saved.get("by_model", {})
+        tok.by_model = models if isinstance(models, dict) else {}
+        restore_quota(tok, saved.get("quota"))
+    global SAMPLES
+    global DEEPSEEK_SPEND, STARVED_COUNT, STARVED_LAST
+    spend = data.get("_deepseek_spend", {})
+    if isinstance(spend, dict):
+        DEEPSEEK_SPEND = {"month": spend.get("month"), "start_balance": spend.get("start_balance"), "min_balance": spend.get("min_balance")}
+    starved = data.get("_routing_starved", {})
+    if isinstance(starved, dict):
+        STARVED_COUNT = int(starved.get("count", 0) or 0)
+        STARVED_LAST = starved.get("last")
+    global CLASS_USAGE
+    saved_classes = data.get("_class_usage", {})
+    CLASS_USAGE = saved_classes if isinstance(saved_classes, dict) else {}
+    saved_samples = data.get("_samples", {})
+    SAMPLES = saved_samples if isinstance(saved_samples, dict) else {}
+    now = time.time()
+    valid_fps = {tok.fp for tok in STATE}
+    for fingerprint in list(SAMPLES):
+        if (fingerprint not in valid_fps and not fingerprint.startswith("codex:")) or not isinstance(SAMPLES[fingerprint], dict):
+            SAMPLES.pop(fingerprint, None)
+            continue
+        for bucket, points in list(SAMPLES[fingerprint].items()):
+            reset = {"5h": next((t.u5_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d": next((t.u7_reset for t in STATE if t.fp == fingerprint), None),
+                     "7d_oi": next((t.u7_oi_reset for t in STATE if t.fp == fingerprint), None)}.get(bucket)
+            boundary = _iso_epoch(reset)
+            cleaned = [p for p in points if isinstance(p, list) and len(p) == 2
+                       and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))
+                       and p[0] <= now and now-p[0] < 8*86400
+                       and (boundary is None or p[0] > boundary)] if isinstance(points, list) else []
+            SAMPLES[fingerprint][bucket] = cleaned[-MAX_SAMPLES:]
+    saved = data.get(FALLBACK_STATE_KEY, {})
+    if isinstance(saved, dict):
+        FALLBACK["requests"] = int(saved.get("requests", 0) or 0)
+        models = saved.get("by_model", {})
+        FALLBACK["by_model"] = models if isinstance(models, dict) else {}
+
+
+def _hdr_float(headers, name: str) -> float | None:
+    val = headers.get(name)
+    try:
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _hdr_epoch(headers, name: str) -> str | None:
+    val = headers.get(name)
+    try:
+        epoch = float(val) if val is not None else 0
+        if epoch <= 0:
+            return None
+        if epoch < 1e12:
+            epoch *= 1000
+        return datetime.fromtimestamp(epoch / 1000, timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def retry_after_seconds(headers, default: float = 60.0) -> float:
+    """Parse Retry-After as delta-seconds or HTTP-date; never trust it to be an int."""
+    raw = headers.get("retry-after")
+    if not raw:
+        return default
+    try:
+        return max(1.0, float(raw.strip()))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        when = parsedate_to_datetime(raw)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max(1.0, (when - datetime.now(timezone.utc)).total_seconds())
+    except Exception:
+        return default
+
+
+def header_map(headers) -> dict[str, str]:
+    """Lower-cased snapshot of a header container (http.client Message or dict)."""
+    try:
+        items = headers.items()
+    except AttributeError:
+        return {}
+    return {str(k).lower(): ("" if v is None else str(v)) for k, v in items}
+
+
+def classify_429(headers) -> str:
+    """Tell a spent quota bucket apart from a per-minute burst limit.
+
+    "quota" when the response says a bucket is done for this window — the
+    account-level `anthropic-ratelimit-unified-status: rejected`, any per-bucket
+    `anthropic-ratelimit-unified-<claim>-status: rejected`, or the bucket named
+    by `representative-claim` reporting full utilization. Anything else is
+    "burst": the account still has quota, we are just sending too fast.
+    """
+    hdrs = header_map(headers)
+    for name, value in hdrs.items():
+        if UNIFIED_STATUS_RE.match(name) and value.strip().lower() == "rejected":
+            return "quota"
+    claim = hdrs.get("anthropic-ratelimit-unified-representative-claim", "").strip().lower()
+    abbrev = CLAIM_ABBREV.get(claim)
+    if abbrev:
+        try:
+            if float(hdrs.get(f"anthropic-ratelimit-unified-{abbrev}-utilization", "")) >= 1.0:
+                return "quota"
+        except ValueError:
+            pass
+    return "burst"
+
+
+def burst_pause_seconds(headers, cap: float | None = None) -> float | None:
+    """How long to pause and retry the same token, or None to cool down + fail over.
+
+    Only a burst-429 carrying an explicit Retry-After within the cap is worth
+    waiting for; a missing Retry-After, an over-cap one, or a quota-429 all take
+    the historical rotate-now path.
+    """
+    limit = BURST_WAIT_MAX if cap is None else cap
+    if limit <= 0 or classify_429(headers) != "burst":
+        return None
+    if not header_map(headers).get("retry-after", "").strip():
+        return None
+    wait = retry_after_seconds(headers)
+    return wait if wait <= limit else None
+
+
+def model_scope(model: str) -> str:
+    if FABLE_MODEL_RE.search(model or ""):
+        return "fable"
+    for family in ("opus", "sonnet"):
+        if f"claude-{family}" in (model or "").lower():
+            return family
+    return "other"
+
+
+def cooldown_deadline(tok: Tok, model: str) -> float:
+    return max(tok.cooldown_until, tok.model_cooldowns.get(model_scope(model), 0.0))
+
+
+def quota_cooldown_scope(headers) -> str | None:
+    """Scope only explicitly identified model quotas; unknown/burst stays shared.
+
+    A representative claim identifies the blocking bucket, not every utilization
+    header in the response. Never infer scope from a retained full bucket alone.
+    """
+    if classify_429(headers) != "quota":
+        return None
+    hdrs = header_map(headers)
+    scopes = {
+        "seven_day_overage_included": "fable",
+        "five_hour_overage_included": "fable",
+        "seven_day_opus": "opus",
+        "seven_day_sonnet": "sonnet",
+    }
+    claim = hdrs.get("anthropic-ratelimit-unified-representative-claim", "").strip().lower()
+    if claim:
+        return scopes.get(claim)
+    rejected = [name for name, abbrev in CLAIM_ABBREV.items()
+                if hdrs.get(f"anthropic-ratelimit-unified-{abbrev}-status", "").lower() == "rejected"]
+    identified = {scopes.get(name) for name in rejected}
+    return identified.pop() if len(identified) == 1 else None
+
+
+# 429s that describe the *request*, not the account: every account answers the
+# same way, so cooling the account down (and failing over) only starves every
+# other session. Seen 2026-10-06: one oversized Opus request cooled all three
+# accounts for 60s every minute for hours.
+REQUEST_SCOPED_429_RE = re.compile(
+    r"long context|extra usage is required|usage credits are required|prompt is too long|context window",
+    re.IGNORECASE)
+REJECTION_LOG_MAX = 300
+
+
+def error_message(raw: bytes) -> str:
+    """The upstream error message (or a bounded raw snippet) for logging."""
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+        err = data.get("error") if isinstance(data, dict) else None
+        if isinstance(err, dict) and err.get("message"):
+            return str(err.get("type") or "error") + ": " + str(err["message"])[:REJECTION_LOG_MAX]
+    except (ValueError, AttributeError):
+        pass
+    return raw[:REJECTION_LOG_MAX].decode("utf-8", "replace").replace("\n", " ")
+
+
+def is_request_scoped_429(message: str, headers=None) -> bool:
+    """True when the 429 rejects this request's shape/billing lane, not the account.
+
+    Anthropic answers OAuth requests that fail its Claude Code body-shape /
+    subscription classifier with a bare `rate_limit_error: Error` (or a
+    "monthly spend limit" overage message) and *no* unified rate-limit status
+    headers. Every account answers that request the same way.
+    """
+    if REQUEST_SCOPED_429_RE.search(message or ""):
+        return True
+    hdrs = header_map(headers) if headers is not None else {}
+    has_unified_status = any(UNIFIED_STATUS_RE.match(name) for name in hdrs)
+    text = (message or "").strip().lower()
+    return not has_unified_status and (text in ("rate_limit_error: error", "error")
+                                       or "monthly spend limit" in text)
+
+
+class BufferedResponse:
+    """An already-read upstream response that `_stream` can still relay."""
+
+    def __init__(self, resp, raw: bytes):
+        import io
+        self.status = resp.status
+        self.headers = resp.headers
+        try:
+            self._headers = [(str(k), str(v)) for k, v in resp.getheaders()]
+        except Exception:
+            self._headers = [(str(k), str(v)) for k, v in header_map(resp.headers).items()]
+        self._body = io.BytesIO(raw)
+
+    def getheader(self, name, default=None):
+        for key, value in self._headers:
+            if key.lower() == name.lower():
+                return value
+        return default
+
+    def getheaders(self):
+        return self._headers
+
+    def read(self, amt=None):
+        return self._body.read() if amt is None else self._body.read(amt)
+
+
+def apply_cooldown(tok: Tok, headers) -> str:
+    scope = quota_cooldown_scope(headers)
+    until = time.time() + retry_after_seconds(headers)
+    if scope:
+        tok.model_cooldowns[scope] = max(tok.model_cooldowns.get(scope, 0.0), until)
+    else:
+        tok.cooldown_until = max(tok.cooldown_until, until)
+    return scope or "account"
+
+
+def update_from_headers(tok: Tok, headers) -> None:
+    u5 = _hdr_float(headers, "anthropic-ratelimit-unified-5h-utilization")
+    u7 = _hdr_float(headers, "anthropic-ratelimit-unified-7d-utilization")
+    u7_oi = _hdr_float(headers, "anthropic-ratelimit-unified-7d_oi-utilization")
+    # A Sonnet/Haiku response must not freshen a retained Fable observation.
+    for key, value in (("u5", u5), ("u7", u7), ("u7_oi", u7_oi)):
+        if value is not None:
+            setattr(tok, key, value)
+            tok.header_observed_at[key] = time.time()
+    tok.u5_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-5h-reset") or tok.u5_reset
+    tok.u7_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-7d-reset") or tok.u7_reset
+    tok.u7_oi_reset = _hdr_epoch(headers, "anthropic-ratelimit-unified-7d_oi-reset") or tok.u7_oi_reset
+    status = headers.get("anthropic-ratelimit-unified-7d-status")
+    if status:
+        tok.unified_status = status
+    record_sample(tok)
+
+
+def session_key_from(headers, body: bytes) -> str | None:
+    """Derive conversation affinity from explicit header, metadata, then system prompt."""
+    session_key = headers.get("x-cc-proxy-session")
+    try:
+        payload = json.loads(body)
+        if not session_key and isinstance(payload, dict):
+            metadata = payload.get("metadata")
+            session_key = metadata.get("user_id") if isinstance(metadata, dict) else None
+            if not session_key and payload.get("system"):
+                system = json.dumps(payload["system"], sort_keys=True, separators=(",", ":"))
+                session_key = "system:" + hashlib.sha256(system.encode()).hexdigest()
+    except (TypeError, ValueError, UnicodeDecodeError):
+        pass
+    return session_key
+
+
+def request_model(body: bytes) -> str:
+    try:
+        model = json.loads(body).get("model")
+        return str(model) if model else "unknown"
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
+def record_request(tok: Tok, model: str, class_name: str | None = None) -> None:
+    tok.requests += 1
+    bucket = tok.by_model.setdefault(model, {
+        "requests": 0, "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    })
+    bucket["requests"] += 1
+    if class_name:
+        _model_bucket(CLASS_USAGE.setdefault(class_name, {}), model)["requests"] += 1
+    with LOCK:
+        save_usage_state()
+
+
+def _usage_values(usage) -> dict[str, int] | None:
+    if not isinstance(usage, dict):
+        return None
+    values = {
+        key: int(usage.get(key, 0) or 0)
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                    "cache_creation_input_tokens")
+    }
+    return values if any(values.values()) else None
+
+
+def _model_bucket(by_model: dict, model: str) -> dict:
+    return by_model.setdefault(model, {
+        "requests": 0, "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    })
+
+
+def add_usage(tok: Tok | None, model: str, usage: dict, class_name: str | None = None) -> None:
+    """Record usage reported by a JSON or SSE response, if present.
+
+    `tok` is None for a DeepSeek passthrough response; those tokens are
+    counted under the fallback ledger, never against an OAuth account.
+    """
+    values = _usage_values(usage)
+    if values is None:
+        return
+    if tok is None:
+        bucket = _model_bucket(FALLBACK["by_model"], model)
+    else:
+        for key, value in values.items():
+            setattr(tok, key, getattr(tok, key) + value)
+        bucket = _model_bucket(tok.by_model, model)
+    for key, value in values.items():
+        bucket[key] += value
+    if class_name:
+        class_bucket = _model_bucket(CLASS_USAGE.setdefault(class_name, {}), model)
+        for key, value in values.items():
+            class_bucket[key] += value
+    with LOCK:
+        save_usage_state()
+
+
+def record_fallback_request(model: str, target: str) -> None:
+    """One more request served by DeepSeek for `model` (billed as `target`)."""
+    now = time.time()
+    with LOCK:
+        if not FALLBACK["active"]:
+            FALLBACK.update(active=True, since=datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                            episode_requests=0)
+        FALLBACK["model"], FALLBACK["claude_model"] = target, model
+        FALLBACK["episode_requests"] += 1
+        FALLBACK["requests"] += 1
+        _model_bucket(FALLBACK["by_model"], model)["requests"] += 1
+        save_usage_state()
+
+
+def clear_fallback(reason: str) -> None:
+    """A real token is pickable again: end the exhaustion episode (caller holds LOCK)."""
+    if FALLBACK["active"]:
+        log(f"deepseek fallback ended ({reason}) after {FALLBACK['episode_requests']} request(s)")
+        FALLBACK.update(active=False, since=None, model=None, claude_model=None, episode_requests=0)
+
+
+def usage_from_json(body: bytes) -> dict | None:
+    try:
+        data = json.loads(body)
+        return data.get("usage") if isinstance(data, dict) else None
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def usage_from_sse_line(line: bytes) -> dict | None:
+    if not line.startswith(b"data:"):
+        return None
+    raw = line[5:].strip()
+    if not raw or raw == b"[DONE]":
+        return None
+    try:
+        event = json.loads(raw)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+    if event.get("type") == "message_start":
+        return event.get("message", {}).get("usage")
+    if event.get("type") == "message_delta":
+        return event.get("usage")
+    return None
+
+
+def fetch_oauth_usage(tok: Tok) -> None:
+    """Read subscription quota without spending message quota.
+
+    This endpoint can legitimately return 403 for narrowly-scoped OAuth tokens;
+    that must never park the token for normal /v1/messages traffic. Scope-denied
+    tokens are not retried until the token file changes; 429s honor Retry-After.
+    """
+    if tok.quota_scope_denied or time.time() < tok.quota_retry_until:
+        return
+    try:
+        conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=15)
+        conn.request("GET", "/api/oauth/usage", headers={
+            "Authorization": f"Bearer {tok.token}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "accept": "application/json",
+            "content-type": "application/json",
+            "anthropic-dangerous-direct-browser-access": "true",
+            "x-app": "cli",
+            "user-agent": "claude-code/2.1.83",
+        })
+        response = conn.getresponse()
+        body = response.read(2 * 1024 * 1024)
+        conn.close()
+        with LOCK:
+            tok.quota_status = response.status
+            tok.quota_checked_at = time.time()
+            if response.status == 200:
+                try:
+                    parsed = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    parsed = None
+                tok.quota = parsed if isinstance(parsed, dict) else None
+                tok.quota_error = "" if tok.quota is not None else "invalid JSON"
+            else:
+                tok.quota = None
+                try:
+                    error = json.loads(body)
+                    tok.quota_error = error.get("error", {}).get("message", "")
+                except (ValueError, UnicodeDecodeError):
+                    tok.quota_error = body.decode("utf-8", "replace")[:200]
+                if response.status == 403 and "scope" in tok.quota_error.lower():
+                    tok.quota_scope_denied = True
+                if response.status == 429:
+                    tok.quota_retry_until = time.time() + retry_after_seconds(response.headers, 1800)
+        log(f"usage {tok.name()}: HTTP {response.status}")
+    except Exception as exc:
+        with LOCK:
+            tok.quota_status = None
+            tok.quota_checked_at = time.time()
+            tok.quota_error = exc.__class__.__name__
+        log(f"usage {tok.name()}: error {exc.__class__.__name__}")
+
+
+# --- Cross-provider quota adapters -------------------------------------------
+# Copied from scripts/llm_usage.py (2026-09-25) so the proxy stays stdlib-only and
+# single-file; result dicts are whitelisted field by field — no raw passthrough, no
+# exception text (either could carry a credential). Codex `wham/usage` is an
+# undocumented ChatGPT endpoint: any unrecognised shape is `unavailable`, never 0 %.
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def get_json(url: str, headers: dict | None = None):
+    req = urllib.request.Request(url, headers={"Accept": "application/json", **(headers or {})})
+    with urllib.request.build_opener(NoRedirect()).open(req, timeout=8) as response:
+        return json.loads(response.read(1024 * 1024))
+
+
+def numeric(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def read_auth() -> dict:
+    """pi's credential store, read-only. Missing or malformed -> empty."""
+    try:
+        auth = json.loads((PI_AGENT_DIR / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return auth if isinstance(auth, dict) else {}
+
+
+def jwt_claims(token: str) -> dict:
+    """Display claims from the Codex access token (payload only, no signature check)."""
+    try:
+        payload = token.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError, TypeError, UnicodeDecodeError):
+        return {"email": None, "plan": None}
+    if not isinstance(data, dict):
+        return {"email": None, "plan": None}
+    profile = data.get("https://api.openai.com/profile")
+    auth = data.get("https://api.openai.com/auth")
+    return {
+        "email": profile.get("email") if isinstance(profile, dict) else None,
+        "name": profile.get("name") if isinstance(profile, dict) else None,
+        "plan": auth.get("chatgpt_plan_type") if isinstance(auth, dict) else None,
+    }
+
+
+def codex(auth: dict) -> dict:
+    credential = auth.get("openai-codex") or {}
+    if credential.get("type") != "oauth" or not credential.get("access"):
+        return {"status": "unavailable", "reason": "Log in to openai-codex in Pi."}
+    claims = jwt_claims(credential["access"])
+    if not numeric(credential.get("expires")) or credential["expires"] <= time.time() * 1000:
+        who = f" for {claims['email']}" if claims["email"] else ""
+        return {"status": "unavailable", "account": claims,
+                "reason": f"OAuth{who} expired; use Pi to refresh/login. This reader never refreshes tokens."}
+    headers = {"Authorization": "Bearer " + credential["access"], "User-Agent": "pi-llm-usage"}
+    if credential.get("accountId"):
+        headers["ChatGPT-Account-Id"] = credential["accountId"]
+    data = get_json(CODEX_USAGE_URL, headers)
+    windows = []
+    limits = data.get("rate_limit") or {}
+    for name in ("primary_window", "secondary_window"):
+        window = limits.get(name)
+        if isinstance(window, dict):
+            windows.append({"name": name, "used_percent": numeric(window.get("used_percent")),
+                            "window_seconds": numeric(window.get("limit_window_seconds")),
+                            "reset_at": numeric(window.get("reset_at"))})
+    for index, extra in enumerate(data.get("additional_rate_limits") or []):
+        if not isinstance(extra, dict):
+            continue
+        rate = extra.get("rate_limit") or extra
+        if not isinstance(rate, dict):
+            continue
+        for name in ("primary_window", "secondary_window"):
+            window = rate.get(name)
+            if isinstance(window, dict) and numeric(window.get("limit_window_seconds")) == 18000:
+                windows.append({"name": f"additional_{index}_{name}",
+                                "used_percent": numeric(window.get("used_percent")),
+                                "window_seconds": 18000, "reset_at": numeric(window.get("reset_at"))})
+    if not windows:
+        return {"status": "unavailable", "account": claims,
+                "reason": "Subscription endpoint returned no recognized quota windows."}
+    models = {}
+    for slug, row in (data.get("model_usage") or {}).items():
+        if isinstance(row, dict):
+            models[str(slug)] = {"available": row.get("available"), "available_at": row.get("available_at"),
+                                 "credits_would_enable": row.get("credits_would_enable")}
+    credits = data.get("credits") if isinstance(data.get("credits"), dict) else {}
+    reached = data.get("rate_limit_reached_type")
+    upsell = data.get("rate_limit_upsell") if isinstance(data.get("rate_limit_upsell"), dict) else {}
+    reset_credits = data.get("rate_limit_reset_credits") if isinstance(data.get("rate_limit_reset_credits"), dict) else {}
+    return {"status": "ok", "kind": "subscription quota",
+            "account": {"email": data.get("email") or claims["email"],
+                        "name": claims.get("name"),
+                        "plan": data.get("plan_type") or claims["plan"],
+                        "account_id": str(credential.get("accountId") or "")[:6] or None},
+            "windows": windows,
+            "allowed": limits.get("allowed"), "limit_reached": limits.get("limit_reached"),
+            "reached_type": reached.get("type") if isinstance(reached, dict) else None,
+            "upsell": upsell.get("title"),
+            "models": models,
+            "credits": {key: credits.get(key) for key in
+                        ("balance", "has_credits", "unlimited", "overage_limit_reached")},
+            "reset_credits": numeric(reset_credits.get("available_count")),
+            "topup_url": CODEX_TOPUP_URL,
+            "note": "ChatGPT subscription only; read-only internal endpoint, not OpenAI API billing."}
+
+
+def deepseek_key(auth: dict) -> str | None:
+    credential = auth.get("deepseek")
+    if credential is not None:
+        if credential.get("type") != "api_key":
+            return None
+        key = credential.get("key") or ""
+        if key.startswith("!"):
+            return None  # Status tools must not execute arbitrary credential commands.
+        env = {**os.environ, **credential.get("env", {})}
+        return re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda m: env.get(m[1] or m[2], ""), key) or None
+    return os.environ.get("DEEPSEEK_API_KEY")
+
+
+def deepseek_label(auth: dict, key: str) -> str:
+    """Decision 6: env label, then auth.json `label`, then the key's last four."""
+    credential = auth.get("deepseek") or {}
+    return (os.environ.get("DEEPSEEK_ACCOUNT_LABEL") or credential.get("label")
+            or f"key …{key[-4:]}")
+
+
+def deepseek(auth: dict) -> dict:
+    key = deepseek_key(auth)
+    if not key:
+        return {"status": "unavailable",
+                "reason": "No supported DeepSeek API key configured (credential commands are not executed)."}
+    label = deepseek_label(auth, key)
+    data = get_json(DEEPSEEK_BALANCE_URL, {"Authorization": "Bearer " + key})
+    balances = [{field: row.get(field) for field in ("currency", "total_balance", "granted_balance", "topped_up_balance")}
+                for row in data.get("balance_infos", []) if isinstance(row, dict)]
+    if not balances:
+        return {"status": "unavailable", "label": label,
+                "reason": "Balance endpoint returned no recognized balances."}
+    return {"status": "ok", "kind": "prepaid balance", "label": label, "available": data.get("is_available"),
+            "balances": balances, "topup_url": "https://platform.deepseek.com/top_up",
+            "note": "Balance is not a subscription quota or a session cost estimate."}
+
+
+# cli-chat-proxy.grok.com is the Grok Build CLI's own backend, not the documented
+# xAI Inference API (operator notes: grok-oauth-pi-community.md). This mirrors the
+# community adapter's reverse-engineered quota probe. Never used for inference
+# here. Two read-only token sources, tried in order: (1) Pi's own grok-build
+# OAuth credential in auth.json (sibling work); (2) if absent, the
+# sibling-owned read-only CLI bridge (bin/grok-oauth-token / scripts/grok_oauth.py)
+# that reads an existing `grok login --device-auth` session from
+# $GROK_HOME/auth.json. Neither path writes or refreshes anything -- this file
+# never touches ~/.grok/auth.json directly itself.
+GROK_BASE_URL = "https://cli-chat-proxy.grok.com/v1"
+GROK_DEFAULT_CLIENT_VERSION = "1.0.46"
+GROK_CLI_BRIDGE_ENV = "GROK_OAUTH_BRIDGE"  # override the bridge script path (mainly for tests/alt installs)
+
+
+def grok_cli_bridge_path() -> Path:
+    override = os.environ.get(GROK_CLI_BRIDGE_ENV)
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent / "grok-oauth-token"
+
+
+def grok_cli_fallback_token() -> tuple[str | None, str | None]:
+    """Explicit, mockable seam: the current Grok CLI session's access token, or
+    (None, reason). Shells out to the sibling-owned read-only bridge script,
+    which itself never writes to or refreshes $GROK_HOME/auth.json -- the Grok
+    CLI remains its sole owner. No output besides the bare token is ever kept;
+    stderr is a short, non-secret message by that script's own contract, but is
+    still length-capped here before use.
+    """
+    script = grok_cli_bridge_path()
+    if not script.exists():
+        return None, "No Pi grok-build credential, and the Grok CLI OAuth bridge is not installed."
+    try:
+        result = subprocess.run([str(script)], capture_output=True, text=True, timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None, "Grok CLI OAuth bridge failed to run."
+    if result.returncode != 0:
+        reason = (result.stderr or "").strip().splitlines()[-1] if result.stderr else ""
+        return None, (reason or "No Grok CLI session found; run `grok login --device-auth`.")[:300]
+    token = (result.stdout or "").strip()
+    return (token, None) if token else (None, "Grok CLI OAuth bridge printed no token.")
+
+
+def grok_money(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        inner = value.get("val")
+        if isinstance(inner, (int, float)) and not isinstance(inner, bool):
+            return inner
+    return None
+
+
+def grok_clamp_percent(value) -> float | None:
+    n = numeric(value)
+    return max(0.0, min(100.0, float(n))) if n is not None else None
+
+
+def grok_ratio_percent(used, limit) -> float | None:
+    if isinstance(used, (int, float)) and isinstance(limit, (int, float)) and limit > 0:
+        return grok_clamp_percent(100.0 * used / limit)
+    return None
+
+
+def grok_jwt_email(access: str) -> str | None:
+    try:
+        segment = access.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+    except (IndexError, ValueError, TypeError, UnicodeDecodeError):
+        return None
+    return claims.get("email") if isinstance(claims, dict) and isinstance(claims.get("email"), str) else None
+
+
+def grok_build_token(auth: dict):
+    """Resolve a read-only Grok access token: Pi's own grok-build OAuth
+    credential in auth.json first; if absent, fall back to the Grok CLI's own
+    session via the read-only bridge script. Returns (access, email, source,
+    error) where exactly one of (access, error) is set. Never refreshes
+    anything in either path.
+    """
+    credential = auth.get("grok-build")
+    if isinstance(credential, dict) and credential.get("type") == "oauth" and credential.get("access"):
+        access = credential["access"]
+        email = grok_jwt_email(access) or (credential.get("email") if isinstance(credential.get("email"), str) else None)
+        who = email or "this account"
+        if not numeric(credential.get("expires")) or credential["expires"] <= time.time() * 1000:
+            return None, email, "pi-auth.json", \
+                f"OAuth for {who} expired; use Pi to refresh/login. This reader never refreshes tokens."
+        return access, email, "pi-auth.json", None
+    access, reason = grok_cli_fallback_token()
+    if not access:
+        return None, None, "grok-cli-session", \
+            reason or "Log in to grok-build in Pi, or run `grok login --device-auth`."
+    return access, grok_jwt_email(access), "grok-cli-session", None
+
+
+def grok_build(auth: dict) -> dict:
+    """Grok quota, read-only. Token source is Pi's grok-build OAuth credential
+    in auth.json when present, else the Grok CLI's own session (read-only
+    bridge, never refreshed) -- see `grok_build_token`. Neither path refreshes
+    or writes any credential; this function only ever performs GET requests.
+    """
+    access, email, source, token_error = grok_build_token(auth)
+    if not access:
+        return {"status": "unavailable", **({"account": {"email": email}} if email else {}), "reason": token_error}
+    who = email or "this account"
+    headers = {"Authorization": "Bearer " + access, "X-XAI-Token-Auth": "xai-grok-cli",
+               "x-authenticateresponse": "authenticate-response",
+               "x-grok-client-version": os.environ.get("GROK_CLIENT_VERSION") or GROK_DEFAULT_CLIENT_VERSION,
+               "x-grok-client-identifier": os.environ.get("GROK_CLIENT_NAME") or "pi",
+               "x-grok-client-mode": "interactive"}
+    try:
+        user = get_json(GROK_BASE_URL + "/user?include=subscription", headers)
+        billing = get_json(GROK_BASE_URL + "/billing?format=credits", headers)
+    except urllib.error.HTTPError as error:
+        return {"status": "unavailable", "account": {"email": email},
+                "reason": f"Quota endpoint HTTP {error.code} for {who}; inference may still work."}
+    user = user if isinstance(user, dict) else {}
+    billing = billing if isinstance(billing, dict) else {}
+    config = billing.get("config") if isinstance(billing.get("config"), dict) else {}
+    period = config.get("currentPeriod") if isinstance(config.get("currentPeriod"), dict) else {}
+    is_weekly = period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY"
+    resets_at = period.get("end") or config.get("billingPeriodEnd")
+    resets_at = resets_at if isinstance(resets_at, str) else None
+    monthly_limit = grok_money(config.get("monthlyLimit"))
+    used = grok_money(config.get("used"))
+    used_percent = grok_clamp_percent(config.get("creditUsagePercent"))
+    if used_percent is None:
+        used_percent = grok_ratio_percent(used, monthly_limit)
+    windows = [{"name": "weekly" if is_weekly else "monthly", "used_percent": used_percent, "used": used,
+                "limit": monthly_limit, "unit": "credits", "resets_at": resets_at}]
+    on_demand_cap = grok_money(config.get("onDemandCap"))
+    if on_demand_cap is not None and on_demand_cap > 0:
+        windows.append({"name": "on_demand_cap", "used_percent": None, "used": None, "limit": on_demand_cap,
+                        "unit": "credits", "resets_at": resets_at})
+    tier = user.get("subscriptionTier") if isinstance(user.get("subscriptionTier"), str) else None
+    account_email = email or (user.get("email") if isinstance(user.get("email"), str) else None)
+    return {"status": "ok", "kind": "subscription quota", "account": {"email": account_email, "plan": tier},
+            "windows": windows, "credential_source": source,
+            "note": "Grok Build CLI OAuth session via the unofficial cli-chat-proxy.grok.com backend "
+                    "(reverse-engineered, not an xAI-documented API); read-only, never refreshes."}
+
+
+PROVIDER_ADAPTERS = {"openai-codex": codex, "deepseek": deepseek, "grok-build": grok_build}
+PROVIDER_SOURCES = {
+    "openai-codex": "ChatGPT Codex wham/usage (private endpoint)",
+    "deepseek": "DeepSeek balance API",
+    "grok-build": "Grok Build CLI quota probe (cli-chat-proxy.grok.com, unofficial)",
+}
+PROVIDER_CONFIDENCE = {"openai-codex": "medium", "deepseek": "high", "grok-build": "low"}
+PROVIDER_STATE: dict[str, dict] = {
+    name: {"status": "unavailable", "reason": "not polled yet", "checked_at": None}
+    for name in PROVIDER_ADAPTERS
+}
+
+
+def safe_query(provider: str, auth: dict) -> dict:
+    """Never raise; never echo response bodies or expose exception text."""
+    try:
+        result = PROVIDER_ADAPTERS[provider](auth)
+    except urllib.error.HTTPError as error:
+        result = {"status": "unavailable", "reason": f"Usage endpoint HTTP {error.code}; inference may still work."}
+    except Exception as error:
+        result = {"status": "unavailable", "reason": f"Usage lookup failed ({type(error).__name__})."}
+    checked_at = int(time.time())
+    observed_at = datetime.fromtimestamp(checked_at, timezone.utc).isoformat().replace("+00:00", "Z")
+    return {**result, "source": PROVIDER_SOURCES[provider],
+            "checked_at": checked_at, "observed_at": observed_at, "age_seconds": 0,
+            "confidence": PROVIDER_CONFIDENCE[provider], "reason": result.get("reason")}
+
+
+def update_deepseek_spend(balance: float, now: datetime | None = None) -> dict:
+    """Update monthly observed spend; a balance increase represents a top-up."""
+    now = now or datetime.now(timezone.utc)
+    month = now.strftime("%Y-%m")
+    if DEEPSEEK_SPEND.get("month") != month or DEEPSEEK_SPEND.get("start_balance") is None:
+        DEEPSEEK_SPEND.update(month=month, start_balance=balance, min_balance=balance)
+    elif balance > float(DEEPSEEK_SPEND.get("min_balance", balance)):
+        DEEPSEEK_SPEND.update(start_balance=balance, min_balance=balance)
+    else:
+        DEEPSEEK_SPEND["min_balance"] = min(float(DEEPSEEK_SPEND.get("min_balance", balance)), balance)
+    return DEEPSEEK_SPEND
+
+
+def deepseek_month_spend() -> float:
+    start, low = DEEPSEEK_SPEND.get("start_balance"), DEEPSEEK_SPEND.get("min_balance")
+    return max(0.0, float(start) - float(low)) if start is not None and low is not None else 0.0
+
+
+def refresh_providers() -> None:
+    """Poll every non-Anthropic provider once; runs off the request path."""
+    auth = read_auth()
+    for provider in PROVIDER_ADAPTERS:
+        result = safe_query(provider, auth)
+        with LOCK:
+            PROVIDER_STATE[provider] = result
+            if provider == "deepseek" and result.get("status") == "ok":
+                rows = result.get("balances") or []
+                row = next((r for r in rows if r.get("currency") == "USD"), rows[0] if rows else {})
+                try:
+                    balance = float(row.get("total_balance"))
+                    update_deepseek_spend(balance)
+                    save_usage_state()
+                except (TypeError, ValueError):
+                    pass
+            if provider == "openai-codex" and result.get("status") == "ok":
+                for window in result.get("windows", []):
+                    used = window.get("used_percent")
+                    if isinstance(used, (int, float)):
+                        name = str(window.get("name", "window"))
+                        record_external_sample(f"codex:{name}", name, used / 100, window.get("reset_at"))
+                save_usage_state()
+        log(f"provider {provider}: {result['status']}"
+            + (f" ({result.get('reason')})" if result["status"] != "ok" else ""))
+
+
+def forced_cooldown_fps() -> set[str]:
+    try:
+        return set((CONTROL_DIR / "force_cooldown").read_text(encoding="utf-8").split())
+    except OSError:
+        return set()
+
+
+def percent(value) -> str:
+    try:
+        return f"{float(value):.0f}%"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def quota_bucket_text(quota: dict | None, key: str) -> str:
+    bucket = quota.get(key) if isinstance(quota, dict) else None
+    if not isinstance(bucket, dict):
+        return "unknown"
+    used = bucket.get("utilization", bucket.get("used_percentage"))
+    reset = bucket.get("resets_at", bucket.get("reset_at"))
+    suffix = f", reset {reset}" if reset else ""
+    return f"{percent(used)} used{suffix}"
+
+
+def unavailable_message(model: str = "unknown") -> str:
+    """Explain every account when a request cannot be routed."""
+    now = time.time()
+    forced = forced_cooldown_fps()
+    lines = [
+        f"Claude subscription request unavailable: no OAuth account can serve {model} right now.",
+        "Account status:",
+    ]
+    for tok in STATE:
+        if tok.fp in forced:
+            state = "forced offline"
+        elif not tok.valid:
+            state = f"parked (last HTTP {tok.last_status or 'unknown'})"
+        elif now < cooldown_deadline(tok, model):
+            until = datetime.fromtimestamp(cooldown_deadline(tok, model), timezone.utc).isoformat()
+            state = f"cooldown until {until} for {model}"
+        else:
+            state = "available"
+        quota = tok.quota
+        if quota is not None:
+            usage = f"weekly {quota_bucket_text(quota, 'seven_day')}; 5-hour {quota_bucket_text(quota, 'five_hour')}"
+        else:
+            weekly = percent(tok.u7 * 100) if tok.u7 is not None else "unknown"
+            five_hour = percent(tok.u5 * 100) if tok.u5 is not None else "unknown"
+            usage = f"weekly {weekly} (header); 5-hour {five_hour} (header)"
+        lines.append(f"- {tok.name()}: {state}; {usage}")
+        if tok.quota_error:
+            lines.append(f"  detailed quota unavailable: {tok.quota_error}")
+    lines.append("Run `claude-usage` for the full account report and reset times.")
+    return "\n".join(lines)
+
+
+def health_warn(reason: str) -> None:
+    """Loudly surface a degraded pool — the failure mode that otherwise hides for days."""
+    usable = [t for t in STATE if t.valid]
+    dead = [t for t in STATE if not t.valid]
+    log(f"WARNING: {reason}: {len(usable)}/{len(STATE)} token(s) usable"
+        + (f"; parked: {[t.name() for t in dead]}" if dead else "")
+        + ". Rotation has no headroom — refresh ~/cctoken.")
+
+
+def check_health(reason: str = "pool degraded") -> None:
+    if len([t for t in STATE if t.valid]) < MIN_VALID:
+        health_warn(reason)
+
+
+def sync_tokens(path: str) -> bool:
+    """Re-read the token file, preserving live state for tokens that are still present."""
+    try:
+        tokens = load_tokens(path)
+    except OSError as exc:
+        log(f"token file unreadable ({exc.__class__.__name__}); keeping current pool")
+        return False
+    if not tokens:
+        log("token file has no sk-ant-oat tokens; keeping current pool")
+        return False
+
+    labels = load_labels(path)
+    existing = {t.token: t for t in STATE}
+    added, kept = [], []
+    new_state = []
+    for tok in tokens:
+        cur = existing.get(tok)
+        if cur is None:
+            cur = Tok(tok)
+            added.append(cur)
+        else:
+            kept.append(cur)
+        cur.label = labels.get(cur.fp, "")
+        new_state.append(cur)
+
+    removed = [t for t in STATE if t.token not in set(tokens)]
+    STATE[:] = new_state
+    if added or removed:
+        log(f"reloaded {path}: +{[t.name() for t in added]} -{[t.fp for t in removed]} "
+            f"(kept {len(kept)})")
+    return bool(added)
+
+
+def watchdog(path: str) -> None:
+    """Reload tokens, refresh passive quota, and re-probe parked tokens."""
+    global FILE_MTIME
+    next_usage = 0.0
+    while True:
+        time.sleep(WATCH_INTERVAL)
+        try:
+            mtime = Path(path).stat().st_mtime
+        except OSError:
+            mtime = FILE_MTIME
+        if mtime != FILE_MTIME:
+            FILE_MTIME = mtime
+            with LOCK:
+                added = sync_tokens(path)
+            if added:
+                seed(only_new=True)
+                for tok in list(STATE):
+                    if tok.quota_checked_at == 0:
+                        fetch_oauth_usage(tok)
+            with LOCK:
+                check_health("after token-file reload")
+
+        now = time.time()
+        if now >= next_usage:
+            for tok in list(STATE):
+                fetch_oauth_usage(tok)
+            refresh_providers()
+            next_usage = now + USAGE_INTERVAL
+        with LOCK:
+            stale = [t for t in STATE
+                     if (not t.valid or readings_expired(t, now)) and now - t.last_revalidate >= REVALIDATE_INTERVAL]
+        for tok in stale:
+            was_valid = tok.valid
+            probe(tok, note="refresh" if was_valid else "revalidate")
+            if tok.valid and not was_valid:
+                log(f"token {tok.name()} recovered — back in rotation")
+            with LOCK:
+                void_expired_readings(tok, time.time())
+
+
+# Session affinity: bounded LRU; timestamps also expire idle conversations.
+AFFINITY_MAX = 1000
+AFFINITY_IDLE = 6 * 3600
+LAST_PICK: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
+
+
+def _iso_epoch(value: str | None) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
+
+
+def bucket_key(model: str) -> str:
+    """Which weekly bucket a request for this model debits."""
+    return "oi" if FABLE_MODEL_RE.search(model or "") else "base"
+
+
+def bucket_reset(t: Tok, key: str) -> float | None:
+    return _iso_epoch(t.u7_oi_reset if key == "oi" else t.u7_reset)
+
+
+def bucket_util(t: Tok, key: str, now: float | None = None) -> float | None:
+    """Last observed weekly utilization, or None once that window has reset.
+
+    Utilization comes from response headers, so an account that stopped
+    receiving traffic keeps its last reading forever. Once the window's reset
+    time has passed the reading is void: treating it as unknown (full headroom)
+    lets the account back into rotation so the next response refreshes it.
+    Without this, a token that hit 100% is "over threshold" for good.
+    """
+    now = time.time() if now is None else now
+    reset = bucket_reset(t, key)
+    if reset is not None and reset <= now:
+        return None
+    return t.u7_oi if key == "oi" else t.u7
+
+
+def readings_expired(t: Tok, now: float) -> bool:
+    """A window reset since the last header observation, so its reading is void.
+
+    Idle tokens never receive traffic, so the watch loop re-probes them to
+    replace the void reading instead of guessing until they are picked again.
+    """
+    return any(reset is not None and reset <= now
+               for reset in (_iso_epoch(t.u5_reset), _iso_epoch(t.u7_reset), _iso_epoch(t.u7_oi_reset)))
+
+
+def void_expired_readings(t: Tok, now: float) -> None:
+    """Drop readings a probe could not refresh (haiku responses carry no 7d_oi).
+
+    Unknown is the honest state and stops the watch loop re-probing forever.
+    """
+    for util, reset in (("u5", "u5_reset"), ("u7", "u7_reset"), ("u7_oi", "u7_oi_reset")):
+        epoch = _iso_epoch(getattr(t, reset))
+        if epoch is not None and epoch <= now:
+            setattr(t, util, None)
+            setattr(t, reset, None)
+
+
+def five_hour_util(t: Tok, now: float) -> float | None:
+    reset = _iso_epoch(t.u5_reset)
+    return None if reset is not None and reset <= now else t.u5
+
+
+def sweep_factor(t: Tok, key: str, now: float) -> float:
+    """Boost a wasting weekly window only while its 5h bucket is safe."""
+    reset = bucket_reset(t, key)
+    util = bucket_util(t, key, now)
+    if (reset is None or util is None or not now < reset <= now + SWEEP_HOURS * 3600
+            or (five_hour_util(t, now) or 0.0) >= ROTATE_THRESHOLD):
+        return 1.0
+    window = "7d_oi" if key == "oi" else "7d"
+    fc = forecast(SAMPLES.get(t.fp, {}).get(window, []), util, reset, now)
+    return SWEEP_BOOST if fc["forecast"] == "waste" else 1.0
+
+
+def sweep_threshold(t: Tok, key: str, now: float) -> float:
+    return max(ROTATE_THRESHOLD, .995) if sweep_factor(t, key, now) > 1 else ROTATE_THRESHOLD
+
+
+def pressure(t: Tok, key: str, now: float) -> float:
+    """Minimum weekly and 5h headroom per second until the window expires.
+
+    Quota that is about to reset is free to spend (it vanishes either way),
+    while a distant reset makes the same headroom precious. Highest pressure
+    wins — EDF weighted by headroom, so a soon reset alone does not favour a
+    nearly-drained token (same formula as teamclaude's expiryRouting).
+    Unknown utilization counts as full headroom and an unknown reset as a full
+    week out, matching the legacy convention of trying unknown tokens early
+    and letting the failover path correct us.
+    """
+    def score(util, reset, duration):
+        headroom = 1.0 - (util or 0.0)
+        epoch = _iso_epoch(reset)
+        seconds = max(60.0, epoch - now) if epoch is not None and epoch > now else duration
+        return headroom / seconds
+    weekly = score(bucket_util(t, key, now), bucket_reset(t, key), 7 * 86400.0)
+    five_hour = score(five_hour_util(t, now), t.u5_reset, 5 * 3600.0)
+    return min(weekly, five_hour) * sweep_factor(t, key, now)
+
+
+def _affinity_key(session_key: str | None, bucket: str) -> tuple[str, str]:
+    return (session_key or "global", bucket)
+
+
+def _prune_affinity(now: float) -> None:
+    for key, (_, touched) in list(LAST_PICK.items()):
+        if now - touched > AFFINITY_IDLE:
+            del LAST_PICK[key]
+    while len(LAST_PICK) > AFFINITY_MAX:
+        LAST_PICK.popitem(last=False)
+
+
+def five_hour_pressure(t: Tok, now: float) -> float:
+    reset = _iso_epoch(t.u5_reset)
+    seconds = max(60.0, reset - now) if reset is not None and reset > now else 5 * 3600.0
+    return (1.0 - (five_hour_util(t, now) or 0.0)) / seconds
+
+
+def boundary_move(prev: Tok, pool: list[Tok], key: str, now: float, boundary: bool) -> Tok | None:
+    if not boundary or PICK_MODE != "pressure":
+        return None
+    highest = max(five_hour_pressure(t, now) for t in pool)
+    if five_hour_pressure(prev, now) * PICK_TOLERANCE >= highest:
+        return None
+    band = [t for t in pool if t.fp != prev.fp and five_hour_pressure(t, now) * PICK_TOLERANCE >= highest]
+    return next(t for t in band if t.fp == spread_choice(band, key, now))
+
+
+def spread_choice(band: list[Tok], key: str, now: float) -> str:
+    """Pick the least-affined token in the tolerance band; pressure breaks ties."""
+    counts = {t.fp: sum(1 for (_, bucket), (fp_, touched) in LAST_PICK.items()
+                        if bucket == key and fp_ == t.fp and now - touched <= AFFINITY_IDLE)
+              for t in band}
+    return min(band, key=lambda t: (counts[t.fp], -pressure(t, key, now))).fp
+
+
+CLASS_ORDER = ["mechanical", "research", "build", "interactive"]
+
+
+def escalated_class(class_name: str, session: str | None) -> str:
+    if class_name not in CLASS_ORDER[:-1]:
+        return class_name
+    target = CLASS_ORDER[CLASS_ORDER.index(class_name) + 1]
+    append_route({"ts": datetime.now(timezone.utc).isoformat(), "kind": "escalate", "class": class_name,
+                  "to": target, "session": session})
+    return target
+
+
+def class_eligible(t, class_name: str | None, bucket: str, now: float) -> bool:
+    if not class_name or bucket != "oi":
+        return True
+    ceiling = load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {})
+    if ceiling.get("no_oi"):
+        return False
+    limit = ceiling.get("oi_max_used")
+    return limit is None or t.u7_oi is None or t.u7_oi <= float(limit)
+
+
+def pick(exclude=frozenset(), model: str = "unknown", session_key: str | None = None, class_name: str | None = None, boundary: bool = False) -> Tok | None:
+    """Choose a token for the weekly bucket this request's model debits.
+
+    Eligibility (valid, not cooling, not forced down) and the over-threshold
+    fallback are policy-independent. Among tokens under ROTATE_THRESHOLD in
+    the governing bucket, CC_PROXY_PICK selects:
+      pressure  spend the most perishable quota first (default; see pressure())
+      headroom  legacy lowest shared-7d utilization, bucket-blind
+    """
+    now = time.time()
+    forced = forced_cooldown_fps()
+    eligible = [
+        t for t in STATE
+        if t.valid and t.fp not in exclude and now >= cooldown_deadline(t, model) and t.fp not in forced
+        and class_eligible(t, class_name, bucket_key(model), now)
+    ]
+
+    if PICK_MODE == "headroom":  # legacy rollback path: exact pre-pressure behavior
+        below = [t for t in eligible if (bucket_util(t, "base", now) or 0.0) < ROTATE_THRESHOLD]
+        pool = below or eligible
+        if pool:
+            return min(pool, key=lambda t: (bucket_util(t, "base", now) or 0.0,
+                                            five_hour_util(t, now) or 0.0))
+    else:
+        key = bucket_key(model)
+        below = [t for t in eligible if (bucket_util(t, key, now) or 0.0) < sweep_threshold(t, key, now)
+                 and (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD]
+        pool = below or eligible
+        if pool:
+            best = max(pool, key=lambda t: pressure(t, key, now))
+            _prune_affinity(now)
+            akey = _affinity_key(session_key, key)
+            previous = LAST_PICK.get(akey)
+            prev = next((t for t in pool if previous and t.fp == previous[0]), None)
+            if prev is not None:
+                moved = boundary_move(prev, pool, key, now, boundary and session_key is not None)
+                best = moved or (prev if session_key is not None or
+                                 pressure(prev, key, now) * PICK_TOLERANCE >= pressure(best, key, now) else best)
+            elif previous is None:
+                # Within the tolerance band, spread new sessions across accounts.
+                band = [t for t in pool if pressure(t, key, now) * PICK_TOLERANCE >= pressure(best, key, now)]
+                best = next(t for t in band if t.fp == spread_choice(band, key, now))
+            LAST_PICK[akey] = (best.fp, now)
+            LAST_PICK.move_to_end(akey)
+            _prune_affinity(now)
+            return best
+    # No eligible account remains. Never bypass an upstream cooldown: doing so
+    # defeats backoff and retries exhausted accounts on every incoming request.
+    # Over-threshold but eligible tokens were already considered above.
+    return None
+
+
+ROUTING_PREVIEW_MODELS = {"base": "claude-opus-5", "oi": "claude-fable-5"}
+
+
+def rank_pool(model: str, now: float | None = None, session_key: str | None = None, class_name: str | None = None, messages_len: int | None = None, boundary: bool = False) -> dict:
+    """Dry run of pick() for one model: ranking plus the sticky choice. Never mutates LAST_PICK."""
+    now = time.time() if now is None else now
+    key = "base" if PICK_MODE == "headroom" else bucket_key(model)
+    forced = forced_cooldown_fps()
+    class_ok = {t.fp: class_eligible(t, class_name, bucket_key(model), now) for t in STATE}
+    available = [t for t in STATE if t.valid and t.fp not in forced and now >= cooldown_deadline(t, model)
+                 and class_ok[t.fp]]
+    below = [t for t in available if (bucket_util(t, key, now) or 0.0) < sweep_threshold(t, key, now)
+             and (PICK_MODE == "headroom" or (five_hour_util(t, now) or 0.0) < ROTATE_THRESHOLD)]
+    # The threshold is a preference, not a hard ban: pick() retries available
+    # over-threshold accounts when there are no below-threshold candidates.
+    ranked = []
+    for t in STATE:
+        util = bucket_util(t, key, now)
+        if t.fp in forced:
+            reason = "forced offline"
+        elif not t.valid:
+            reason = "parked"
+        elif not class_ok[t.fp]:
+            reason = "class ceiling"
+        elif now < cooldown_deadline(t, model):
+            reason = "cooldown"
+        elif below and ((util or 0.0) >= sweep_threshold(t, key, now)
+                        or (PICK_MODE != "headroom" and (five_hour_util(t, now) or 0.0) >= ROTATE_THRESHOLD)):
+            reason = "over threshold"
+        else:
+            reason = None
+        ranked.append({"fp": t.fp, "eligible": reason is None, "reason": reason,
+                       "utilization": util, "reset_at": _bucket_reset_iso(t, key),
+                       "sweep": sweep_factor(t, key, now) > 1,
+                       "pressure": pressure(t, key, now) if reason is None else None})
+    ranked.sort(key=lambda r: (not r["eligible"], -(r["pressure"] or 0.0)))
+    chosen = None
+    eligible = [r for r in ranked if r["eligible"]]
+    if eligible:
+        if PICK_MODE == "headroom":
+            candidates = below or available
+            chosen = min(candidates, key=lambda t: (bucket_util(t, key, now) or 0.0,
+                                                    five_hour_util(t, now) or 0.0)).fp
+        else:
+            best = eligible[0]
+            _prune_affinity(now)
+            akey = _affinity_key(session_key, key)
+            previous = LAST_PICK.get(akey)
+            prev = next((r for r in eligible if previous and r["fp"] == previous[0]), None)
+            if prev is not None:
+                prev_token = next(t for t in available if t.fp == prev["fp"])
+                pool_tokens = [t for t in available if any(r["fp"] == t.fp for r in eligible)]
+                moved = boundary_move(prev_token, pool_tokens, key, now,
+                                      session_key is not None and (boundary or messages_len is not None and messages_len <= 2))
+                chosen = (moved or (prev_token if session_key is not None or
+                                    prev["pressure"] * PICK_TOLERANCE >= best["pressure"] else
+                                    next(t for t in pool_tokens if t.fp == best["fp"]))).fp
+            elif previous is None and eligible:
+                band = [r for r in eligible if r["pressure"] * PICK_TOLERANCE >= best["pressure"]]
+                band_tokens = [t for t in available if t.fp in {r["fp"] for r in band}]
+                chosen = spread_choice(band_tokens, key, now)
+            else:
+                chosen = best["fp"]
+    previous = LAST_PICK.get(_affinity_key(session_key, key))
+    return {"model_example": model, "last_pick": (previous[0] if previous else None) if PICK_MODE != "headroom" else None,
+            "would_pick": chosen, "ranking": ranked}
+
+
+def _bucket_reset_iso(t: Tok, key: str) -> str | None:
+    return t.u7_oi_reset if key == "oi" else t.u7_reset
+
+
+def routing_preview() -> dict:
+    """Read-only view of what pick() would choose per weekly bucket."""
+    now = time.time()
+    return {"mode": PICK_MODE, "threshold": ROTATE_THRESHOLD, "tolerance": PICK_TOLERANCE,
+            "buckets": {key: rank_pool(model, now) for key, model in ROUTING_PREVIEW_MODELS.items()}}
+
+
+# --- Equivalence table + route oracle -----------------------------------------
+
+CLASSES: dict[str, dict] = {}
+CLASSES_MTIME: float | None = None
+CLASSES_ERROR: str | None = None
+
+
+@serialized_config
+def load_classes() -> dict[str, dict]:
+    global CLASSES, CLASSES_MTIME, CLASSES_ERROR
+    try:
+        mtime = CLASSES_FILE.stat().st_mtime
+        if mtime == CLASSES_MTIME:
+            return CLASSES
+        content = CLASSES_FILE.read_text(encoding="utf-8")
+        data = json.loads(content)
+        if not isinstance(data, dict) or any(not isinstance(v, dict) for v in data.values()):
+            raise ValueError("classes must be an object of policies")
+        for policy in data.values():
+            validate_route_rows(policy.get("routes", []))
+            ceiling = policy.get("ceiling", {})
+            if not isinstance(ceiling, dict) or not isinstance(ceiling.get("anthropic", {}), dict):
+                raise ValueError("invalid ceiling")
+            anth = ceiling.get("anthropic", {})
+            if "no_oi" in anth and not isinstance(anth["no_oi"], bool):
+                raise ValueError("invalid no_oi")
+            if "oi_max_used" in anth and (not isinstance(anth["oi_max_used"], (int, float)) or not 0 <= anth["oi_max_used"] <= 1):
+                raise ValueError("invalid ceiling utilization")
+        CLASSES, CLASSES_MTIME, CLASSES_ERROR = data, mtime, None
+        config_observation("classes", CLASSES_FILE, content)
+    except (OSError, ValueError, TypeError) as exc:
+        CLASSES_ERROR = exc.__class__.__name__
+        if "mtime" in locals():
+            CLASSES_MTIME = mtime
+        config_observation("classes", CLASSES_FILE, locals().get("content"), CLASSES_ERROR)
+        log(f"classes file {CLASSES_FILE} invalid ({CLASSES_ERROR}); keeping previous table")
+    return CLASSES
+
+
+ROUTES: dict[str, list[list[str]]] = {}
+ROUTES_MTIME: float | None = None
+ROUTES_ERROR: str | None = None
+
+
+def validate_route_rows(rows):
+    if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != 2
+            or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,120}", v) for v in row)
+            for row in rows):
+        raise ValueError("invalid route rows")
+
+
+@serialized_config
+def load_routes() -> dict[str, list[list[str]]]:
+    """routes.json, re-read when its mtime changes; a bad file keeps the last good table."""
+    global ROUTES, ROUTES_MTIME, ROUTES_ERROR
+    try:
+        mtime = ROUTES_FILE.stat().st_mtime
+    except OSError as exc:
+        if ROUTES_ERROR is None:
+            log(f"routes file {ROUTES_FILE} unreadable ({exc.__class__.__name__}); /_route has no table")
+        ROUTES_ERROR = exc.__class__.__name__
+        config_observation("routes", ROUTES_FILE, error=ROUTES_ERROR)
+        return ROUTES
+    if mtime == ROUTES_MTIME:
+        return ROUTES
+    try:
+        content = ROUTES_FILE.read_text(encoding="utf-8")
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("routes must be an object")
+        for rows in data.values():
+            validate_route_rows(rows)
+        table = {
+            str(model): [[str(provider), str(target)] for provider, target in candidates]
+            for model, candidates in data.items()
+        }
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        log(f"routes file {ROUTES_FILE} invalid ({exc.__class__.__name__}); keeping previous table")
+        ROUTES_ERROR = exc.__class__.__name__
+        config_observation("routes", ROUTES_FILE, locals().get("content"), ROUTES_ERROR)
+        ROUTES_MTIME = mtime
+        return ROUTES
+    ROUTES, ROUTES_MTIME, ROUTES_ERROR = table, mtime, None
+    config_observation("routes", ROUTES_FILE, content)
+    log(f"routes loaded from {ROUTES_FILE}: {sorted(table)}")
+    return ROUTES
+
+
+def route_key(model: str, table: dict | None = None) -> str | None:
+    """Table row for a model id: exact, else the longest row that prefixes the model
+    (claude-opus-5-5-20260901 -> claude-opus-5-5), else the nearest row the model
+    prefixes (claude-fable-5 -> claude-fable-5-1)."""
+    table = load_routes() if table is None else table
+    model = (model or "").strip().lower()
+    if not model:
+        return None
+    if model in table:
+        return model
+    prefixes = [key for key in table if model.startswith(key)]
+    if prefixes:
+        return max(prefixes, key=len)
+    families = [key for key in table if key.startswith(model)]
+    return min(families, key=len) if families else None
+
+
+def _pct_left(used) -> float | None:
+    return round(100.0 - used, 1) if numeric(used) is not None else None
+
+
+def _epoch_iso(value) -> str | None:
+    if numeric(value) is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def observation_fields(state: dict, default_source: str) -> dict:
+    """Return only safe freshness metadata for the route oracle."""
+    observed = state.get("checked_at") or state.get("quota_checked_at")
+    if isinstance(observed, str):
+        try:
+            observed = datetime.fromisoformat(observed.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            observed = None
+    age = max(0, int(time.time() - observed)) if isinstance(observed, (int, float)) else None
+    return {"source": state.get("source") or default_source, "age_seconds": age,
+            "confidence": state.get("confidence")}
+
+
+def anthropic_candidate(model: str, class_name: str | None = None) -> dict:
+    """Anthropic pool viewed through the same dry run pick() would take."""
+    ranking = rank_pool(model, class_name=class_name)
+    rows = ranking["ranking"]
+    chosen = next((r for r in rows if r["fp"] == ranking["would_pick"]), None)
+    out = {"provider": "anthropic", "model": model, "routable": chosen is not None, "reason": None,
+           "quota_left_percent": None, "reset_at": None, "account": None,
+           **observation_fields({}, "local Anthropic proxy observation")}
+    if chosen is not None:
+        util = chosen["utilization"]
+        out.update(quota_left_percent=_pct_left(util * 100) if util is not None else None,
+                   reset_at=chosen["reset_at"], account=chosen["fp"])
+        out["pressure"] = chosen.get("pressure")
+        return out
+    reasons = {r["reason"] for r in rows}
+    if not rows or reasons <= {"parked", "forced offline"}:
+        out["reason"] = "no token"
+    elif "cooldown" in reasons:
+        out["reason"] = "cooldown"
+    else:
+        out["reason"] = "exhausted"
+    known = [r["utilization"] for r in rows if r["utilization"] is not None]
+    if known:
+        out["quota_left_percent"] = _pct_left(min(known) * 100)
+    now = time.time()
+    resets = [_iso_epoch(r["reset_at"]) for r in rows if r["reason"] == "over threshold"]
+    resets += [cooldown_deadline(t, model) for t in STATE if now < cooldown_deadline(t, model)]
+    resets = [r for r in resets if r is not None and r > now]
+    if resets:
+        out["reset_at"] = datetime.fromtimestamp(min(resets), timezone.utc).isoformat()
+    return out
+
+
+def codex_on_credits(state: dict) -> bool:
+    """Purchased credits keep serving after the subscription window is spent."""
+    credits = state.get("credits") or {}
+    return bool((credits.get("has_credits") or credits.get("unlimited")) and not credits.get("overage_limit_reached"))
+
+
+def codex_candidate(model: str, state: dict) -> dict:
+    out = {"provider": "openai-codex", "model": model, "routable": False, "reason": "unknown",
+           "quota_left_percent": None, "reset_at": None, "checked_at": state.get("checked_at"),
+           **observation_fields(state, "ChatGPT Codex wham/usage (private endpoint)")}
+    if state.get("status") != "ok":
+        return out
+    windows = [w for w in state.get("windows", []) if numeric(w.get("used_percent")) is not None]
+    if not windows:
+        return out
+    worst = max(windows, key=lambda w: w["used_percent"])
+    out["quota_left_percent"] = _pct_left(worst["used_percent"])
+    out["reset_at"] = _epoch_iso(worst.get("reset_at"))
+    now = time.time()
+    def window_pressure(window):
+        reset = numeric(window.get("reset_at"))
+        short = (window.get("window_seconds") == 18000 or
+                 (window.get("name") == "secondary_window" and window.get("window_seconds") is None))
+        duration = 5 * 3600.0 if short else 7 * 86400.0
+        seconds = max(60.0, reset - now) if reset is not None and reset > now else duration
+        result = max(0.0, 1.0 - window["used_percent"] / 100.0) / seconds
+        fc = (state.get("forecast") or {}).get(window.get("name"))
+        if fc is None and reset is not None:
+            name = window.get("name", "window")
+            fc = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []),
+                          window["used_percent"] / 100, reset, now)
+        if (not short and reset is not None and now < reset <= now + SWEEP_HOURS * 3600
+                and isinstance(fc, dict) and fc.get("forecast") == "waste"
+                and all(w["used_percent"] < ROTATE_THRESHOLD * 100 for w in windows
+                        if w.get("window_seconds") == 18000 or
+                        (w.get("name") == "secondary_window" and w.get("window_seconds") is None))):
+            result *= SWEEP_BOOST
+        return result
+    short_windows = [w for w in windows if w.get("window_seconds") == 18000
+                     or (w.get("name") == "secondary_window" and w.get("window_seconds") is None)]
+    weekly = [w for w in windows if w not in short_windows]
+    out["pressure"] = min([window_pressure(w) for w in weekly or windows] +
+                          [window_pressure(w) for w in short_windows])
+    blocked = (state.get("models") or {}).get(model) or {}
+    if worst["used_percent"] >= 100 or state.get("allowed") is False:
+        if codex_on_credits(state) and blocked.get("available") is not False:
+            out.update(routable=True, reason=None, on_credits=True)
+        else:
+            out["reason"] = "exhausted"
+    elif blocked.get("available") is False:
+        out["reason"] = "model unavailable"
+        out["reset_at"] = blocked.get("available_at") or out["reset_at"]
+    else:
+        out.update(routable=True, reason=None)
+    return out
+
+
+def deepseek_candidate(model: str, state: dict) -> dict:
+    out = {"provider": "deepseek", "model": model, "routable": False, "reason": "unknown",
+           "balance": None, "currency": None, "min_balance": DEEPSEEK_MIN_BALANCE,
+           "proxy_passthrough": DEEPSEEK_FALLBACK, "checked_at": state.get("checked_at"),
+           **observation_fields(state, "DeepSeek balance endpoint")}
+    if state.get("status") != "ok":
+        return out
+    rows = state.get("balances") or []
+    row = next((r for r in rows if r.get("currency") == "USD"), rows[0] if rows else None)
+    try:
+        balance = float(row["total_balance"])
+    except (TypeError, ValueError, KeyError):
+        return out
+    out.update(balance=balance, currency=row.get("currency"))
+    if state.get("available") is False:
+        out["reason"] = "unavailable"
+    elif balance <= DEEPSEEK_MIN_BALANCE:
+        out["reason"] = "balance below floor"
+    elif deepseek_month_spend() >= DEEPSEEK_MONTHLY_CAP:
+        out["reason"] = "monthly cap"
+    else:
+        out.update(routable=True, reason=None)
+    return out
+
+
+def route_payload(model: str, current: str | None = None, class_name: str | None = None) -> dict | None:
+    """Ranked cross-provider candidates for one Claude model, or None when unmapped.
+
+    Anthropic first (what pick() would do), then the routes.json order. Pure:
+    reads cached provider state and the pool, touches no upstream, mutates nothing.
+    """
+    if class_name:
+        classes = load_classes()
+        policy = classes.get(class_name)
+        if policy is None:
+            return None
+        candidates = []
+        for provider, target in policy.get("routes", []):
+            if provider == "anthropic":
+                candidate = anthropic_candidate(target, class_name=class_name)
+                rows = rank_pool(target, class_name=class_name)["ranking"]
+                if not candidate["routable"] and any(r["reason"] == "class ceiling" for r in rows):
+                    candidate["reason"] = "class ceiling"
+            elif provider == "openai-codex":
+                candidate = codex_candidate(target, dict(PROVIDER_STATE.get(provider, {})))
+            elif provider == "deepseek":
+                candidate = deepseek_candidate(target, dict(PROVIDER_STATE.get(provider, {})))
+            else:
+                candidate = {"provider": provider, "model": target, "routable": False, "reason": "unknown"}
+            candidates.append(candidate)
+        routable = [c for c in candidates if c["routable"]]
+        preferred = next((c for c in routable if c["provider"] == "deepseek"), None) if class_name == "mechanical" else None
+        if preferred is None:
+            eligible = [c for c in routable if c["provider"] != "deepseek" and isinstance(c.get("pressure"), (int, float))]
+            preferred = max(eligible, key=lambda c: c["pressure"], default=None)
+            current_candidate = next((c for c in eligible if c["provider"] == current), None)
+            if (current_candidate and preferred and preferred["provider"] != current
+                    and preferred["pressure"] <= current_candidate["pressure"] * PICK_TOLERANCE):
+                preferred = current_candidate
+        return {"class": class_name, "model": None, "route": class_name, "candidates": candidates, "first_routable": next(iter(routable), None),
+                "preferred": preferred, "generated_at": datetime.now(timezone.utc).isoformat()}
+    key = route_key(model)
+    if key is None:
+        return None
+    with LOCK:
+        providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
+        candidates = [anthropic_candidate(model)]
+    for provider, target in ROUTES.get(key, []):
+        state = providers.get(provider, {})
+        if provider == "openai-codex":
+            candidates.append(codex_candidate(target, state))
+        elif provider == "deepseek":
+            candidates.append(deepseek_candidate(target, state))
+        else:
+            candidates.append({"provider": provider, "model": target, "routable": False, "reason": "unknown"})
+    first = next((c for c in candidates if c["routable"]), None)
+    first_codex = next((c for c in candidates if c["provider"] == "openai-codex"), None)
+    eligible = [c for c in candidates if c["routable"] and c["provider"] != "deepseek"
+                and not c.get("on_credits") and isinstance(c.get("pressure"), (int, float))
+                and (c["provider"] != "openai-codex" or c is first_codex)]
+    preferred = max(eligible, key=lambda c: c["pressure"], default=None)
+    current_candidate = next((c for c in eligible if c["provider"] == current), None)
+    if current_candidate and preferred and preferred["provider"] != current:
+        if preferred["pressure"] <= current_candidate["pressure"] * PICK_TOLERANCE:
+            preferred = current_candidate
+    return {"model": model, "route": key, "candidates": candidates,
+            "first_routable": first, "preferred": preferred,
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+# --- DeepSeek Anthropic-passthrough (opt-in) ----------------------------------
+
+
+def record_starvation(model: str) -> None:
+    global STARVED_COUNT, STARVED_LAST
+    payload = route_payload(model)
+    first = payload.get("first_routable") if payload else None
+    if not first:
+        return
+    last = {"ts": datetime.now(timezone.utc).isoformat(), "model": model, "provider": first.get("provider")}
+    with LOCK:
+        STARVED_COUNT += 1
+        STARVED_LAST = last
+        save_usage_state()
+    append_route({"kind": "starved", **last})
+
+
+def fallback_target(model: str) -> tuple[str | None, str]:
+    """(deepseek model, reason) for a request no OAuth token can serve.
+
+    The model is None whenever the passthrough must not fire: feature off, no
+    `deepseek` route for this model, no DeepSeek key, or the cached balance not
+    routable (below the floor, `is_available` false, or never polled). Reads
+    only cached state; never touches an upstream.
+    """
+    if not DEEPSEEK_FALLBACK:
+        return None, "disabled"
+    key = route_key(model)
+    target = next((t for p, t in ROUTES.get(key or "", []) if p == "deepseek"), None)
+    if target is None:
+        return None, "no deepseek route"
+    if not deepseek_key(read_auth()):
+        return None, "no deepseek key"
+    with LOCK:
+        state = dict(PROVIDER_STATE.get("deepseek", {}))
+    candidate = deepseek_candidate(target, state)
+    if not candidate["routable"]:
+        return None, f"deepseek {candidate['reason']}"
+    return target, "anthropic pool exhausted"
+
+
+def rewrite_model(body: bytes, target: str) -> bytes:
+    data = json.loads(body)
+    data["model"] = target
+    return json.dumps(data).encode("utf-8")
+
+
+def deepseek_upstream(method: str, path: str, headers: dict, body: bytes, key: str,
+                      timeout: float = 600.0):
+    """Forward an Anthropic-shaped request to DeepSeek with its own credential.
+
+    Same wire format, different host, prefix and auth header. The OAuth bearer
+    was already dropped by _forward_headers(); it is dropped here again so no
+    future caller can leak it. `anthropic-beta`/`anthropic-version` are passed
+    through (DeepSeek documents them as ignored on /messages; checked 2026-09-25
+    together with Claude Code's `x-app` and browser-access headers: none is
+    rejected).
+    """
+    h = {k: v for k, v in headers.items() if k.lower() not in ("authorization", "x-api-key", "host")}
+    h["x-api-key"] = key
+    h["Host"] = DEEPSEEK_HOST
+    conn = http.client.HTTPSConnection(DEEPSEEK_HOST, timeout=timeout)
+    conn.request(method, DEEPSEEK_ANTHROPIC_PREFIX + path, body=body, headers=h)
+    return conn, conn.getresponse()
+
+
+def fallback_payload() -> dict:
+    """`routing.fallback` for /_usage: the live episode, or None (caller holds LOCK).
+
+    The episode is also ended here when a real token has become pickable
+    since the last request, so the reader never shows a stale fallback.
+    """
+    if FALLBACK["active"] and rank_pool(FALLBACK["claude_model"] or "unknown")["would_pick"]:
+        clear_fallback("token pickable again")
+    if not FALLBACK["active"]:
+        return None
+    return {"provider": "deepseek", "model": FALLBACK["model"], "for_model": FALLBACK["claude_model"],
+            "since": FALLBACK["since"], "requests": FALLBACK["episode_requests"],
+            "reason": "anthropic pool exhausted"}
+
+
+def usage_payload() -> dict:
+    """/_usage schema 2: the schema-1 keys unchanged, plus `providers` for every provider."""
+    with LOCK:
+        toks = [t.snapshot() for t in STATE]
+        routing = routing_preview()
+        routing["active_sessions"] = len({session for (session, _), (_, touched) in LAST_PICK.items()
+                                          if session != "global" and time.time() - touched <= 900})
+        routing["fallback"] = fallback_payload()
+        routing["deepseek_fallback"] = {
+            "enabled": DEEPSEEK_FALLBACK, "min_balance": DEEPSEEK_MIN_BALANCE,
+            "monthly_cap": DEEPSEEK_MONTHLY_CAP, "monthly_spend": deepseek_month_spend(),
+            "requests_total": FALLBACK["requests"], "by_model": FALLBACK["by_model"],
+            "note": "opt-in passthrough of Claude Code requests to api.deepseek.com/anthropic when no "
+                    "OAuth token is pickable; `fallback` is non-null only during such an episode",
+        }
+        providers = {name: dict(state) for name, state in PROVIDER_STATE.items()}
+    observation_now = int(time.time())
+    for provider, state in providers.items():
+        state.setdefault("source", PROVIDER_SOURCES.get(provider, "provider adapter"))
+        state.setdefault("confidence", PROVIDER_CONFIDENCE.get(provider, "none"))
+        checked_at = state.get("checked_at")
+        state["age_seconds"] = (max(0, observation_now - checked_at)
+                                 if isinstance(checked_at, (int, float)) else None)
+        state["observed_at"] = (datetime.fromtimestamp(checked_at, timezone.utc).isoformat().replace("+00:00", "Z")
+                                 if isinstance(checked_at, (int, float)) else None)
+        state.setdefault("reason", None)
+    checked = [_iso_epoch(t["quota_checked_at"]) for t in toks if t["quota_checked_at"]]
+    routing["starved"] = STARVED_COUNT
+    routing["starved_last"] = STARVED_LAST
+    routing["class_usage"] = CLASS_USAGE
+    routing["recent"] = recent_routes()
+    exhaustions = []
+    weekly = []
+    for token in toks:
+        for window, fc in token.get("forecast", {}).items():
+            if window in ("7d", "7d_oi") and fc.get("projected_at_reset") is not None:
+                weekly.append(100 * max(0.0, 1.0 - fc["projected_at_reset"]))
+            if fc.get("exhaust_at") is not None:
+                exhaustions.append({"fp": token["fp"], "window": window,
+                                    "at": datetime.fromtimestamp(fc["exhaust_at"], timezone.utc).isoformat()})
+    deepseek_state = providers.get("deepseek", {})
+    deepseek_state["monthly_cap"] = DEEPSEEK_MONTHLY_CAP
+    deepseek_state["monthly_spend"] = deepseek_month_spend()
+    codex_state = providers.get("openai-codex", {})
+    codex_forecasts = {}
+    for item in codex_state.get("windows", []):
+        reset = item.get("reset_at")
+        used = item.get("used_percent")
+        if isinstance(reset, (int, float)) and isinstance(used, (int, float)):
+            name = item.get("name", "window")
+            codex_forecasts[name] = forecast(SAMPLES.get(f"codex:{name}", {}).get(name, []), used / 100, reset)
+    codex_state["forecast"] = codex_forecasts
+    routing["forecast"] = {"weekly_waste_percent": round(sum(weekly)/len(weekly), 1) if weekly else None,
+                            "first_exhaust": min(exhaustions, key=lambda x: x["at"]) if exhaustions else None}
+    anthropic = {"status": "ok", "kind": "subscription quota", "tokens": toks, "routing": routing,
+                 "checked_at": int(max(checked)) if checked else None}
+    return {
+        "schema": 2,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "tokens": toks,
+        "routing": routing,
+        "_samples": {k: {window: points[:1] for window, points in buckets.items()}
+                     for k, buckets in SAMPLES.items()},
+        "providers": {"anthropic": anthropic, **providers},
+        "routes_file": str(ROUTES_FILE),
+        "note": "quota is direct /api/oauth/usage when permitted; counters are parsed from Claude responses; "
+                "providers.* are read-only cross-provider readings refreshed every usage_interval",
+    }
+
+
+def inspector_payload(model="claude-opus-5-5", session="", class_name="interactive", current=None):
+    """Versioned, bounded UI snapshot. No network probes, auth reads or model calls."""
+    load_routes()
+    load_classes()
+    now = time.time()
+    with LOCK:
+        applicable = model.startswith("claude-")
+        preview = rank_pool(model, session_key=session or None, class_name=class_name) if applicable else {
+            "would_pick": None, "last_pick": None, "ranking": []}
+        reasons = {row["fp"]: row["reason"] for row in preview["ranking"]}
+        accounts = []
+        forced = forced_cooldown_fps()
+        for tok in STATE:
+            windows = []
+            for name, value, reset, quota_name in (
+                ("5h", tok.u5, tok.u5_reset, "five_hour"),
+                ("7d", tok.u7, tok.u7_reset, "seven_day"),
+                ("7d fable", tok.u7_oi, tok.u7_oi_reset, "seven_day_overage_included")):
+                observed = tok.header_observed_at.get({"5h": "u5", "7d": "u7", "7d fable": "u7_oi"}[name])
+                # Use the same header-observation names as update_from_headers.
+                observed = observed or tok.header_observed_at.get({"5h": "5h", "7d": "7d", "7d fable": "7d_oi"}[name])
+                source = "header estimate"
+                quota = (tok.quota or {}).get(quota_name)
+                used = value * 100 if value is not None else None
+                if isinstance(quota, dict) and isinstance(quota.get("utilization"), (int, float)):
+                    used = quota["utilization"]
+                    reset = quota.get("resets_at") or quota.get("reset_at")
+                    observed, source = tok.quota_checked_at, "quota API"
+                epoch = _iso_epoch(reset) if isinstance(reset, str) else reset
+                if epoch is not None and epoch <= now:
+                    used = None
+                windows.append({"name": name, "remaining_percent": max(0, min(100, 100-used)) if used is not None else None,
+                                "reset_at": reset, "observed_at": observed, "source": source})
+            deadline = cooldown_deadline(tok, model)
+            accounts.append({"id": tok.fp, "label": inspect_text(tok.label or tok.fp),
+                             "auth": "rejected" if not tok.valid else "accepted" if tok.last_status and 200 <= tok.last_status < 300 else "not rejected",
+                             "state": "OFFLINE" if tok.fp in forced else "AUTH" if not tok.valid else
+                                      "COOLDOWN" if deadline > now else "CLASS LIMITED" if reasons.get(tok.fp) == "class ceiling" else
+                                      "DEPRIORITIZED" if reasons.get(tok.fp) == "over threshold" else "ROUTABLE" if applicable else "NOT EVALUATED",
+                             "cooldown_until": deadline if deadline > now else None,
+                             "quota_scope_denied": tok.quota_scope_denied, "windows": windows})
+        providers = {}
+        for name, state in PROVIDER_STATE.items():
+            # Explicit allowlist: no auth blobs, headers, raw upstream errors or URLs.
+            providers[name] = {k: state.get(k) for k in
+                               ("status", "checked_at", "allowed", "limit_reached", "reset_credits", "available")}
+            providers[name]["windows"] = [{k: w.get(k) for k in
+                                           ("name", "used_percent", "reset_at", "resets_at", "window_seconds")}
+                                          for w in state.get("windows", [])[:12]]
+            providers[name]["balances"] = [{k: w.get(k) for k in ("currency", "total_balance")}
+                                           for w in state.get("balances", [])[:8]]
+    # route_payload owns its own lock. Never invoke it while holding LOCK.
+    oracle = route_payload(model, current)
+    class_oracle = route_payload(model, current, class_name)
+    with TELEMETRY_LOCK:
+        key = hashlib.sha256(session.encode()).hexdigest() if session else ""
+        last = SERVED.get(key)
+        if last and now - last["accepted_at"] > 21600:
+            last = None
+        configs = {name: dict(item) for name, item in CONFIG_META.items()}
+        effective_routes = json.loads(json.dumps(ROUTES))
+        effective_classes = {name: {"routes": policy.get("routes", []), "ceiling": {"anthropic": {
+            key: value for key, value in policy.get("ceiling", {}).get("anthropic", {}).items()
+            if key in ("no_oi", "oi_max_used")}}} for name, policy in CLASSES.items()}
+        events = [dict(e) for e in INSPECT_EVENTS]
+    for name, path in (("routes", ROUTES_FILE), ("classes", CLASSES_FILE)):
+        item = configs.setdefault(name, {"path": str(path), "loaded_revision": None})
+        try:
+            item["disk_revision"] = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        except OSError:
+            item["disk_revision"] = None
+        item["pending"] = bool(item.get("error")) or item.get("loaded_revision") != item["disk_revision"]
+    settings = [
+        ("routing_mode", PICK_MODE, "CC_PROXY_PICK"),
+        ("threshold", ROTATE_THRESHOLD, "CC_PROXY_THRESHOLD"),
+        ("tolerance", PICK_TOLERANCE, "CC_PROXY_PICK_TOLERANCE"),
+        ("deepseek_passthrough", DEEPSEEK_FALLBACK, "CC_PROXY_DEEPSEEK_FALLBACK"),
+        ("usage_interval", USAGE_INTERVAL, "CC_PROXY_USAGE_INTERVAL"),
+    ]
+    recent = [{k: inspect_text(e[k]) for k in ("ts", "kind", "bucket", "from_fp", "to_fp", "reason") if k in e}
+              for e in recent_routes()[-20:]]
+    payload = {"schema": "llm-inspector.v1", "generated_at": now, "host": socket.gethostname(),
+            "runtime": {"revision": RUNNING_REVISION, "started_at": STARTED_AT},
+            "accounts": accounts, "providers": providers,
+            "session": {"model": inspect_text(model), "class": inspect_text(class_name), "last_served": last},
+            "routing": {"mode": PICK_MODE, "bucket": bucket_key(model), "account_applicable": applicable, "account_preview": preview,
+                        "provider_preview": oracle, "class_preview": class_oracle,
+                        "note": "Preview only; Pi owns model switching. Class oracle is not session policy."},
+            "config": {"tables": configs, "settings": [
+                {"name": name, "value": value, "source": env if env in os.environ else "default", "owner": "proxy runtime"}
+                for name, value, env in settings], "routes": effective_routes, "classes": effective_classes},
+            "events": events[-60:], "route_events": recent}
+    return inspect_clean(payload)
+
+
+CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def ensure_claude_code_identity(body: bytes, reshape: bool = False) -> bytes:
+    """Apply Claude Code OAuth identity and optionally move app instructions to user.
+
+    Subscription OAuth rejects some long app-specific system prompts. In shape
+    mode retain only the identity in system and prepend the rest to the first
+    user message. Existing identity-bearing requests are left byte-for-byte alone.
+    """
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    if not isinstance(data, dict) or "messages" not in data:
+        return body
+    system = data.get("system")
+    if reshape and ((isinstance(system, list) and any(
+            isinstance(b, dict) and CLAUDE_CODE_IDENTITY in str(b.get("text", "")) for b in system
+        )) or (isinstance(system, str) and CLAUDE_CODE_IDENTITY in system)):
+        return body
+    if reshape:
+        if isinstance(system, str):
+            prompt = system
+        elif isinstance(system, list) and all(isinstance(b, dict) for b in system):
+            prompt = "\n\n".join(str(b.get("text", "")) for b in system if b.get("text"))
+        elif system in (None, ""):
+            prompt = ""
+        else:
+            return body
+        data["system"] = [{"type": "text", "text": CLAUDE_CODE_IDENTITY}]
+        if prompt:
+            messages = data.get("messages")
+            if not isinstance(messages, list):
+                return body
+            prefix = prompt + "\n\n"
+            if messages and isinstance(messages[0], dict):
+                content = messages[0].get("content")
+                if isinstance(content, str):
+                    messages[0]["content"] = prefix + content
+                elif isinstance(content, list):
+                    first_text = next((i for i, b in enumerate(content) if isinstance(b, dict) and b.get("type") == "text"), None)
+                    if first_text is not None:
+                        content[first_text] = {**content[first_text], "text": prefix + str(content[first_text].get("text", ""))}
+                    else:
+                        messages.insert(0, {"role": "user", "content": prompt})
+                else:
+                    messages.insert(0, {"role": "user", "content": prompt})
+            else:
+                messages.insert(0, {"role": "user", "content": prompt})
+        return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if isinstance(system, list):
+        # Real Claude Code / Pi already carry it (possibly after a billing
+        # block); never reshape a request that works.
+        if any(isinstance(b, dict) and CLAUDE_CODE_IDENTITY in str(b.get("text", "")) for b in system):
+            return body
+        blocks = system
+    elif isinstance(system, str) and system.strip():
+        if system.strip() == CLAUDE_CODE_IDENTITY:
+            return body
+        text = system
+        if text.startswith(CLAUDE_CODE_IDENTITY):
+            text = text[len(CLAUDE_CODE_IDENTITY):].lstrip()
+        blocks = [{"type": "text", "text": text}] if text else []
+    elif system in (None, ""):
+        blocks = []
+    else:
+        return body
+    data["system"] = [{"type": "text", "text": CLAUDE_CODE_IDENTITY}] + blocks
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def strip_anthropic_gateway_prefix(path: str) -> str:
+    """Hermes only honours a custom Anthropic base_url when the path ends in
+    ``/anthropic`` (see hermes_cli.runtime_provider._detect_api_mode_for_url).
+    Pi talks to ``http://127.0.0.1:8788/v1/messages`` directly. Strip the
+    gateway prefix so both clients hit Anthropic's ``/v1/messages``."""
+    path_only, sep, query = path.partition("?")
+    if path_only == "/anthropic" or path_only.startswith("/anthropic/"):
+        path_only = path_only[len("/anthropic"):] or "/"
+    return path_only + ((sep + query) if sep else "")
+
+
+def upstream(method: str, path: str, headers: dict, body: bytes, token: str, timeout: float = 600.0):
+    conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=timeout)
+    path = strip_anthropic_gateway_prefix(path)
+    # This upstream always uses subscription OAuth, even when a client (e.g.
+    # Hermes) classifies localhost as an API-key endpoint. Never forward its
+    # x-api-key alongside the pool token or omit the required OAuth beta.
+    h = {k.lower(): v for k, v in headers.items()
+         if k.lower() not in ("authorization", "x-api-key", "host")}
+    betas = [b.strip() for b in h.get("anthropic-beta", "").split(",") if b.strip()]
+    h["anthropic-beta"] = ",".join(dict.fromkeys(betas + ["claude-code-20250219", "oauth-2025-04-20"]))
+    h["user-agent"] = OAUTH_USER_AGENT  # clients advertise stale versions Anthropic rejects
+    h["x-app"] = "cli"
+    h["authorization"] = f"Bearer {token}"
+    h["host"] = UPSTREAM_HOST
+    conn.request(method, path, body=body, headers=h)
+    return conn, conn.getresponse()
+
+
+# Errno values that mean "the local network/DNS is down", not "this account is
+# spent". On a Wi-Fi drop every token's upstream call fails identically, so such a
+# request must surface as a transient offline condition the client can wait out —
+# never as pool exhaustion (which drives the failover/quota-reset machinery toward
+# a reset that is not coming) and never as a token cooldown (no quota was used).
+OFFLINE_ERRNOS = {
+    value for value in (
+        getattr(errno, name, None) for name in (
+            "ENETUNREACH", "ENETDOWN", "ENETRESET", "EHOSTUNREACH", "EHOSTDOWN",
+            "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ETIMEDOUT",
+            "EADDRNOTAVAIL", "EPIPE", "ENONET",
+        )
+    ) if value is not None
+}
+# Substring the llm-failover extension keys on to tell "offline, wait for the
+# network" apart from "pool exhausted, wait for a quota reset". Keep in sync with
+# config/pi/extensions/llm-failover.ts OFFLINE_MARKER.
+OFFLINE_MARKER = "upstream unreachable: network offline"
+
+
+def is_offline_error(exc: BaseException) -> bool:
+    """True when an upstream call failed because the local network is down, as
+    opposed to an HTTP error from Anthropic (which arrives as a response, never an
+    exception). Walks the cause/context chain so a wrapped socket error still counts."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, socket.gaierror):
+            return True  # DNS could not resolve the host -> no network
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return True
+        if isinstance(exc, OSError) and exc.errno in OFFLINE_ERRNOS:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def offline_message(failures: int, host: str = UPSTREAM_HOST) -> str:
+    return (f"llm-proxy: {OFFLINE_MARKER} \u2014 {failures} consecutive "
+            f"connection failure(s) reaching {host}; this machine appears to be offline. "
+            f"No OAuth account quota was consumed; the request will succeed once "
+            f"connectivity returns.")
+
+
+def upstream_reachable(host: str = UPSTREAM_HOST, port: int = 443,
+                       timeout: float = 3.0) -> tuple[bool, str | None]:
+    """Fast TCP reachability probe for the upstream host; no TLS, no quota touched."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, None
+    except OSError as exc:
+        return False, exc.__class__.__name__
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"  # Connection: close + read-to-EOF streaming.
+
+    def log_message(self, *a):
+        pass
+
+    def _send_json(self, status: int, obj: dict) -> None:
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_api_error(self, status: int, message: str, err_type: str = "api_error") -> None:
+        """Anthropic-shaped error so clients render it instead of dumping HTML."""
+        self._send_json(status, {"type": "error", "error": {"type": err_type, "message": message}})
+
+    def _status_page(self) -> None:
+        with LOCK:
+            toks = [t.snapshot() for t in STATE]
+            usable = len([t for t in STATE if t.valid])
+            now = time.time()
+            forced = forced_cooldown_fps()
+            available_by_model = {
+                model: sum(t.valid and t.fp not in forced
+                           and now >= cooldown_deadline(t, model) for t in STATE)
+                for model in ("claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5")
+            }
+            available = sum(t.valid and t.fp not in forced
+                            and any(now >= cooldown_deadline(t, model) for model in available_by_model)
+                            for t in STATE)
+        self._send_json(200, {
+            "tokens": toks,
+            "usable": usable,
+            "available": available,
+            "available_by_model": available_by_model,
+            "total": len(toks),
+            "min_valid": MIN_VALID,
+            "degraded": usable < MIN_VALID,
+            "threshold": ROTATE_THRESHOLD,
+            "usage_interval": USAGE_INTERVAL,
+            "usage_state_file": str(USAGE_STATE_FILE),
+            "token_file": TOKEN_FILE,
+        })
+
+    def _usage_page(self) -> None:
+        self._send_json(200, usage_payload())
+
+    def _online_page(self) -> None:
+        """Loopback connectivity probe: can this machine reach Anthropic right now?
+        It is served locally, so a client waiting out a Wi-Fi drop can poll it even
+        while every forwarded request is failing."""
+        online, detail = upstream_reachable()
+        self._send_json(200, {"online": online, "host": UPSTREAM_HOST,
+                              "detail": detail,
+                              "checked_at": datetime.now(timezone.utc).isoformat()})
+
+    def _route_page(self) -> None:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        model = (query.get("model") or [""])[0]
+        class_name = (query.get("class") or [None])[0]
+        current = (query.get("current") or [None])[0]
+        payload = route_payload(model, current, class_name)
+        if payload is None:
+            self._send_json(404, {"error": "unknown model", "model": model, "routes": sorted(load_routes()),
+                                  "routes_file": str(ROUTES_FILE), "routes_error": ROUTES_ERROR})
+            return
+        self._send_json(200, payload)
+
+    def _forward_headers(self) -> dict:
+        fwd = {}
+        for k, v in self.headers.items():
+            kl = k.lower()
+            if kl in HOP_BY_HOP or kl in ("host", "authorization", "content-length", "accept-encoding"):
+                continue
+            fwd[k] = v
+        return fwd
+
+    def _proxy(self):
+        # Strip first so /anthropic/_x cannot bypass the control-endpoint guard.
+        self.path = strip_anthropic_gateway_prefix(self.path)
+        if self.path.startswith("/_"):  # local control endpoints are read-only and never forwarded
+            self._send_json(405, {"error": "method not allowed", "path": self.path.split("?", 1)[0]})
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b""
+        if self.command == "POST" and self.path.split("?", 1)[0] == "/v1/messages" and body:
+            body = ensure_claude_code_identity(body, reshape=True)
+        fwd = self._forward_headers()
+        tried: set[str] = set()
+        valid_count = len([t for t in STATE if t.valid])
+        endpoint = self.path.split("?", 1)[0]
+        model = request_model(body)
+        session_key = session_key_from(self.headers, body)
+        try:
+            messages_len = len(json.loads(body).get("messages", []))
+        except (ValueError, AttributeError, TypeError):
+            messages_len = None
+        boundary = (messages_len is not None and messages_len <= 2) or self.headers.get("x-cc-proxy-boundary") == "1"
+        paced: set[str] = set()  # tokens already given one burst-429 pause
+        offline_failures = 0  # upstream calls that failed because the network is down
+        contacted = False     # any token actually reached upstream (got an HTTP response)
+        class_name = self.headers.get("x-cc-proxy-class", "interactive")
+        if self.headers.get("x-cc-proxy-class-escalate") == "1":
+            class_name = escalated_class(class_name, session_key)
+        self.class_name = class_name
+        if load_classes().get(class_name, {}).get("ceiling", {}).get("anthropic", {}).get("no_oi") and FABLE_MODEL_RE.search(model):
+            self._send_api_error(503, f"class {class_name} may not use {model}", "overloaded_error")
+            return
+
+        # Every token may burn one extra attempt on a burst pause before failover.
+        for _ in range(max(1, valid_count + 1) + valid_count):
+            with LOCK:
+                bucket = bucket_key(model)
+                affinity_before = LAST_PICK.get(_affinity_key(session_key, bucket))
+                tok = pick(exclude=tried, model=model, session_key=session_key, class_name=class_name, boundary=boundary)
+                previous = affinity_before[0] if affinity_before else None
+                if tok is not None and previous and previous != tok.fp:
+                    # A session changed account: the only move that costs a prompt cache.
+                    previous_tok = next((item for item in STATE if item.fp == previous), None)
+                    if previous in forced_cooldown_fps():
+                        reason = "forced"
+                    elif previous in tried or (previous_tok and time.time() < cooldown_deadline(previous_tok, model)):
+                        reason = "cooldown"
+                    elif (previous_tok and boundary and
+                          five_hour_pressure(previous_tok, time.time()) * PICK_TOLERANCE <
+                          five_hour_pressure(tok, time.time())):
+                        reason = "5h"
+                    else:
+                        reason = "sweep" if sweep_factor(tok, bucket, time.time()) > 1 else "pressure"
+                    log(f"session affinity moved bucket={bucket} reason={reason}")
+                    append_route({"ts": datetime.now(timezone.utc).isoformat(), "bucket": bucket,
+                                  "from_fp": previous, "to_fp": tok.fp, "reason": reason})
+            if tok is None:
+                with LOCK:
+                    detail = ", ".join(
+                        f"{t.name()}[{'parked' if not t.valid else 'forced' if t.fp in forced_cooldown_fps() else 'cooling'}"
+                        f" u7={t.u7}]" for t in STATE)
+                if offline_failures and not contacted:
+                    # Every upstream call failed on connectivity, not quota: surface a
+                    # transient offline error. Do not cool down or park any token, do
+                    # not fall over to a provider that is just as unreachable, and do
+                    # not count it as starvation — the pool is fine, the Wi-Fi is not.
+                    log(f"WARNING: upstream unreachable — network offline "
+                        f"({offline_failures} connect failure(s)); quota untouched")
+                    self._send_api_error(503, offline_message(offline_failures), "overloaded_error")
+                    return
+                if self._deepseek_fallback(endpoint, fwd, body, model):
+                    return
+                log(f"WARNING: request rejected — no token pickable: {detail}")
+                record_starvation(model)
+                self._send_api_error(503, unavailable_message(model), "overloaded_error")
+                return
+            with LOCK:
+                clear_fallback(f"token {tok.fp} pickable")
+            try:
+                conn, resp = ramp_upstream(tok, self.command, self.path, fwd, body)
+                contacted = True
+                record_request(tok, model, class_name)
+            except Exception as exc:  # upstream call failed before any HTTP response
+                offline = is_offline_error(exc)
+                if offline:
+                    offline_failures += 1
+                log(f"{self.command} {endpoint} -> token {tok.fp} ERROR "
+                    f"{exc.__class__.__name__}" + (" [offline]" if offline else ""))
+                tried.add(tok.fp)
+                continue
+
+            with LOCK:
+                update_from_headers(tok, resp.headers)
+                tok.last_status = resp.status
+                tok.responses += 1
+                pause = None
+                cooldown_scope = None
+                request_scoped = False
+                if resp.status == 429:
+                    try:
+                        raw = resp.read(65536)
+                    except Exception:
+                        raw = b""
+                    raw = bytes(raw) if isinstance(raw, (bytes, bytearray)) else b""
+                    resp = BufferedResponse(resp, raw)
+                    hdrs = header_map(resp.headers)
+                    message = error_message(raw)
+                    request_scoped = is_request_scoped_429(message, resp.headers)
+                    tok.last_429 = {
+                        "ts": datetime.now(timezone.utc).isoformat(), "model": model,
+                        "kind": "request" if request_scoped else classify_429(resp.headers),
+                        "message": message,
+                        "claim": hdrs.get("anthropic-ratelimit-unified-representative-claim"),
+                        "unified_status": hdrs.get("anthropic-ratelimit-unified-status"),
+                        "retry_after": hdrs.get("retry-after"),
+                    }
+                    client = (self.headers.get("user-agent") or "?")[:60]
+                    tok.last_429["client"] = client
+                    tok.last_429["class"] = class_name
+                    log(f"429 detail token {tok.fp} model={model} class={class_name} client={client!r} "
+                        f"session={str(session_key)[:24]} kind={tok.last_429['kind']} "
+                        f"claim={tok.last_429['claim']} status={tok.last_429['unified_status']} "
+                        f"retry-after={tok.last_429['retry_after']} msg={message!r}")
+                    if request_scoped:
+                        tok.request_scoped_429s += 1
+                if resp.status == 429 and not request_scoped:
+                    if tok.fp not in paced:
+                        pause = burst_pause_seconds(resp.headers)
+                    if pause is None:  # spent bucket (or unpaceable): cool down + rotate
+                        cooldown_scope = apply_cooldown(tok, resp.headers)
+                # Success on another model (or an older in-flight request) must
+                # not erase an unexpired cooldown.
+                if resp.status in (401, 403):
+                    if tok.valid:
+                        tok.invalid_since = time.time()
+                        log(f"token {tok.name()} parked: upstream {resp.status}")
+                        inspect_event("auth", account=tok.fp, state="rejected", status=resp.status)
+                    tok.valid = False
+                    tok.last_revalidate = time.time()
+                    check_health("token rejected upstream")
+                save_usage_state()
+
+            client = self.headers.get("user-agent", "?")
+            class_name = getattr(self, "class_name", "?")
+            log(f"{self.command} {endpoint} -> token {tok.name()} client={client!r} "
+                f"class={class_name} model={model} u7={tok.u7} u7_oi={tok.u7_oi} "
+                f"u5={tok.u5} status {resp.status}"
+                + (f" cooldown_scope={cooldown_scope}" if cooldown_scope else "")
+                + (f" [burst, pausing {pause}s]" if pause is not None
+                   else " [request-scoped, relayed]" if request_scoped
+                   else " [failover]" if resp.status in FAILOVER_STATUSES else ""))
+
+            if pause is not None:
+                # Burst limit, not a spent bucket: waiting is cheaper than rotating,
+                # which would only move the burst and lose this token's prompt cache.
+                # The token stays out of `tried` and out of cooldown, so the next
+                # pick() — deterministic over unchanged state — returns it again.
+                paced.add(tok.fp)
+                try:
+                    resp.read()
+                finally:
+                    conn.close()
+                time.sleep(pause)  # outside LOCK: never block other requests
+                continue
+
+            if resp.status in FAILOVER_STATUSES and not request_scoped and len(tried) < valid_count:
+                tried.add(tok.fp)
+                try:
+                    resp.read()
+                finally:
+                    conn.close()
+                continue
+
+            self._stream(resp, tok, model)
+            conn.close()
+            return
+
+        self._send_api_error(502, "llm-proxy: all tokens failed or exhausted")
+
+    def _deepseek_fallback(self, endpoint: str, fwd: dict, body: bytes, model: str) -> bool:
+        """Serve the request from DeepSeek instead of failing it; True when handled.
+
+        Only reached when pick() found no token at all. Whatever DeepSeek answers
+        (including a 402 on a negative balance) goes back to the client as-is:
+        there is no Anthropic retry, which would loop on the exhausted pool.
+        """
+        if (self.headers.get(FALLBACK_OPT_OUT_HEADER) or "").strip().lower() == "none":
+            log(f"deepseek fallback not taken for {model}: client opted out ({FALLBACK_OPT_OUT_HEADER})")
+            return False
+        target, reason = fallback_target(model)
+        if target is None:
+            if DEEPSEEK_FALLBACK:
+                log(f"deepseek fallback not taken for {model}: {reason}")
+            return False
+        key = deepseek_key(read_auth())
+        try:
+            forwarded = rewrite_model(body, target)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            log(f"deepseek fallback not taken for {model}: body is not JSON")
+            return False
+        log(f"{self.command} {endpoint} -> deepseek {target} (fallback: {reason}) model={model}")
+        try:
+            conn, resp = deepseek_upstream(self.command, self.path, fwd, forwarded, key)
+        except Exception as exc:
+            log(f"{self.command} {endpoint} -> deepseek {target} ERROR {exc.__class__.__name__}")
+            self._send_api_error(502, f"llm-proxy: DeepSeek fallback failed ({exc.__class__.__name__})\n"
+                                 + unavailable_message(model), "api_error")
+            return True
+        record_fallback_request(model, target)
+        log(f"{self.command} {endpoint} -> deepseek {target} status {resp.status}")
+        if resp.status >= 400:
+            record_starvation(model)
+        self._stream(resp, None, model)
+        conn.close()
+        return True
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/_event":
+            self._proxy()
+            return
+        try:
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_api_error(403, "loopback only")
+                return
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("expected application/json")
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 4096:
+                raise ValueError("body too large")
+            data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict) or not data.get("kind"):
+                raise ValueError("invalid event")
+            append_route({"ts": datetime.now(timezone.utc).isoformat(), **{
+                key: str(data.get(key, ""))[:100] for key in ("kind", "from", "to", "reason")}})
+            self._send_json(200, {"ok": True})
+        except (ValueError, json.JSONDecodeError):
+            self._send_api_error(400, "invalid JSON event")
+
+    def do_GET(self):
+        endpoint = self.path.split("?", 1)[0]
+        if endpoint in ("/_status", "/_health"):
+            self._status_page()
+            return
+        if endpoint == "/_inspect":
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_json(403, {"error": "loopback only"})
+                return
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            self._send_json(200, inspector_payload(
+                (query.get("model") or ["claude-opus-5-5"])[0][:120],
+                (query.get("session") or [""])[0][:256],
+                (query.get("class") or ["interactive"])[0][:80],
+                (query.get("current") or [None])[0]))
+            return
+        if endpoint == "/_usage":
+            self._usage_page()
+            return
+        if endpoint == "/_route":
+            self._route_page()
+            return
+        if endpoint == "/_online":
+            self._online_page()
+            return
+        self._proxy()
+
+    do_PUT = do_DELETE = do_PATCH = _proxy
+
+    def _stream(self, resp, tok: Tok | None, model: str):
+        class_name = getattr(self, "class_name", None)
+        record_served(self.headers.get("x-cc-proxy-session"), tok, model, resp.status,
+                      "anthropic" if tok else "deepseek")
+        content_type = resp.getheader("content-type", "")
+        is_json = "text/event-stream" not in content_type.lower()
+        captured = bytearray()
+        sse_remainder = b""
+        self.send_response(resp.status)
+        for k, v in resp.getheaders():
+            if k.lower() in HOP_BY_HOP or k.lower() == "content-length":
+                continue
+            self.send_header(k, v)
+        self.send_header("Connection", "close")
+        self.end_headers()
+        while True:
+            chunk = resp.read(8192)
+            if not chunk:
+                break
+            if is_json:
+                if len(captured) < 4 * 1024 * 1024:
+                    captured.extend(chunk[:4 * 1024 * 1024 - len(captured)])
+            else:
+                sse_remainder += chunk
+                while b"\n" in sse_remainder:
+                    line, sse_remainder = sse_remainder.split(b"\n", 1)
+                    usage = usage_from_sse_line(line.rstrip(b"\r"))
+                    if usage:
+                        add_usage(tok, model, usage, class_name)
+            try:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                break
+        if is_json:
+            usage = usage_from_json(bytes(captured))
+            if usage:
+                add_usage(tok, model, usage, class_name)
+
+
+def probe(tok: Tok, note: str = "seed") -> None:
+    """One cheap upstream call to learn a token's validity and utilization."""
+    payload = json.dumps({"model": "claude-haiku-4-5", "max_tokens": 1,
+                          "messages": [{"role": "user", "content": "."}]}).encode("utf-8")
+    tok.last_revalidate = time.time()
+    try:
+        conn = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=15)
+        conn.request("POST", "/v1/messages", body=payload, headers={
+            "Authorization": f"Bearer {tok.token}",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": OAUTH_BETA,
+            "content-type": "application/json",
+            "user-agent": "claude-cli/2.1.75",
+            "x-app": "cli",
+            "anthropic-dangerous-direct-browser-access": "true",
+        })
+        r = conn.getresponse()
+        with LOCK:
+            previously_valid = tok.valid
+            update_from_headers(tok, r.headers)
+            tok.last_status = r.status
+            if r.status == 429:
+                apply_cooldown(tok, r.headers)
+            if r.status in (401, 403):
+                if tok.valid:
+                    tok.invalid_since = time.time()
+                tok.valid = False
+            else:
+                tok.valid = True
+                tok.invalid_since = 0.0
+            if tok.valid != previously_valid:
+                inspect_event("auth", account=tok.fp, state="accepted" if tok.valid else "rejected", status=r.status)
+            save_usage_state()
+        r.read()
+        conn.close()
+        log(f"{note} {tok.name()}: status {r.status} u7={tok.u7} u5={tok.u5} valid={tok.valid}")
+    except Exception as exc:
+        log(f"{note} {tok.name()}: error {exc.__class__.__name__}")
+
+
+def seed(only_new: bool = False):
+    for tok in list(STATE):
+        if only_new and tok.last_status is not None:
+            continue
+        probe(tok)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("CC_PROXY_PORT", "8788")))
+    ap.add_argument("--token-file", default=os.environ.get("CCTOKEN_FILE", str(Path.home() / "cctoken")))
+    args = ap.parse_args()
+
+    global TOKEN_FILE, FILE_MTIME
+    TOKEN_FILE = args.token_file
+    try:
+        FILE_MTIME = Path(TOKEN_FILE).stat().st_mtime
+    except OSError:
+        FILE_MTIME = 0.0
+
+    labels = load_labels(TOKEN_FILE)
+    for t in load_tokens(TOKEN_FILE):
+        tok = Tok(t)
+        tok.label = labels.get(tok.fp, "")
+        STATE.append(tok)
+    if not STATE:
+        print(f"no sk-ant-oat tokens found in {TOKEN_FILE}", file=sys.stderr)
+        return 1
+
+    restore_usage_state()
+    log(f"loaded {len(STATE)} token(s): {[t.name() for t in STATE]}")
+    # This is read-only and supplies reset/model-specific buckets when the
+    # OAuth token has the required scope. Scope failures are recorded in /_usage
+    # but do not invalidate the token for normal inference.
+    for tok in list(STATE):
+        fetch_oauth_usage(tok)
+    if SEED:
+        seed()
+        check_health("after startup probe")
+    elif len(STATE) < MIN_VALID:
+        health_warn("too few tokens configured")
+
+    load_routes()
+    # First oracle poll runs off-thread so listening is not delayed by a slow upstream.
+    threading.Thread(target=refresh_providers, daemon=True).start()
+    threading.Thread(target=watchdog, args=(TOKEN_FILE,), daemon=True).start()
+    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    log(f"listening on http://127.0.0.1:{args.port} threshold={ROTATE_THRESHOLD} "
+        f"watch={WATCH_INTERVAL}s usage={USAGE_INTERVAL}s revalidate={REVALIDATE_INTERVAL}s "
+        "status=/_status usage=/_usage")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

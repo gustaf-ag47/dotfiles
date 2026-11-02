@@ -16,8 +16,8 @@ from tests.unit._helpers import fake_jwt as make_jwt, load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
-PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
-proxy = load_script("claude_token_proxy", PROXY_PATH)
+PROXY_PATH = Path(__file__).parents[2] / "bin" / "llm-proxy"
+proxy = load_script("llm_proxy", PROXY_PATH)
 
 
 class UsagePersistenceTests(ProxyIsolationMixin, TestCase):
