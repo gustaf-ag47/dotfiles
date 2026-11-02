@@ -139,3 +139,6 @@ build/
 *.tgz
 *.rar
 *.7z
+!*secret*.go
+!*secret*.py
+!*secret*.sh

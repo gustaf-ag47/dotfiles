@@ -177,7 +177,7 @@ cmd_add() {
   fetch_vault
   printf '%s' "$pass" | copy
   say "Added '$name'${folder:+ in $folder}. Password copied, clears in ${CLEAR_SECONDS}s."
-  ( sleep "$CLEAR_SECONDS"; printf '' | copy; ) &>/dev/null &
+  ( sleep "$CLEAR_SECONDS"; wl-copy --clear 2>/dev/null || true; ) &>/dev/null &
   disown
 }
 
@@ -346,5 +346,5 @@ value="${field_values[$((selected_index - 1))]}"
 
 printf '%s' "$value" | copy
 say "${fields[$((selected_index - 1))]%%:*} copied. Clipboard clears in ${CLEAR_SECONDS}s."
-( sleep "$CLEAR_SECONDS"; printf '' | copy; ) &>/dev/null &
+( sleep "$CLEAR_SECONDS"; wl-copy --clear 2>/dev/null || true; ) &>/dev/null &
 disown
