@@ -16,6 +16,7 @@
 // The pure parts (matching, formatting, the state machine) are exported so
 // tests/unit/test_llm_failover.mjs can drive them without a pi process.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { registerInspectorStatus } from "../lib/llm-inspector.mjs";
 
 export const ANTHROPIC = "anthropic";
 /** Substring of the proxy's `unavailable_message()`; see bin/claude-token-proxy. */
@@ -502,6 +503,8 @@ export default function llmFailover(pi: ExtensionAPI) {
 
 	const say = (line: string, level: "info" | "warning" | "error") => {
 		const ctx = ctxRef;
+		pi.events?.emit("llm:transition", { source: "llm-failover", level, line });
+		pi.events?.emit("llm:status-request", {});
 		if (ctx?.hasUI) ctx.ui.notify(line, level);
 		else if (ctx?.mode === "print") console.log(line);
 		else console.error(line);
@@ -530,6 +533,13 @@ export default function llmFailover(pi: ExtensionAPI) {
 			}
 		},
 	});
+
+	registerInspectorStatus(pi, "llm-failover", () => ({
+		enabled: core.state.enabled, pinned: core.state.pinned,
+		waitingSince: core.state.waitingSince, original: core.state.original,
+		current: core.state.current, pressureDriven: core.state.pressureDriven,
+		pinScope: "proactive pressure routing only; exhaustion failover remains enabled",
+	}));
 
 	async function handleFailed(message: AssistantLike, ctx: ExtensionContext): Promise<void> {
 		if (message.role !== "assistant" || message.stopReason !== "error") return;

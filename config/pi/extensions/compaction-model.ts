@@ -11,6 +11,7 @@
 //   PI_COMPACTION_MODEL=off               disable (native compaction)
 //   PI_COMPACTION_MODEL=provider/model-id force a specific summariser
 
+import { registerInspectorStatus } from "../lib/llm-inspector.mjs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Preferred summarisers per provider, first available wins. Only used when
@@ -51,6 +52,7 @@ type CompactFn = (preparation: any, model: any, apiKey?: string, headers?: any, 
 
 export function createCompactionModel(loadCompact: () => Promise<CompactFn>, env: Record<string, string | undefined> = process.env) {
 	return function (pi: ExtensionAPI) {
+		registerInspectorStatus(pi, "compaction-model", () => ({ policy: env.PI_COMPACTION_MODEL || "cheaper model in same provider" }));
 		pi.on("session_before_compact", async (event: any, ctx: any) => {
 			const model = pickSummaryModel(ctx.model, ctx.modelRegistry, env);
 			if (!model) return;

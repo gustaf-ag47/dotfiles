@@ -28,6 +28,7 @@
  *   - No codemode enablement; this extension never registers a tool.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { registerInspectorStatus } from "../lib/llm-inspector.mjs";
 import { classifyTask, getStatus, MAX_TASK_CHARS } from "../lib/jev.mjs";
 
 /** Session-local mode override. Never persisted; lost on restart. */
@@ -50,6 +51,8 @@ function formatStatus(status: ReturnType<typeof getStatus>): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	registerInspectorStatus(pi, "jev", () => { const s = getStatus({ env: effectiveEnv() });
+		return { mode: s.mode, configValid: s.configValid, role: "observation only; no routing changes" }; });
 	pi.registerCommand("jev", {
 		description: "Jev shadow classifier: status | off | observe | classify <text>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {

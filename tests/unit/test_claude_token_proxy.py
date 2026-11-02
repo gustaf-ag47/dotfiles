@@ -916,7 +916,7 @@ class OracleHttpTests(OracleFixture):
                    XDG_CACHE_HOME=str(proxy.CONTROL_DIR), XDG_STATE_HOME=str(proxy.CONTROL_DIR),
                    PI_CODING_AGENT_DIR=str(proxy.CONTROL_DIR))
         cli = Path(__file__).resolve().parents[2] / "scripts/llm_usage.py"
-        result = subprocess.run([sys.executable, str(cli), "--provider", "anthropic", "--refresh"],
+        result = subprocess.run([sys.executable, str(cli), "--provider", "anthropic", "--refresh", "--debug"],
                                 env=env, capture_output=True, text=True, timeout=10, check=True)
         self.assertNotIn("~100% left", result.stdout)
         self.assertIn("?% left", result.stdout)

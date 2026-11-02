@@ -23,6 +23,7 @@
 //
 // Pure helpers are exported for tests/unit/test_anthropic_pool.mjs.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { registerInspectorStatus } from "../lib/llm-inspector.mjs";
 
 export const ANTHROPIC = "anthropic";
 /** Never a real credential: the proxy drops the inbound Authorization and injects its own. */
@@ -106,6 +107,8 @@ export async function fetchStatus(origin: string, fetchImpl: typeof fetch = fetc
 
 export default function anthropicPool(pi: ExtensionAPI) {
 	const origin = proxyOrigin();
+	registerInspectorStatus(pi, "anthropic-pool", () => ({ enabled: origin !== null, origin,
+		class: process.env.PI_LLM_CLASS || "interactive", passthrough: "client opts out" }));
 	if (origin === null) return; // explicit opt-out: pi's built-in anthropic provider, your own credential
 
 	pi.registerProvider(ANTHROPIC, {
