@@ -1378,6 +1378,104 @@ def waybar_payload(report):
     return payload
 
 
+def glance_window(window, now):
+    """Compact quota evidence; fetching a report never makes an old reading fresh."""
+    reset = to_epoch(window.get('resets_at') or window.get('reset_at'))
+    used = window.get('used_percent')
+    if reset is not None and reset <= now:
+        used = None
+    estimate = window.get('source', '').startswith('header')
+    value = '?' if used is None else f'{max(0, min(100, 100 - used)):.0f}%'
+    prefix = '~' if estimate and used is not None else ''
+    tail = f' · resets in {until(reset, now)}' if reset and reset > now else ''
+    if estimate:
+        observed = to_epoch(window.get('observed_at'))
+        tail += ' · observed ' + (duration_ago(max(0, now - observed)) + ' ago' if observed else 'at unknown time')
+    return f'    {window_label(window):<9} {prefix}{value} left{tail}'
+
+
+def render_glance(report, accounts=False, show_all=False):
+    """Presentation only. Routing availability is distinct from quota certainty."""
+    now = time.time()
+    lines = []
+    hidden = 0
+    estimates = False
+    names = {'anthropic': 'Claude', 'openai-codex': 'Codex', 'deepseek': 'DeepSeek',
+             'grok-build': 'Grok', 'google-antigravity': 'Antigravity'}
+    for provider, info in report.get('providers', {}).items():
+        name = names.get(provider, provider)
+        if info.get('status') != 'ok':
+            reason = info.get('reason') or 'unavailable'
+            # Only positively identified missing configuration is quiet by default.
+            unconfigured = reason.startswith(('No supported DeepSeek API key configured',
+                                               'No Grok CLI auth file', 'Log in to openai-codex in Pi.'))
+            if unconfigured and not show_all:
+                hidden += 1
+                continue
+            lines += [paint(f'{name}  UNAVAILABLE', '31;1'), f'  {reason}', '']
+            continue
+        if provider == 'anthropic':
+            groups = info.get('accounts', [])
+            by_fp = {g['account']: g for g in groups}
+            buckets = (info.get('routing') or {}).get('buckets') or {}
+            selected = {b.get('would_pick') for b in buckets.values()} - {None}
+            status = 'ROUTABLE' if selected else 'NONE ROUTABLE' if buckets else 'ROUTING UNKNOWN'
+            lines.append(paint(f'{name}  {status}', '32;1' if selected else '33;1'))
+            for key, bucket in buckets.items():
+                chosen = bucket.get('would_pick')
+                who = by_fp.get(chosen, {}).get('label') or chosen or 'none routable'
+                lines.append(f'  {BUCKET_LABELS.get(key, key)} → {who}')
+            for group in groups:
+                fp = group['account']
+                who = group.get('label') or fp
+                if not group.get('valid'):
+                    lines.append(paint(f'  {who}: AUTH · needs sign-in', '31;1'))
+                elif group.get('forced_down'):
+                    lines.append(f'  {who}: OFFLINE · manually disabled')
+                if accounts or fp in selected:
+                    if accounts:
+                        lines.append(f'  {who}  {account_status(group, now)}')
+                    elif len(selected) > 1:
+                        lines.append(f'  {who}')
+                    for window in group.get('windows', []):
+                        lines.append(glance_window(window, now))
+                        estimates |= window.get('source', '').startswith('header')
+            cooling = [to_epoch(g.get('cooldown_until')) for g in groups
+                       if g.get('valid') and not g.get('forced_down')]
+            cooling = [r for r in cooling if r and r > now]
+            if cooling:
+                lines.append(f'  {len(cooling)} account(s) cooling · earliest retry in {until(min(cooling), now)}')
+            if not groups:
+                lines.append('  No accounts reported')
+        elif provider == 'openai-codex':
+            blocked = info.get('allowed') is False or info.get('limit_reached') is True
+            state = ('LIMIT REACHED · running on credits' if codex_on_credits(info) else 'LIMIT REACHED') if blocked else (
+                'READY' if info.get('allowed') is True else 'AVAILABILITY UNKNOWN')
+            lines.append(paint(f'{name}  {state}', '33;1' if blocked else '1'))
+            lines.append(f'  {codex_identity(info)}')
+            lines += [glance_window(w, now) for w in info.get('windows', [])]
+            if info.get('reset_credits'):
+                lines.append(f"  {info['reset_credits']:g} reset credit(s) available")
+            for model, row in (info.get('models') or {}).items():
+                if row.get('available') is False:
+                    lines.append(paint(f'  {model}: unavailable', '33'))
+            if blocked:
+                lines.append(f"  Top up: {info.get('topup_url') or CODEX_TOPUP_URL}")
+        else:
+            lines.append(paint(name, '1'))
+            body, _ = RENDERERS[provider](info, now)
+            lines += body
+        lines.append('')
+    if not lines:
+        lines.append('No configured providers available.\n')
+    if estimates:
+        lines.append('~ response-header estimate; may be stale. Routing is a preview, not guaranteed capacity.')
+    if hidden:
+        lines.append(f'{hidden} unconfigured provider(s) hidden · --all to show')
+    lines.append('Details: --accounts · Diagnostics: --debug')
+    return '\n'.join(lines)
+
+
 def render(report):
     now = time.time()
     checked = max(info['checked_at'] for info in report['providers'].values())
@@ -1506,6 +1604,15 @@ def capacity_report(data, horizon=2):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--debug', action='store_true', help='Show the full diagnostic report')
+    parser.add_argument('--accounts', action='store_true', help='Expand all Claude accounts in the glance view')
+    parser.add_argument('--all', action='store_true', help='Include unconfigured providers in the glance view')
+    parser.add_argument('--inspect', nargs='?', const='overview', choices=('overview', 'accounts', 'routing', 'config', 'events', 'extensions', 'fleet'), help='Read-only proxy inspector')
+    parser.add_argument('--watch', action='store_true', help='Interactive proxy monitor (q exits)')
+    parser.add_argument('--fleet', nargs='?', const=str(Path.home() / '.config/llm-proxy/fleet.json'), help='Opt-in SSH fleet config path')
+    parser.add_argument('--interval', type=float, default=15, help='Watch polling seconds (2..300)')
+    parser.add_argument('--model', default='claude-opus-5-5', help='Model for inspector route preview')
+    parser.add_argument('--class', dest='task_class', default='interactive', help='Task class for inspector preview')
     parser.add_argument('--waybar', action='store_true', help='Emit compact Waybar JSON')
     parser.add_argument('--week', action='store_true', help='Report rolling-seven-day routing metrics')
     parser.add_argument('--capacity', action='store_true', help='Estimate additional 5h heavy-session capacity')
@@ -1516,6 +1623,12 @@ def main():
     parser.add_argument('--refresh', action='store_true', help='Bypass the 60-second report cache (does not refresh OAuth)')
     parser.add_argument('--provider', choices=list(ADAPTERS))
     args = parser.parse_args()
+    if args.inspect or args.watch or args.fleet:
+        import llm_inspector
+        try:
+            return llm_inspector.run(args, local_url())
+        except (ValueError, OSError) as exc:
+            parser.error(llm_inspector.safe(exc))
     if args.news:
         import llm_news
         news_args = ['--json'] if args.json else []
@@ -1588,7 +1701,9 @@ def main():
     if args.waybar:
         print(json.dumps(waybar_payload(report), separators=(',', ':')))
     else:
-        print(json.dumps(report, indent=2) if args.json else render(report))
+        print(json.dumps(report, indent=2) if args.json else
+              render(report) if args.debug else
+              render_glance(report, accounts=args.accounts, show_all=args.all or bool(args.provider)))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,5 @@
+{
+  "hosts": [
+    {"name": "worker", "target": "user@worker", "port": 8788}
+  ]
+}

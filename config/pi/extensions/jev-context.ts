@@ -30,6 +30,7 @@
  *   - No safety-gate automation, no goal-completion or compaction behavior
  *     changes, no new implicit model choice.
  */
+import { registerInspectorStatus } from "../lib/llm-inspector.mjs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
@@ -107,6 +108,7 @@ export default function (
 	loadScoutModule: () => Promise<any> = () => import(/* @vite-ignore */ SCOUT_MODULE_URL),
 ) {
 	let mode: Mode = "off";
+	registerInspectorStatus(pi, "jev-context", () => ({ mode, externalScouting: mode === "on" }));
 	const cacheState = createCacheState();
 	let scoutController: AbortController | null = null;
 

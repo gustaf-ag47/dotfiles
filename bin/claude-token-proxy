@@ -111,6 +111,83 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 TOKEN_RE = re.compile(r"sk-ant-oat[0-9A-Za-z._-]+")
+# Capture the running source revision, not whatever happens to be on disk later.
+RUNNING_REVISION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+STARTED_AT = time.time()
+CONFIG_META: dict[str, dict] = {}
+SERVED: OrderedDict[str, dict] = OrderedDict()
+INSPECT_EVENTS: list[dict] = []
+TELEMETRY_LOCK = threading.RLock()
+
+
+def serialized_config(fn):
+    def wrapped(*args, **kwargs):
+        with TELEMETRY_LOCK:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def inspect_text(value, limit=200):
+    value = re.sub(r"sk-[A-Za-z0-9_.-]+|Bearer\s+\S+", "[redacted]", str(value))
+    return "".join(c for c in value if c.isprintable())[:limit]
+
+
+def inspect_clean(value):
+    if isinstance(value, str):
+        return inspect_text(value, 500)
+    if isinstance(value, dict):
+        return {inspect_text(k): inspect_clean(v) for k, v in list(value.items())[:1000]}
+    if isinstance(value, (list, tuple)):
+        return [inspect_clean(v) for v in value[:1000]]
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return value if value is None or isinstance(value, (bool, int, float)) else None
+
+
+def inspect_event(kind, **fields):
+    with TELEMETRY_LOCK:
+        event = {"kind": kind, **{k: inspect_text(v) for k, v in fields.items()}}
+        now = time.time()
+        if INSPECT_EVENTS and all(INSPECT_EVENTS[-1].get(k) == v for k, v in event.items()):
+            INSPECT_EVENTS[-1].update(last_seen=now, count=INSPECT_EVENTS[-1]["count"] + 1)
+        else:
+            INSPECT_EVENTS.append({**event, "ts": now, "last_seen": now, "count": 1})
+            del INSPECT_EVENTS[:-100]
+
+
+def config_observation(name, path, content=None, error=None):
+    with TELEMETRY_LOCK:
+        previous = CONFIG_META.get(name, {})
+        revision = hashlib.sha256(content.encode()).hexdigest()[:12] if content is not None else None
+        item = {**previous, "path": str(path), "disk_revision": revision, "error": error}
+        if error is None:
+            item.update(loaded_revision=revision, loaded_at=time.time())
+        item["pending"] = error is not None or revision != item.get("loaded_revision")
+        CONFIG_META[name] = item
+        if previous.get("error") != error or previous.get("loaded_revision") != item.get("loaded_revision"):
+            inspect_event("config", table=name, state=error or "loaded", revision=item.get("loaded_revision"))
+
+
+def record_served(session, tok, model, status, provider="anthropic"):
+    """Evidence of upstream acceptance, not inferred affinity or completed generation."""
+    if not session or not 200 <= status < 300:
+        return
+    key = hashlib.sha256(session.encode()).hexdigest()
+    with TELEMETRY_LOCK:
+        now = time.time()
+        old = SERVED.get(key)
+        row = {"account": tok.fp if tok else None, "label": inspect_text(tok.label) if tok else None,
+               "provider": provider, "model": inspect_text(model), "accepted_at": now,
+               "evidence": "upstream HTTP 2xx; stream completion not tracked"}
+        if not old or (old["account"], old["provider"]) != (row["account"], row["provider"]):
+            inspect_event("route", account=row["account"], provider=provider, model=model)
+        SERVED[key] = row
+        SERVED.move_to_end(key)
+        for expired in [k for k, v in SERVED.items() if now - v["accepted_at"] > 21600]:
+            del SERVED[expired]
+        while len(SERVED) > 1000:
+            SERVED.popitem(last=False)
+
 UPSTREAM_HOST = "api.anthropic.com"
 ROTATE_THRESHOLD = float(os.environ.get("CC_PROXY_THRESHOLD", "0.98"))
 SWEEP_HOURS = float(os.environ.get("CC_PROXY_SWEEP_HOURS", "12"))
@@ -1769,18 +1846,34 @@ CLASSES_MTIME: float | None = None
 CLASSES_ERROR: str | None = None
 
 
+@serialized_config
 def load_classes() -> dict[str, dict]:
     global CLASSES, CLASSES_MTIME, CLASSES_ERROR
     try:
         mtime = CLASSES_FILE.stat().st_mtime
         if mtime == CLASSES_MTIME:
             return CLASSES
-        data = json.loads(CLASSES_FILE.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("classes must be an object")
+        content = CLASSES_FILE.read_text(encoding="utf-8")
+        data = json.loads(content)
+        if not isinstance(data, dict) or any(not isinstance(v, dict) for v in data.values()):
+            raise ValueError("classes must be an object of policies")
+        for policy in data.values():
+            validate_route_rows(policy.get("routes", []))
+            ceiling = policy.get("ceiling", {})
+            if not isinstance(ceiling, dict) or not isinstance(ceiling.get("anthropic", {}), dict):
+                raise ValueError("invalid ceiling")
+            anth = ceiling.get("anthropic", {})
+            if "no_oi" in anth and not isinstance(anth["no_oi"], bool):
+                raise ValueError("invalid no_oi")
+            if "oi_max_used" in anth and (not isinstance(anth["oi_max_used"], (int, float)) or not 0 <= anth["oi_max_used"] <= 1):
+                raise ValueError("invalid ceiling utilization")
         CLASSES, CLASSES_MTIME, CLASSES_ERROR = data, mtime, None
+        config_observation("classes", CLASSES_FILE, content)
     except (OSError, ValueError, TypeError) as exc:
         CLASSES_ERROR = exc.__class__.__name__
+        if "mtime" in locals():
+            CLASSES_MTIME = mtime
+        config_observation("classes", CLASSES_FILE, locals().get("content"), CLASSES_ERROR)
         log(f"classes file {CLASSES_FILE} invalid ({CLASSES_ERROR}); keeping previous table")
     return CLASSES
 
@@ -1790,6 +1883,14 @@ ROUTES_MTIME: float | None = None
 ROUTES_ERROR: str | None = None
 
 
+def validate_route_rows(rows):
+    if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != 2
+            or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,120}", v) for v in row)
+            for row in rows):
+        raise ValueError("invalid route rows")
+
+
+@serialized_config
 def load_routes() -> dict[str, list[list[str]]]:
     """routes.json, re-read when its mtime changes; a bad file keeps the last good table."""
     global ROUTES, ROUTES_MTIME, ROUTES_ERROR
@@ -1799,11 +1900,17 @@ def load_routes() -> dict[str, list[list[str]]]:
         if ROUTES_ERROR is None:
             log(f"routes file {ROUTES_FILE} unreadable ({exc.__class__.__name__}); /_route has no table")
         ROUTES_ERROR = exc.__class__.__name__
+        config_observation("routes", ROUTES_FILE, error=ROUTES_ERROR)
         return ROUTES
     if mtime == ROUTES_MTIME:
         return ROUTES
     try:
-        data = json.loads(ROUTES_FILE.read_text(encoding="utf-8"))
+        content = ROUTES_FILE.read_text(encoding="utf-8")
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("routes must be an object")
+        for rows in data.values():
+            validate_route_rows(rows)
         table = {
             str(model): [[str(provider), str(target)] for provider, target in candidates]
             for model, candidates in data.items()
@@ -1811,9 +1918,11 @@ def load_routes() -> dict[str, list[list[str]]]:
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         log(f"routes file {ROUTES_FILE} invalid ({exc.__class__.__name__}); keeping previous table")
         ROUTES_ERROR = exc.__class__.__name__
+        config_observation("routes", ROUTES_FILE, locals().get("content"), ROUTES_ERROR)
         ROUTES_MTIME = mtime
         return ROUTES
     ROUTES, ROUTES_MTIME, ROUTES_ERROR = table, mtime, None
+    config_observation("routes", ROUTES_FILE, content)
     log(f"routes loaded from {ROUTES_FILE}: {sorted(table)}")
     return ROUTES
 
@@ -2192,6 +2301,101 @@ def usage_payload() -> dict:
     }
 
 
+def inspector_payload(model="claude-opus-5-5", session="", class_name="interactive", current=None):
+    """Versioned, bounded UI snapshot. No network probes, auth reads or model calls."""
+    load_routes()
+    load_classes()
+    now = time.time()
+    with LOCK:
+        applicable = model.startswith("claude-")
+        preview = rank_pool(model, session_key=session or None, class_name=class_name) if applicable else {
+            "would_pick": None, "last_pick": None, "ranking": []}
+        reasons = {row["fp"]: row["reason"] for row in preview["ranking"]}
+        accounts = []
+        forced = forced_cooldown_fps()
+        for tok in STATE:
+            windows = []
+            for name, value, reset, quota_name in (
+                ("5h", tok.u5, tok.u5_reset, "five_hour"),
+                ("7d", tok.u7, tok.u7_reset, "seven_day"),
+                ("7d fable", tok.u7_oi, tok.u7_oi_reset, "seven_day_overage_included")):
+                observed = tok.header_observed_at.get({"5h": "u5", "7d": "u7", "7d fable": "u7_oi"}[name])
+                # Use the same header-observation names as update_from_headers.
+                observed = observed or tok.header_observed_at.get({"5h": "5h", "7d": "7d", "7d fable": "7d_oi"}[name])
+                source = "header estimate"
+                quota = (tok.quota or {}).get(quota_name)
+                used = value * 100 if value is not None else None
+                if isinstance(quota, dict) and isinstance(quota.get("utilization"), (int, float)):
+                    used = quota["utilization"]
+                    reset = quota.get("resets_at") or quota.get("reset_at")
+                    observed, source = tok.quota_checked_at, "quota API"
+                epoch = _iso_epoch(reset) if isinstance(reset, str) else reset
+                if epoch is not None and epoch <= now:
+                    used = None
+                windows.append({"name": name, "remaining_percent": max(0, min(100, 100-used)) if used is not None else None,
+                                "reset_at": reset, "observed_at": observed, "source": source})
+            deadline = cooldown_deadline(tok, model)
+            accounts.append({"id": tok.fp, "label": inspect_text(tok.label or tok.fp),
+                             "auth": "rejected" if not tok.valid else "accepted" if tok.last_status and 200 <= tok.last_status < 300 else "not rejected",
+                             "state": "OFFLINE" if tok.fp in forced else "AUTH" if not tok.valid else
+                                      "COOLDOWN" if deadline > now else "CLASS LIMITED" if reasons.get(tok.fp) == "class ceiling" else
+                                      "DEPRIORITIZED" if reasons.get(tok.fp) == "over threshold" else "ROUTABLE" if applicable else "NOT EVALUATED",
+                             "cooldown_until": deadline if deadline > now else None,
+                             "quota_scope_denied": tok.quota_scope_denied, "windows": windows})
+        providers = {}
+        for name, state in PROVIDER_STATE.items():
+            # Explicit allowlist: no auth blobs, headers, raw upstream errors or URLs.
+            providers[name] = {k: state.get(k) for k in
+                               ("status", "checked_at", "allowed", "limit_reached", "reset_credits", "available")}
+            providers[name]["windows"] = [{k: w.get(k) for k in
+                                           ("name", "used_percent", "reset_at", "resets_at", "window_seconds")}
+                                          for w in state.get("windows", [])[:12]]
+            providers[name]["balances"] = [{k: w.get(k) for k in ("currency", "total_balance")}
+                                           for w in state.get("balances", [])[:8]]
+    # route_payload owns its own lock. Never invoke it while holding LOCK.
+    oracle = route_payload(model, current)
+    class_oracle = route_payload(model, current, class_name)
+    with TELEMETRY_LOCK:
+        key = hashlib.sha256(session.encode()).hexdigest() if session else ""
+        last = SERVED.get(key)
+        if last and now - last["accepted_at"] > 21600:
+            last = None
+        configs = {name: dict(item) for name, item in CONFIG_META.items()}
+        effective_routes = json.loads(json.dumps(ROUTES))
+        effective_classes = {name: {"routes": policy.get("routes", []), "ceiling": {"anthropic": {
+            key: value for key, value in policy.get("ceiling", {}).get("anthropic", {}).items()
+            if key in ("no_oi", "oi_max_used")}}} for name, policy in CLASSES.items()}
+        events = [dict(e) for e in INSPECT_EVENTS]
+    for name, path in (("routes", ROUTES_FILE), ("classes", CLASSES_FILE)):
+        item = configs.setdefault(name, {"path": str(path), "loaded_revision": None})
+        try:
+            item["disk_revision"] = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        except OSError:
+            item["disk_revision"] = None
+        item["pending"] = bool(item.get("error")) or item.get("loaded_revision") != item["disk_revision"]
+    settings = [
+        ("routing_mode", PICK_MODE, "CC_PROXY_PICK"),
+        ("threshold", ROTATE_THRESHOLD, "CC_PROXY_THRESHOLD"),
+        ("tolerance", PICK_TOLERANCE, "CC_PROXY_PICK_TOLERANCE"),
+        ("deepseek_passthrough", DEEPSEEK_FALLBACK, "CC_PROXY_DEEPSEEK_FALLBACK"),
+        ("usage_interval", USAGE_INTERVAL, "CC_PROXY_USAGE_INTERVAL"),
+    ]
+    recent = [{k: inspect_text(e[k]) for k in ("ts", "kind", "bucket", "from_fp", "to_fp", "reason") if k in e}
+              for e in recent_routes()[-20:]]
+    payload = {"schema": "llm-inspector.v1", "generated_at": now, "host": socket.gethostname(),
+            "runtime": {"revision": RUNNING_REVISION, "started_at": STARTED_AT},
+            "accounts": accounts, "providers": providers,
+            "session": {"model": inspect_text(model), "class": inspect_text(class_name), "last_served": last},
+            "routing": {"mode": PICK_MODE, "bucket": bucket_key(model), "account_applicable": applicable, "account_preview": preview,
+                        "provider_preview": oracle, "class_preview": class_oracle,
+                        "note": "Preview only; Pi owns model switching. Class oracle is not session policy."},
+            "config": {"tables": configs, "settings": [
+                {"name": name, "value": value, "source": env if env in os.environ else "default", "owner": "proxy runtime"}
+                for name, value, env in settings], "routes": effective_routes, "classes": effective_classes},
+            "events": events[-60:], "route_events": recent}
+    return inspect_clean(payload)
+
+
 CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 
@@ -2565,6 +2769,7 @@ class Handler(BaseHTTPRequestHandler):
                     if tok.valid:
                         tok.invalid_since = time.time()
                         log(f"token {tok.name()} parked: upstream {resp.status}")
+                        inspect_event("auth", account=tok.fp, state="rejected", status=resp.status)
                     tok.valid = False
                     tok.last_revalidate = time.time()
                     check_health("token rejected upstream")
@@ -2671,6 +2876,17 @@ class Handler(BaseHTTPRequestHandler):
         if endpoint in ("/_status", "/_health"):
             self._status_page()
             return
+        if endpoint == "/_inspect":
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_json(403, {"error": "loopback only"})
+                return
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            self._send_json(200, inspector_payload(
+                (query.get("model") or ["claude-opus-5-5"])[0][:120],
+                (query.get("session") or [""])[0][:256],
+                (query.get("class") or ["interactive"])[0][:80],
+                (query.get("current") or [None])[0]))
+            return
         if endpoint == "/_usage":
             self._usage_page()
             return
@@ -2686,6 +2902,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream(self, resp, tok: Tok | None, model: str):
         class_name = getattr(self, "class_name", None)
+        record_served(self.headers.get("x-cc-proxy-session"), tok, model, resp.status,
+                      "anthropic" if tok else "deepseek")
         content_type = resp.getheader("content-type", "")
         is_json = "text/event-stream" not in content_type.lower()
         captured = bytearray()
@@ -2740,6 +2958,7 @@ def probe(tok: Tok, note: str = "seed") -> None:
         })
         r = conn.getresponse()
         with LOCK:
+            previously_valid = tok.valid
             update_from_headers(tok, r.headers)
             tok.last_status = r.status
             if r.status == 429:
@@ -2751,6 +2970,8 @@ def probe(tok: Tok, note: str = "seed") -> None:
             else:
                 tok.valid = True
                 tok.invalid_since = 0.0
+            if tok.valid != previously_valid:
+                inspect_event("auth", account=tok.fp, state="accepted" if tok.valid else "rejected", status=r.status)
             save_usage_state()
         r.read()
         conn.close()
