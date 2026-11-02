@@ -1,0 +1,56 @@
+#!/bin/bash
+set -euo pipefail
+
+# ykotp - pick an OATH account on the YubiKey, copy its TOTP code.
+#
+#   ykotp            fzf picker (terminal)
+#   ykotp --wofi     wofi picker (Hyprland keybinding: Super+Shift+O)
+#
+# Codes come from `ykman oath`; nothing is cached. Accounts that require touch
+# raise a "touch your YubiKey" notification. Clipboard clears after
+# $YKOTP_CLEAR_SECONDS (default 15).
+#
+# Dependencies: ykman, fzf or wofi, copy (from dotfiles bin/)
+
+CLEAR_SECONDS="${YKOTP_CLEAR_SECONDS:-15}"
+
+UI=fzf
+if [[ "${1:-}" == "--wofi" ]]; then UI=wofi; shift; fi
+[[ "${1:-}" == -h || "${1:-}" == --help ]] && { sed -n '3,12p' "$0"; exit 0; }
+
+notify() { notify-send -a ykotp -t 3000 "ykotp" "$*" 2>/dev/null || true; }
+die() {
+  if [[ "$UI" == wofi ]]; then notify-send -u critical -a ykotp "ykotp" "$*" 2>/dev/null; fi
+  echo "ykotp: $*" >&2
+  exit 1
+}
+
+command -v ykman &>/dev/null || die "ykman is not installed"
+
+accounts="$(ykman oath accounts list 2>&1)" || die "no YubiKey? ${accounts##*$'\n'}"
+[[ -n "$accounts" ]] || die "no OATH accounts on the YubiKey"
+
+if [[ "$UI" == wofi ]]; then
+  name="$(wofi --dmenu -i --prompt "YubiKey OTP" --lines 14 <<<"$accounts")" || exit 0
+else
+  name="$(fzf --reverse --height=40% --header="YubiKey OTP: copy code" <<<"$accounts")" || exit 0
+fi
+[[ -n "$name" ]] || exit 0
+grep -qxF -- "$name" <<<"$accounts" || exit 0   # typed text that is no account
+
+# ykman prints "Touch your YubiKey..." on stderr for touch-required accounts.
+code="$(ykman oath accounts code -s -- "$name" \
+  2> >(while IFS= read -r l; do
+         [[ "$l" == *[Tt]ouch* ]] && notify-send -a ykotp -t 10000 "ykotp" "Touch your YubiKey" 2>/dev/null
+         echo "$l" >&2
+       done))" || die "could not get a code for '$name'"
+[[ "$code" =~ ^[0-9]+$ ]] || die "unexpected output for '$name'"
+
+printf '%s' "$code" | copy
+if [[ "$UI" == wofi ]]; then
+  notify "${name%%:*} code copied. Clipboard clears in ${CLEAR_SECONDS}s."
+else
+  echo "${name%%:*} code copied. Clipboard clears in ${CLEAR_SECONDS}s."
+fi
+( sleep "$CLEAR_SECONDS"; wl-copy --clear 2>/dev/null || true; ) &>/dev/null &
+disown
