@@ -10,7 +10,7 @@ from unittest import mock
 
 from tests.unit._helpers import load_script
 
-proxy=load_script('proxy_no_starvation', Path(__file__).parents[2]/'bin/claude-token-proxy')
+proxy=load_script('proxy_no_starvation', Path(__file__).parents[2]/'bin/llm-proxy')
 
 class SpendTests(unittest.TestCase):
  def setUp(self):

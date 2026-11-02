@@ -8,8 +8,8 @@ from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
 
-PROXY_PATH = Path(__file__).parents[2] / "bin" / "claude-token-proxy"
-proxy = load_script("claude_token_proxy_deepseek_tests", PROXY_PATH)
+PROXY_PATH = Path(__file__).parents[2] / "bin" / "llm-proxy"
+proxy = load_script("llm_proxy_deepseek_tests", PROXY_PATH)
 
 
 class DeepseekBackstopTests(ProxyIsolationMixin, unittest.TestCase):
@@ -45,7 +45,7 @@ class DeepseekBackstopTests(ProxyIsolationMixin, unittest.TestCase):
 
     def test_failover_is_opt_in_by_default(self):
         self.assertEqual(proxy.os.environ.get("CC_PROXY_DEEPSEEK_FALLBACK", "0"), "0")
-        service = (Path(__file__).parents[2] / "config/systemd/user/claude-token-proxy.service").read_text()
+        service = (Path(__file__).parents[2] / "config/systemd/user/llm-proxy.service").read_text()
         self.assertNotIn("CC_PROXY_DEEPSEEK_FALLBACK=1", service)
 
 

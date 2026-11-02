@@ -11,8 +11,8 @@ Wants=network-online.target
 Type=simple
 # Bind localhost only; selects the ~/cctoken token with the most weekly headroom
 # and fails over on 429/401/403/529 so a running `claude` rotates without restart.
-ExecCondition=/usr/bin/test -x %h/.local/bin/claude-token-proxy
-ExecStart=%h/.local/bin/claude-token-proxy --port 8788
+ExecCondition=/usr/bin/test -x %h/.local/bin/llm-proxy
+ExecStart=%h/.local/bin/llm-proxy --port 8788
 Restart=on-failure
 RestartSec=30
 # Hardening: the proxy reads ~/cctoken and holds tokens in memory only.

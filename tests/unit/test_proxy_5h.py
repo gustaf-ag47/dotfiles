@@ -14,7 +14,7 @@ from tests.unit._helpers import load_script
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 from scripts import llm_usage
 
-proxy = load_script('proxy_5h', Path(__file__).parents[2] / 'bin/claude-token-proxy')
+proxy = load_script('proxy_5h', Path(__file__).parents[2] / 'bin/llm-proxy')
 
 
 class CapacityTests(unittest.TestCase):

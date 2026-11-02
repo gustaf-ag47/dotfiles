@@ -47,7 +47,7 @@ esac
 _cc_proxy_port="${CC_PROXY_PORT:-8788}"
 _cc_proxy_url="http://127.0.0.1:${_cc_proxy_port}"
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && command -v systemctl >/dev/null 2>&1 \
-	&& systemctl --user is-active --quiet claude-token-proxy 2>/dev/null; then
+	&& systemctl --user is-active --quiet llm-proxy 2>/dev/null; then
 	export ANTHROPIC_BASE_URL="$_cc_proxy_url"
 elif [ "${ANTHROPIC_BASE_URL:-}" = "$_cc_proxy_url" ]; then
 	# Proxy not active but a base URL inherited from a prior shell still points at

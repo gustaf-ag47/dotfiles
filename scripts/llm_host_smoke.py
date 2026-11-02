@@ -13,7 +13,7 @@ SCHEMA = "llm-host-smoke.v1"
 CHECKS = (
     "git status --short",
     "make test-unit",
-    "python3 -m unittest tests.unit.test_llm_usage tests.unit.test_llm_news tests.unit.test_claude_token_proxy -v",
+    "python3 -m unittest tests.unit.test_llm_usage tests.unit.test_llm_news tests.unit.test_llm_proxy -v",
     "node --test --experimental-strip-types tests/unit/test_llm_failover.mjs",
     "bin/llm-usage --refresh --json | python3 -m json.tool >/dev/null",
     "bin/llm-news --json | python3 -m json.tool >/dev/null",

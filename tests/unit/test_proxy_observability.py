@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from tests.unit.proxy_fixture import ProxyIsolationMixin
 
-PATH = Path(__file__).resolve().parents[2] / 'bin/claude-token-proxy'
+PATH = Path(__file__).resolve().parents[2] / 'bin/llm-proxy'
 LOADER = importlib.machinery.SourceFileLoader('proxy_observability_subject', str(PATH))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 proxy = importlib.util.module_from_spec(SPEC)

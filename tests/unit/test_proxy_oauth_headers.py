@@ -4,7 +4,7 @@ from unittest import TestCase, mock
 
 from tests.unit._helpers import load_script
 
-proxy = load_script("proxy_oauth_headers", Path(__file__).parents[2] / "bin/claude-token-proxy")
+proxy = load_script("proxy_oauth_headers", Path(__file__).parents[2] / "bin/llm-proxy")
 
 
 class OAuthTransportTests(TestCase):
