@@ -78,7 +78,18 @@ def tick(manifest, child, parent):
         if checks.returncode not in (0, 1, 8):
             raise ValueError(checks.stderr or "checks unavailable")
         data = json.loads(checks.stdout)
-        failed = [check["name"] for check in data if check.get("bucket") in ("fail", "cancel")]
+        # Only the newest check-run per name gates the merge. `gh pr checks` also
+        # lists check-runs from runs that CI concurrency cancelled when a newer
+        # push arrived; those show as "cancel" (or stale "fail") next to the live
+        # "pending"/"pass" entry of the same name. Drop a name that has any
+        # non-terminal or passing sibling, and never count a lone cancel as red.
+        by_name: dict[str, set[str]] = {}
+        for check in data:
+            by_name.setdefault(check["name"], set()).add(check.get("bucket", ""))
+        failed = sorted(
+            name for name, buckets in by_name.items()
+            if "fail" in buckets and not buckets & {"pass", "pending", "skipping"}
+        )
         if failed:
             reason = "red: " + ", ".join(failed)
     stalled = bool(idle_or_waiting and reason and pr["state"] == "OPEN")
