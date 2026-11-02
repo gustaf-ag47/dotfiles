@@ -8,7 +8,9 @@
 #
 # Driven by dotfiles-sync.timer on every machine. Never force-pushes, never
 # discards local changes: a merge that would touch dirty files is aborted and
-# reported with notify-send (if a session is available) and in the journal.
+# reported in the journal on every run, but with notify-send only once per
+# problem (state in $XDG_STATE_HOME/dotfiles-sync/last-alert), so a blocked
+# checkout does not raise a critical notification every 15 minutes.
 set -euo pipefail
 
 DOTFILES="${DOTFILES:-$HOME/sync/src/dotfiles}"
@@ -16,13 +18,46 @@ MAIN=master
 force=false
 [[ "${1:-}" == "--force" ]] && force=true
 
-notify() {  # <urgency> <message>
-  echo "dotfiles-sync: $2"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-sync"
+LAST_ALERT="$STATE_DIR/last-alert"
+
+desktop() {  # <urgency> <message>
   command -v notify-send >/dev/null && notify-send -a dotfiles-sync -u "$1" "dotfiles" "$2" 2>/dev/null || true
 }
 
+notify() {  # <urgency> <message>: informational, always shown
+  echo "dotfiles-sync: $2"
+  desktop "$1" "$2"
+}
+
+alert() {  # <urgency> <key> <message>: a problem; shown once per key, repeats go to the journal only
+  echo "dotfiles-sync: $3"
+  mkdir -p "$STATE_DIR"
+  [[ "$(cat "$LAST_ALERT" 2>/dev/null)" == "$2" ]] && return 0
+  printf '%s\n' "$2" > "$LAST_ALERT"
+  desktop "$1" "$3"
+}
+
+resolved() {  # the last alerted problem is gone; say so once
+  [[ -f "$LAST_ALERT" ]] || return 0
+  rm -f "$LAST_ALERT"
+  notify low "sync working again"
+}
+
+merge_failure() {  # <what> <err-file>: explain why a merge into the checkout failed
+  local files
+  if grep -q "would be overwritten" "$2"; then
+    files="$(grep -P '^\t' "$2" | tr -d '\t' | paste -sd ' ')"
+    echo "$1 blocked by uncommitted changes in: $files (commit or stash them)"
+  else
+    echo "$1 failed: $(tail -1 "$2")"
+  fi
+}
+
 cd "$DOTFILES"
-git fetch -q origin "$MAIN" || { notify low "fetch failed (offline?)"; exit 0; }
+ERR="$(mktemp)"
+trap 'rm -f "$ERR"' EXIT
+git fetch -q origin "$MAIN" || { alert low fetch "fetch failed (offline?)"; exit 0; }
 
 branch="$(git branch --show-current)"
 before="$(git rev-parse HEAD)"
@@ -30,8 +65,13 @@ remote="$(git rev-parse "origin/$MAIN")"
 
 if [[ "$branch" == "$MAIN" ]]; then
   if ! git merge-base --is-ancestor "$remote" HEAD; then
-    if ! git merge -q --ff-only "origin/$MAIN" 2>/tmp/dotfiles-sync.err; then
-      notify critical "master diverged from origin: $(tail -1 /tmp/dotfiles-sync.err)"
+    if ! git merge -q --ff-only "origin/$MAIN" 2>"$ERR"; then
+      ahead="$(git rev-list --count "origin/$MAIN..HEAD")"
+      if [[ "$ahead" -gt 0 ]]; then
+        alert critical "diverged:$remote" "master diverged from origin ($ahead local commit(s) not on origin): rebase or merge by hand"
+      else
+        alert critical "blocked:$remote" "$(merge_failure "update to origin/master" "$ERR")"
+      fi
       exit 1
     fi
   fi
@@ -42,15 +82,16 @@ if [[ "$branch" == "$MAIN" ]]; then
 else
   # Feature branch (e.g. skrubben's reading-kobo-usb): carry master into it.
   if ! git merge-base --is-ancestor "$remote" HEAD; then
-    if ! git merge -q --no-edit "origin/$MAIN" 2>/tmp/dotfiles-sync.err; then
+    if ! git merge -q --no-edit "origin/$MAIN" 2>"$ERR"; then
       git merge --abort 2>/dev/null || true
-      notify critical "merge of origin/master into $branch failed: $(tail -1 /tmp/dotfiles-sync.err)"
+      alert critical "branch:$branch:$remote" "$(merge_failure "merge of origin/master into $branch" "$ERR")"
       exit 1
     fi
     git push -q origin "$branch" 2>/dev/null || true
   fi
 fi
 
+resolved
 after="$(git rev-parse HEAD)"
 if [[ "$after" == "$before" ]] && ! $force; then
   echo "dotfiles-sync: up to date ($(git log --oneline -1 | cut -c1-60))"
@@ -58,7 +99,7 @@ if [[ "$after" == "$before" ]] && ! $force; then
 fi
 
 if ! bash scripts/install.sh > /tmp/dotfiles-sync-install.log 2>&1; then
-  notify critical "install.sh failed, see /tmp/dotfiles-sync-install.log"
+  alert critical "install:$(git rev-parse HEAD)" "install.sh failed, see /tmp/dotfiles-sync-install.log"
   exit 1
 fi
 
