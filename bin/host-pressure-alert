@@ -39,6 +39,12 @@ if [[ -e /etc/systemd/system/user@.service.d/50-memory-bound.conf ]] \
     state=warning; reasons+=("systemd-oomd is not guarding user@$(id -u): sudo systemctl restart systemd-oomd")
 fi
 
+# homelab Prometheus/Alertmanager carry the load/IO/memory alerts; they sat exited for
+# 19 days (2026-10-15..11-03) unnoticed. Opt-in per host via HOST_PRESSURE_PROM_URL.
+if [[ -n "${HOST_PRESSURE_PROM_URL:-}" ]] && ! curl -sf -m 5 "$HOST_PRESSURE_PROM_URL/-/ready" >/dev/null; then
+    state=warning; reasons+=("Prometheus down at $HOST_PRESSURE_PROM_URL: host alerts are blind")
+fi
+
 # A GSP/recovery Xid means the GPU is wedged; the compositor soft-locks hours later
 # (2026-11-03: Xid 154 at 09:22, Hyprland lockup at 17:37). Say so while a clean reboot is possible.
 xid=$(journalctl -k -b -q --no-pager -g 'NVRM: Xid .*: (79|119|120|154|175),' 2>/dev/null | tail -1 | grep -oE 'Xid \([^)]*\): [0-9]+' || true)
