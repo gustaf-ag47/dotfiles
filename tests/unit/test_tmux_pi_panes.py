@@ -85,6 +85,32 @@ class RestoreTest(unittest.TestCase):
             self.assertEqual(sent[2], ("send-keys", "-t", "S:3.0", "-l", "--", "pi"))
             self.assertEqual(len(sent), 4)
 
+    def test_stale_session_is_typed_not_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            snap = Path(tmp, "tmux_resurrect_1.txt")
+            snap.write_text("pane\n")
+            Path(tmp, "last").symlink_to(snap.name)
+            old = Path(tmp, "old.jsonl")
+            old.write_text("{}\n")
+            sidecar = Path(str(snap) + ".pi")
+            sidecar.write_text(panes.format_rows([("S", "1", "0", str(old))]))
+            t = sidecar.stat().st_mtime - panes.STALE_AFTER_S - 60
+            os.utime(old, (t, t))
+            sent = []
+
+            def fake_tmux(*args):
+                if args[0] == "display-message":
+                    return mock.Mock(returncode=0, stdout="zsh\n")
+                if args[0] == "send-keys":
+                    sent.append(args)
+                return mock.Mock(returncode=0, stdout="")
+
+            with mock.patch.object(panes, "resurrect_dir", return_value=Path(tmp)), \
+                 mock.patch.object(panes, "live_session_files", return_value=set()), \
+                 mock.patch.object(panes, "tmux", side_effect=fake_tmux):
+                panes.cmd_restore()
+            self.assertEqual(sent, [("send-keys", "-t", "S:1.0", "-l", "--", f"pi --session {old}")])
+
 
 class GuessSessionFileTest(unittest.TestCase):
     # pi started before the extension existed: no state file, argv overwritten,

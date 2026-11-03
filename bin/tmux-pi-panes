@@ -23,6 +23,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SHELLS = {"zsh", "bash", "sh", "fish"}
 SIDECAR_SUFFIX = ".pi"
+# A session idle this long when the snapshot was taken gets its resume command
+# typed but not run: dozens of finished agents relaunched at every boot held
+# ~12 GB and helped push skrubben into swap (2026-11-03).
+STALE_AFTER_S = int(os.environ.get("TMUX_PI_RESTORE_STALE_H", "24")) * 3600
 
 
 def load_ws():
@@ -205,6 +209,7 @@ def cmd_restore():
         rows = parse_rows(sidecar.read_text())
     except OSError:
         return
+    snapshot_time = sidecar.stat().st_mtime
     ws = load_ws()
     already_open = live_session_files(ws)
     for session, window, pane, session_file in rows:
@@ -216,12 +221,15 @@ def cmd_restore():
             continue
         # pi only writes its .jsonl at the first message; a pane that held a
         # fresh, unused pi still gets pi back, just without --session.
+        stale = False
         if Path(session_file).exists():
             resume = f"pi --session {shlex.quote(session_file)}"
+            stale = snapshot_time - Path(session_file).stat().st_mtime > STALE_AFTER_S
         else:
             resume = "pi"
         tmux("send-keys", "-t", target, "-l", "--", resume)
-        tmux("send-keys", "-t", target, "Enter")
+        if not stale:
+            tmux("send-keys", "-t", target, "Enter")
         already_open.add(session_file)
 
 
