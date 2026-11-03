@@ -20,6 +20,23 @@ reasons=()
 [[ "$root_pct" -ge "$root_threshold" ]] && { state=warning; reasons+=("/ at ${root_pct}% (>= ${root_threshold}%)"); }
 [[ "$swap_pct" -ge "$swap_threshold" ]] && { state=warning; reasons+=("swap at ${swap_pct}% (>= ${swap_threshold}%)"); }
 
+# Data disks besides / (skrubben's btrfs NVMe hit 98% unnoticed, 2026-11-03).
+for m in ${HOST_PRESSURE_MOUNTS-/mnt/my_encrypted_nvme}; do
+    mountpoint -q "$m" || continue
+    pct=$(df --output=pcent "$m" | tail -1 | tr -dc '0-9')
+    [[ "$pct" -ge "$root_threshold" ]] && { state=warning; reasons+=("$m at ${pct}% (>= ${root_threshold}%)"); }
+done
+
+# Memory stall time, not swap %, is what freezes the desktop.
+psi_threshold="${HOST_PRESSURE_PSI_FULL_THRESHOLD:-10}"
+psi_full=$(awk '/^full/{split($3,a,"="); printf "%d", a[2]}' /proc/pressure/memory 2>/dev/null || echo 0)
+[[ "$psi_full" -ge "$psi_threshold" ]] && { state=warning; reasons+=("memory stalled ${psi_full}% (full avg60)"); }
+
+# A GSP/recovery Xid means the GPU is wedged; the compositor soft-locks hours later
+# (2026-11-03: Xid 154 at 09:22, Hyprland lockup at 17:37). Say so while a clean reboot is possible.
+xid=$(journalctl -k -b -q --no-pager -g 'NVRM: Xid .*: (79|119|120|154|175),' 2>/dev/null | tail -1 | grep -oE 'Xid \([^)]*\): [0-9]+' || true)
+[[ -n "$xid" ]] && { state=critical; reasons+=("GPU faulted ($xid): save work and reboot"); }
+
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/host-pressure-alert"
 mkdir -p "$cache"
 chmod 700 "$cache"
@@ -34,5 +51,5 @@ if [[ "$state" == normal && "$old" != normal && -n "$old" ]]; then
 fi
 printf '%s\n' "$state" > "$cache/state"
 
-printf 'tmp=%s%% root=%s%% swap=%s%% state=%s reason=%s\n' \
-    "$tmp_pct" "$root_pct" "$swap_pct" "$state" "$reason"
+printf 'tmp=%s%% root=%s%% swap=%s%% memfull=%s%% state=%s reason=%s\n' \
+    "$tmp_pct" "$root_pct" "$swap_pct" "$psi_full" "$state" "$reason"
