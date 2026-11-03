@@ -37,6 +37,16 @@ psi_full=$(awk '/^full/{split($3,a,"="); printf "%d", a[2]}' /proc/pressure/memo
 xid=$(journalctl -k -b -q --no-pager -g 'NVRM: Xid .*: (79|119|120|154|175),' 2>/dev/null | tail -1 | grep -oE 'Xid \([^)]*\): [0-9]+' || true)
 [[ -n "$xid" ]] && { state=critical; reasons+=("GPU faulted ($xid): save work and reboot"); }
 
+# Earlier warning: open-driver BAR1/VA-space exhaustion (NVIDIA open-gpu-kernel-modules#1411)
+# logs MMU errors for hours before the wedge. Usually a GPU-accelerated browser.
+if [[ -z "$xid" ]]; then
+    mmu=$( (journalctl -k -b -q --no-pager -g 'NVRM: .*(kgmmuInvalidateTlb|can.t alloc VA space|mmuWalkUnmap|dmaFreeMapping)' 2>/dev/null || true) | wc -l)
+    if [[ "$mmu" -gt 0 ]]; then
+        who=$(journalctl -k -b -q --no-pager -g 'NVRM: Xid .*name=' 2>/dev/null | tail -1 | grep -oE 'name=[^,]+' || true)
+        state=warning; reasons+=("GPU VA-space errors x${mmu}${who:+ ($who)}: move that app off the GPU, reboot soon")
+    fi
+fi
+
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/host-pressure-alert"
 mkdir -p "$cache"
 chmod 700 "$cache"
