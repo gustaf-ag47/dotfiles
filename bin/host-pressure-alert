@@ -32,6 +32,13 @@ psi_threshold="${HOST_PRESSURE_PSI_FULL_THRESHOLD:-10}"
 psi_full=$(awk '/^full/{split($3,a,"="); printf "%d", a[2]}' /proc/pressure/memory 2>/dev/null || echo 0)
 [[ "$psi_full" -ge "$psi_threshold" ]] && { state=warning; reasons+=("memory stalled ${psi_full}% (full avg60)"); }
 
+# systemd-oomd silently monitored nothing on 2026-11-03 (oomctl: no cgroups), so a
+# thrash could freeze the host. Check it still guards this user manager.
+if [[ -e /etc/systemd/system/user@.service.d/50-memory-bound.conf ]] \
+    && ! oomctl dump 2>/dev/null | grep -q "/user@$(id -u).service"; then
+    state=warning; reasons+=("systemd-oomd is not guarding user@$(id -u): sudo systemctl restart systemd-oomd")
+fi
+
 # A GSP/recovery Xid means the GPU is wedged; the compositor soft-locks hours later
 # (2026-11-03: Xid 154 at 09:22, Hyprland lockup at 17:37). Say so while a clean reboot is possible.
 xid=$(journalctl -k -b -q --no-pager -g 'NVRM: Xid .*: (79|119|120|154|175),' 2>/dev/null | tail -1 | grep -oE 'Xid \([^)]*\): [0-9]+' || true)
