@@ -204,6 +204,11 @@ for unit_dir in "$DOTFILES/config/systemd/user" "$DOTFILES/local/config/systemd/
 	done
 done
 
+# systemd-oomd policy for apps and agent scopes. Declared in the user manager so a
+# `systemctl --user daemon-reload` re-sends it: set on user@.service it was silently
+# dropped by every user reload, leaving oomd guarding nothing (2026-11-03).
+link_config "$DOTFILES/config/systemd/user/app.slice.d" "$XDG_CONFIG_HOME/systemd/user/app.slice.d"
+
 # Hermes Agent: only skrubben runs the gateway (see $NOTES/Homelab/dotfiles/HERMES.md).
 # Require the canonical host and all shared state bind mounts before enabling
 # the snapshot writer; a stale ~/.hermes checkout on a client is not sufficient.
