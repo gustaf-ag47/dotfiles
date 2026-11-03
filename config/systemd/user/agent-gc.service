@@ -1,0 +1,9 @@
+[Unit]
+Description=Park idle pi panes and remove dead agent worktrees (lossless)
+
+[Service]
+Type=oneshot
+Environment=TMPDIR=/mnt/my_encrypted_nvme/scratch/tmp
+ExecStart=%h/.local/bin/agent-gc
+Nice=10
+IOSchedulingClass=idle

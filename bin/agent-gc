@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""agent-gc: lossless garbage collection for finished agent work.
+
+  agent-gc [--dry-run] [pi] [worktrees]     (default: both)
+
+pi         A pane whose pi has not written its session for AGENT_GC_PI_IDLE_H
+           (24) hours and is not "Working" gets pi stopped and
+           `pi --session <file>` typed back at the prompt, not run: one Enter
+           resumes it. Window, layout and transcript stay.
+worktrees  A git worktree directly under AGENT_GC_WT_ROOT ($TMPDIR) that is
+           untouched for AGENT_GC_WT_IDLE_H (72) hours, has no process inside,
+           is not locked and has no change other than deleted tracked files
+           (scratch.conf's tmpfiles age-out deletes those) is removed after
+           HEAD is saved as refs/parked/<dir>. Branches and commits stay.
+
+Why: nothing closed finished agents. On skrubben (2026-11-03) ~85 idle pi held
+12.5 GB and 757 worktrees held 139 GB, filling the btrfs NVMe to 98%.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BUSY = re.compile(r"[⠀-⣿] Working|Working\.\.\.|esc to interrupt")
+SHELLS = {"zsh", "bash", "sh", "fish"}
+
+
+def _panes_module():
+    loader = importlib.machinery.SourceFileLoader("tmux_pi_panes", str(ROOT / "bin/tmux-pi-panes"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def run(*cmd, timeout=60):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def log(msg):
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    state.mkdir(parents=True, exist_ok=True)
+    line = f"{datetime.now().isoformat(timespec='seconds')} {msg}"
+    print(line)
+    with (state / "agent-gc.log").open("a") as f:
+        f.write(line + "\n")
+
+
+# ---------------------------------------------------------------- pi
+
+def pi_is_idle(session_file, pane_text, now, idle_s):
+    if session_file is None or BUSY.search(pane_text):
+        return False
+    try:
+        return now - Path(session_file).stat().st_mtime > idle_s
+    except OSError:
+        return False
+
+
+def park_pi(dry_run, idle_s):
+    panes = _panes_module()
+    ws = panes.load_ws()
+    ps_text = run("ps", "-eo", "pid,ppid,comm").stdout
+    listing = run("tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{session_name}:#{window_name}")
+    now = time.time()
+    parked = 0
+    for line in listing.stdout.splitlines():
+        pane_id, pane_pid, name = line.split("\t", 2)
+        pid = ws.find_pi_pid(pane_pid, ps_text=ps_text)
+        if not pid:
+            continue
+        session_file = panes.session_file_for_pid(pid)
+        if not pi_is_idle(session_file, run("tmux", "capture-pane", "-p", "-t", pane_id).stdout, now, idle_s):
+            continue
+        hours = int((now - Path(session_file).stat().st_mtime) / 3600)
+        log(f"pi park {name} pid={pid} idle={hours}h {session_file}")
+        parked += 1
+        if dry_run:
+            continue
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        for _ in range(20):
+            time.sleep(0.5)
+            if run("tmux", "display-message", "-p", "-t", pane_id, "#{pane_current_command}").stdout.strip() in SHELLS:
+                run("tmux", "send-keys", "-t", pane_id, "-l", "--", f"pi --session {shlex.quote(session_file)}")
+                break
+    return parked
+
+
+# ---------------------------------------------------------------- worktrees
+
+def only_deletions(porcelain):
+    return all(line.startswith(" D ") for line in porcelain.splitlines() if line)
+
+
+def newest_mtime(path):
+    newest = path.stat().st_mtime
+    for child in path.iterdir():
+        try:
+            newest = max(newest, child.stat(follow_symlinks=False).st_mtime)
+        except OSError:
+            pass
+    return newest
+
+
+def live_cwds(proc=Path("/proc")):
+    cwds = set()
+    for entry in proc.iterdir():
+        if entry.name.isdigit():
+            try:
+                cwds.add(os.readlink(entry / "cwd"))
+            except OSError:
+                pass
+    return cwds
+
+
+def gc_worktrees(dry_run, root, idle_s):
+    now = time.time()
+    cwds = live_cwds()
+    removed = 0
+    for wt in sorted(p for p in root.iterdir() if (p / ".git").is_file()):
+        prefix = str(wt) + "/"
+        if any(c == str(wt) or c.startswith(prefix) for c in cwds):
+            continue
+        if now - newest_mtime(wt) < idle_s:
+            continue
+        status = run("git", "-C", str(wt), "status", "--porcelain")
+        if status.returncode or not only_deletions(status.stdout):
+            continue
+        if Path((run("git", "-C", str(wt), "rev-parse", "--git-dir").stdout.strip() or "/nonexistent"), "locked").exists():
+            continue
+        log(f"worktree remove {wt}")
+        removed += 1
+        if dry_run:
+            continue
+        run("git", "-C", str(wt), "update-ref", f"refs/parked/{wt.name}", "HEAD")
+        result = run("git", "-C", str(wt), "worktree", "remove", "--force", str(wt), timeout=600)
+        if result.returncode:
+            log(f"worktree remove failed {wt}: {result.stderr.strip()}")
+    return removed
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("what", nargs="*", choices=["pi", "worktrees"], default=["pi", "worktrees"])
+    args = parser.parse_args(argv)
+    if "pi" in args.what:
+        n = park_pi(args.dry_run, float(os.environ.get("AGENT_GC_PI_IDLE_H", "24")) * 3600)
+        log(f"pi parked={n}{' (dry run)' if args.dry_run else ''}")
+    if "worktrees" in args.what:
+        root = Path(os.environ.get("AGENT_GC_WT_ROOT") or os.environ.get("TMPDIR") or "/tmp")
+        n = gc_worktrees(args.dry_run, root, float(os.environ.get("AGENT_GC_WT_IDLE_H", "72")) * 3600)
+        log(f"worktrees removed={n} root={root}{' (dry run)' if args.dry_run else ''}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

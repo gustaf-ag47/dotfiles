@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly agent-gc (idle pi >24h, worktrees untouched >72h)
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

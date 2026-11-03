@@ -4,3 +4,4 @@ enable decision-gate.service
 enable ws-up.service
 enable reading-ingest.timer
 enable reading-kobo-usb.path
+enable agent-gc.timer
