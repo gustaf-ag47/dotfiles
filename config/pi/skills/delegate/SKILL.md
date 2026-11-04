@@ -114,8 +114,12 @@ mailbox delivers completions in-band (see In-band delivery below). After push, r
 `<task>: BLOCKER <sha> - waiting on CI <run-url>` per the result contract) instead of
 waiting: never `sleep`/poll loops or `gh … --watch` inside a tool call. The delegate
 watcher and supervisor wake the parent when the lane changes; on the next turn,
-check the merge gates and continue owning the merge. (`ci_wait` is not installed;
-panes printing "waiting on CI" are still recognised by the supervisor.)
+check the merge gates and continue owning the merge. With the `ci_wait` tool
+(`config/pi/extensions/ci-wait.ts`), call `ci_wait { pr: <n> }` (or `until: "merged"` /
+`"post-merge"`) and end the turn: it polls `gh` in the background and re-prompts the
+session in-band with `CI WAIT RESOLVED - …` when checks go green/red, the PR merges,
+conflicts or closes. Its `ci_wait registered:` line marks the pane as waiting on CI
+for the supervisor; `/ci-wait` lists or cancels watches.
 
 Merge only through `merge-pr.sh` (`scripts/merge-pr.sh`, wraps `gh pr merge`): it
 appends pane/run-id/pr/head-sha to `~/.pi/agent/merge-log.tsv`, and refuses when the

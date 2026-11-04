@@ -32,6 +32,7 @@ test('injects once for a checkout and a nested worktree directory', async (t) =>
     await onStart(prompt, { cwd });
     assert.equal(prompt.systemPromptOptions.promptGuidelines.length, 6);
     assert.match(prompt.systemPromptOptions.promptGuidelines[1], /gh pr checks/);
+    assert.match(prompt.systemPromptOptions.promptGuidelines[3], /call `ci_wait` \(when available\) and end the turn/);
     await onStart(prompt, { cwd });
     assert.equal(prompt.systemPromptOptions.promptGuidelines.length, 6);
   }
