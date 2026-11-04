@@ -95,7 +95,8 @@ After push, run `gh pr checks <n>` once. If checks are pending, end the turn (or
 send `<task>: BLOCKER <sha> - waiting on CI <run-url>`) instead of waiting: never
 `sleep`/poll loops or `gh … --watch` inside a tool call. Keep this interactive/RPC
 session open for the in-band wake-up; then verify the current head and merge gates
-and continue under the assigned merge ownership. (`ci_wait` is not installed; panes
-printing "waiting on CI" are still recognised by the supervisor.)
+and continue under the assigned merge ownership. Prefer `ci_wait { pr: <n> }` then
+end the turn: it re-prompts you in-band with `CI WAIT RESOLVED - …` when CI is
+actionable, and its `ci_wait registered:` line tells the supervisor you are waiting.
 
 Target ~$<n>. If you exceed it with no clear progress, write up what you have and stop.
