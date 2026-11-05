@@ -187,9 +187,15 @@ let pi!: ExtensionAPI;
 
 export default function (api: ExtensionAPI) {
 	pi = api;
-	pi.events.on("ci-wait:state", (state: unknown) => {
-		waitingForCI = Boolean((state as { active?: boolean }).active);
-	});
+	// Pause while any background wait (ci_wait, wait_for) is pending: the wake-up
+	// message resumes the work, so evaluating in between would only nudge polling.
+	const waiting = { ci: false, other: false };
+	const onWait = (key: "ci" | "other") => (state: unknown) => {
+		waiting[key] = Boolean((state as { active?: boolean }).active);
+		waitingForCI = waiting.ci || waiting.other;
+	};
+	pi.events.on("ci-wait:state", onWait("ci"));
+	pi.events.on("wait-for:state", onWait("other"));
 
 	pi.on("agent_settled", async (_event, ctx) => {
 		await runEvaluator(ctx);

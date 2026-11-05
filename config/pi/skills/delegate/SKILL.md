@@ -119,7 +119,10 @@ check the merge gates and continue owning the merge. With the `ci_wait` tool
 `"post-merge"`) and end the turn: it polls `gh` in the background and re-prompts the
 session in-band with `CI WAIT RESOLVED - …` when checks go green/red, the PR merges,
 conflicts or closes. Its `ci_wait registered:` line marks the pane as waiting on CI
-for the supervisor; `/ci-wait` lists or cancels watches.
+for the supervisor; `/ci-wait` lists or cancels watches. For non-CI waits (a log
+line, a command succeeding, a tmux pane or process exiting) use `wait_for`
+(`config/pi/extensions/wait-for.ts`) the same way; `bash-budget.ts` blocks sleeps
+of 30 s or more inside a bash call.
 
 Merge only through `merge-pr.sh` (`scripts/merge-pr.sh`, wraps `gh pr merge`): it
 appends pane/run-id/pr/head-sha to `~/.pi/agent/merge-log.tsv`, and refuses when the
