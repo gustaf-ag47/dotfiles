@@ -30,7 +30,7 @@ function fakeGh(state) {
       const code = checks.some((c) => c.bucket === 'pending') ? 8 : checks.some((c) => c.bucket === 'fail') ? 1 : 0;
       return { code, stdout: JSON.stringify(checks), stderr: '' };
     }
-    if (a === 'run' && b === 'list') return ok(state.runs ?? []);
+    if (a === 'run' && b === 'list') return ok((state.runs ?? []).map((r) => ({ event: 'push', ...r })));
     if (a === 'run' && b === 'view' && args.includes('--log-failed')) return { code: 0, stdout: Array.from({ length: 100 }, (_, i) => `log line ${i}`).join('\n'), stderr: '' };
     if (a === 'run' && b === 'view') return ok(state.run);
     throw new Error(`unexpected gh ${args.join(' ')}`);
@@ -260,4 +260,26 @@ test('/ci-wait cancel removes watches and re-registering a target replaces it', 
   assert.equal(b.api.watches.size, 0);
   assert.match(notes[0], /cancelled w2/);
   assert.deepEqual(b.events.at(-1)[1], { active: false, watches: [] });
+});
+
+
+test('scheduled-only runs cannot establish branch or post-merge health', async () => {
+  for (const target of [{ branch: 'master' }, { pr: 7, until: 'post-merge' }]) {
+    const sha = 'e'.repeat(40);
+    const state = {
+      pr: { state: 'MERGED', mergeCommit: { oid: sha } },
+      runs: [{ event: 'schedule', databaseId: 99, workflowName: 'Drift Watch',
+        status: 'completed', conclusion: 'success', url: 'u99', headSha: sha }],
+    };
+    const b = boot(state);
+    await register(b, target);
+    await b.api.tick();
+    assert.equal(b.sent.length, 0);
+    assert.ok(b.gh.calls.some((a) => a[1] === 'list' && a.includes('--event') && a.includes('push')));
+    b.advance(11 * 60_000);
+    await b.api.tick();
+    assert.equal(b.sent.length, 1);
+    assert.match(b.sent[0][0].content, /no workflow runs/);
+    assert.doesNotMatch(b.sent[0][0].content, /green/);
+  }
 });
