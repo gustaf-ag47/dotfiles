@@ -98,5 +98,7 @@ session open for the in-band wake-up; then verify the current head and merge gat
 and continue under the assigned merge ownership. Prefer `ci_wait { pr: <n> }` then
 end the turn: it re-prompts you in-band with `CI WAIT RESOLVED - …` when CI is
 actionable, and its `ci_wait registered:` line tells the supervisor you are waiting.
+For anything else you must wait on (log line, command, tmux pane, process), call
+`wait_for` and end the turn; sleeps of 30 s or more inside bash are blocked.
 
 Target ~$<n>. If you exceed it with no clear progress, write up what you have and stop.

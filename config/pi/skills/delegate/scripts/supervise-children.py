@@ -14,7 +14,7 @@ from pathlib import Path
 HOME = Path.home()
 BUSY = re.compile(r"[⠀-⣿] Working|Working\.\.\.|esc to interrupt")
 RESULT = re.compile(r"^\s*[^\s<>][^<>]*: (PASS|BLOCKER|DONE|FAILED) ([a-fA-F0-9]{7,40}|none) - ([^\s<>]+)(?:\s+ci:\d+)?(?:\s+pr:\d+)?\s*$", re.MULTILINE)
-CI = re.compile(r"ci_wait registered|CI watch registered|waiting on CI", re.IGNORECASE)
+CI = re.compile(r"ci_wait registered|wait_for registered|CI watch registered|waiting on CI", re.IGNORECASE)
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
