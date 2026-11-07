@@ -97,3 +97,24 @@ class WorktreeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaneTest(unittest.TestCase):
+    root = Path("/scratch/tmp")
+
+    def stale(self, command="zsh", age_h=100, visible="0", path="/scratch/tmp/wt-x", children=False):
+        fields = ["%1", "123", command, str(int(time.time() - age_h * 3600)), visible, path]
+        return gc.pane_is_stale(fields, self.root, time.time(), 72 * 3600, lambda pid: children)
+
+    def test_old_idle_shell_in_worktree_is_stale(self):
+        self.assertTrue(self.stale())
+        self.assertTrue(self.stale(path="/scratch/tmp/wt-x/sub (deleted)"))
+
+    def test_busy_recent_visible_or_outside_root_is_kept(self):
+        self.assertFalse(self.stale(command="pi"))
+        self.assertFalse(self.stale(age_h=10))
+        self.assertFalse(self.stale(visible="1"))
+        self.assertFalse(self.stale(children=True))
+        self.assertFalse(self.stale(path="/home/u/src"))
+        self.assertFalse(self.stale(path="/scratch/tmp"))
+        self.assertFalse(self.stale(path="/scratch/tmpfoo/wt"))

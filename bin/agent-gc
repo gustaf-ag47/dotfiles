@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """agent-gc: lossless garbage collection for finished agent work.
 
-  agent-gc [--dry-run] [pi] [worktrees]     (default: both)
+  agent-gc [--dry-run] [pi] [panes] [worktrees]     (default: all)
 
 pi         A pane whose pi has not written its session for AGENT_GC_PI_IDLE_H
            (24) hours and is not "Working" gets pi stopped and
@@ -12,6 +12,12 @@ worktrees  A git worktree directly under AGENT_GC_WT_ROOT ($TMPDIR) that is
            is not locked and has no change other than deleted tracked files
            (scratch.conf's tmpfiles age-out deletes those) is removed after
            HEAD is saved as refs/parked/<dir>. Branches and commits stay.
+panes      A tmux pane that is just an idle shell (no child process, no output for
+           AGENT_GC_PANE_IDLE_H (72) hours, not the window a client is looking at)
+           sitting in a worktree under AGENT_GC_WT_ROOT is closed after its full
+           scrollback is saved to $XDG_STATE_HOME/agent-gc/panes/. Such shells
+           (often a parked `pi --session ...` prompt) pinned their worktree as
+           "live" forever: on 2026-11-07 ~35 of them held ~25 GB of worktrees.
 
 Why: nothing closed finished agents. On skrubben (2026-11-03) ~85 idle pi held
 12.5 GB and 757 worktrees held 139 GB, filling the btrfs NVMe to 98%.
@@ -97,6 +103,63 @@ def park_pi(dry_run, idle_s):
     return parked
 
 
+# ---------------------------------------------------------------- panes
+
+def pane_is_stale(fields, root, now, idle_s, has_children):
+    """fields: pane_id, pane_pid, command, window_activity, visible(0/1), path."""
+    _pane_id, pid, command, activity, visible, path = fields
+    if command not in SHELLS or visible == "1":
+        return False
+    if not (path == str(root) or path.startswith(str(root) + "/")) or path == str(root):
+        return False
+    try:
+        if now - int(activity) < idle_s:
+            return False
+    except ValueError:
+        return False
+    return not has_children(pid)
+
+
+def _has_children(pid):
+    try:
+        return bool(Path(f"/proc/{pid}/task/{pid}/children").read_text().split())
+    except OSError:
+        return True  # unknown: keep the pane
+
+
+def gc_panes(dry_run, root, idle_s):
+    fmt = "\t".join(["#{pane_id}", "#{pane_pid}", "#{pane_current_command}", "#{window_activity}",
+                     "#{&&:#{session_attached},#{window_active}}", "#{pane_current_path}",
+                     "#{session_name}:#{window_name}"])
+    listing = run("tmux", "list-panes", "-a", "-F", fmt)
+    if listing.returncode:
+        return 0
+    now = time.time()
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "agent-gc/panes"
+    closed = 0
+    for line in listing.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 7:
+            continue
+        *fields, name = parts
+        if not pane_is_stale(fields, root, now, idle_s, _has_children):
+            continue
+        pane_id, path = fields[0], fields[5]
+        idle_h = int((now - int(fields[3])) / 3600)
+        dest = state / f"{datetime.now():%Y%m%dT%H%M%S}-{re.sub(r'[^A-Za-z0-9_.-]+', '_', name)}-{pane_id.lstrip('%')}.log"
+        log(f"pane close {name} {pane_id} idle={idle_h}h cwd={path} scrollback={dest}")
+        closed += 1
+        if dry_run:
+            continue
+        history = run("tmux", "capture-pane", "-p", "-J", "-S", "-", "-t", pane_id)
+        if history.returncode:
+            continue
+        state.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f"# agent-gc: pane {name} {pane_id} cwd={path} idle={idle_h}h\n" + history.stdout)
+        run("tmux", "kill-pane", "-t", pane_id)
+    return closed
+
+
 # ---------------------------------------------------------------- worktrees
 
 def only_deletions(porcelain):
@@ -153,13 +216,16 @@ def gc_worktrees(dry_run, root, idle_s):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("what", nargs="*", choices=["pi", "worktrees"], default=["pi", "worktrees"])
+    parser.add_argument("what", nargs="*", choices=["pi", "panes", "worktrees"], default=["pi", "panes", "worktrees"])
     args = parser.parse_args(argv)
     if "pi" in args.what:
         n = park_pi(args.dry_run, float(os.environ.get("AGENT_GC_PI_IDLE_H", "24")) * 3600)
         log(f"pi parked={n}{' (dry run)' if args.dry_run else ''}")
+    root = Path(os.environ.get("AGENT_GC_WT_ROOT") or os.environ.get("TMPDIR") or "/tmp")
+    if "panes" in args.what:
+        n = gc_panes(args.dry_run, root, float(os.environ.get("AGENT_GC_PANE_IDLE_H", "72")) * 3600)
+        log(f"panes closed={n} root={root}{' (dry run)' if args.dry_run else ''}")
     if "worktrees" in args.what:
-        root = Path(os.environ.get("AGENT_GC_WT_ROOT") or os.environ.get("TMPDIR") or "/tmp")
         n = gc_worktrees(args.dry_run, root, float(os.environ.get("AGENT_GC_WT_IDLE_H", "72")) * 3600)
         log(f"worktrees removed={n} root={root}{' (dry run)' if args.dry_run else ''}")
     return 0
