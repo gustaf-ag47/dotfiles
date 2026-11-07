@@ -219,6 +219,32 @@ PARENT_WINDOW="$(resolve_parent_window)"
 # out not to be a reliable address (see check below).
 PARENT_PANE="${TMUX_PANE:-unknown}"
 
+# ── single-owner subjects (fail closed) ──
+# A verbal "stop dispatching X" did not stop backlog-triggered dispatches
+# (InStockachu oupi, 2026-11-07: four duplicate lanes, two replayed a live
+# production cf_clearance). Each registry line is
+#   <ERE> TAB <ERE the parent session:window must match> TAB <scope> TAB <reason>
+# scope "task" matches --task/--name; "brief" also matches the brief text
+# (use it only for unambiguous tokens such as alert fingerprints).
+# Only the named owner may launch a lane that matches.
+single_owner_guard() {
+	local reg="${PI_DELEGATE_SINGLE_OWNER_FILE:-$HOME/.pi/agent/delegate-single-owner.tsv}"
+	[ -f "$reg" ] || return 0
+	local task_text brief_text pat owner scope reason text
+	task_text="$TASK"$'\n'"$NAME"
+	brief_text=""
+	[ -n "$BRIEF" ] && [ -f "$BRIEF" ] && brief_text="$(cat "$BRIEF")"
+	while IFS=$'\t' read -r pat owner scope reason; do
+		case "$pat" in '' | '#'*) continue ;; esac
+		text="$task_text"
+		[ "$scope" = brief ] && text+=$'\n'"$brief_text"
+		if printf '%s' "$text" | grep -qiE -- "$pat" && ! printf '%s' "$PARENT_WINDOW" | grep -qE -- "$owner"; then
+			die "single-owner subject /$pat/ belongs to /$owner/ ($reason); parent $PARENT_WINDOW may not dispatch it. Forward to the owner instead. Registry: $reg"
+		fi
+	done <"$reg"
+}
+single_owner_guard
+
 # session:window-name only survives a tmux restart if the name is unique in
 # its session and not a generic shell name nobody meant to make addressable.
 # Warn loudly rather than fail: a stale/ambiguous parent means a completion
