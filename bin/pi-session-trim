@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""pi-session-trim: drop the part of a pi session file that its latest compaction replaced.
+
+  pi-session-trim [--dry-run] [--min-mb N] SESSION.jsonl...
+
+pi loads every entry of a session file into memory, but only uses the active branch
+from the latest compaction's firstKeptEntryId onward (everything older is in the
+summary). A long-lived orchestrator pane (sla-primary, 2026-10-15..11-08) reached a
+1.1 GB file with 2,260 compactions and held 2.2 GB of RAM+swap for it.
+
+The trimmed file keeps: the header, every extension state entry on the branch
+(custom: wait-for/ci-wait registrations etc., model/thinking changes, session_info,
+labels) chained in order, then the branch from firstKeptEntryId to the leaf.
+Off-branch entries and pre-compaction messages are dropped. The original is kept
+next to it as <file>.full-<timestamp>.zst (or uncompressed if zstd is missing).
+Only run it on a session no live pi has open; pi appends to the file.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+STATE_TYPES = {"custom", "model_change", "thinking_level_change", "session_info", "label"}
+
+
+def trim(lines):
+    """Return the trimmed list of JSON lines, or None if nothing to trim."""
+    header, ents, order = None, {}, []
+    for ln in lines:
+        if not ln.strip():
+            continue
+        e = json.loads(ln)
+        if e.get("type") == "session":
+            header = ln
+            continue
+        ents[e["id"]] = (e, ln)
+        order.append(e["id"])
+    if header is None or not order:
+        return None
+    path, x = [], order[-1]
+    while x in ents:
+        path.append(x)
+        x = ents[x][0].get("parentId")
+    path.reverse()
+    comps = [i for i, x in enumerate(path) if ents[x][0]["type"] == "compaction"]
+    if not comps:
+        return None
+    first_kept = ents[path[comps[-1]]][0].get("firstKeptEntryId")
+    if first_kept not in path:
+        return None
+    cut = path.index(first_kept)
+    if cut == 0 and len(path) == len(order):
+        return None
+    out, parent = [header], None
+    for x in path[:cut]:
+        e = ents[x][0]
+        if e["type"] in STATE_TYPES:
+            out.append(json.dumps({**e, "parentId": parent}, ensure_ascii=False) + "\n")
+            parent = e["id"]
+    for i, x in enumerate(path[cut:]):
+        e, ln = ents[x]
+        if i == 0:
+            ln = json.dumps({**e, "parentId": parent}, ensure_ascii=False) + "\n"
+        out.append(ln if ln.endswith("\n") else ln + "\n")
+    return out
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--min-mb", type=float, default=50)
+    ap.add_argument("files", nargs="+")
+    a = ap.parse_args(argv)
+    for f in a.files:
+        size = os.path.getsize(f)
+        if size < a.min_mb * 1e6:
+            continue
+        with open(f, encoding="utf-8") as fh:
+            out = trim(fh.readlines())
+        if out is None:
+            print(f"{f}: nothing to trim")
+            continue
+        new = sum(len(x.encode()) for x in out)
+        print(f"{f}: {size / 1e6:.0f} MB -> {new / 1e6:.1f} MB{' (dry run)' if a.dry_run else ''}")
+        if a.dry_run:
+            continue
+        backup = f"{f}.full-{time.strftime('%Y%m%dT%H%M%S')}"
+        shutil.copy2(f, backup)
+        if shutil.which("zstd") and subprocess.run(["zstd", "-q", "--rm", "-T0", backup]).returncode == 0:
+            backup += ".zst"
+        tmp = f + ".trim-tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.writelines(out)
+        os.replace(tmp, f)
+        print(f"  original kept at {backup}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

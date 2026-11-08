@@ -6,7 +6,8 @@
 pi         A pane whose pi has not written its session for AGENT_GC_PI_IDLE_H
            (24) hours and is not "Working" gets pi stopped and
            `pi --session <file>` typed back at the prompt, not run: one Enter
-           resumes it. Window, layout and transcript stay.
+           resumes it. Window, layout and transcript stay. A session file over
+           50 MB is first cut to its latest compaction (bin/pi-session-trim).
 worktrees  A git worktree directly under AGENT_GC_WT_ROOT ($TMPDIR) that is
            untouched for AGENT_GC_WT_IDLE_H (72) hours, has no process inside,
            is not locked and has no change other than deleted tracked files
@@ -98,6 +99,9 @@ def park_pi(dry_run, idle_s):
         for _ in range(20):
             time.sleep(0.5)
             if run("tmux", "display-message", "-p", "-t", pane_id, "#{pane_current_command}").stdout.strip() in SHELLS:
+                # pi is gone: drop what the latest compaction replaced before it reloads
+                # (a 1.1 GB session held 2.2 GB of RAM+swap, 2026-11-08).
+                run(str(Path(__file__).resolve().with_name("pi-session-trim")), session_file)
                 run("tmux", "send-keys", "-t", pane_id, "-l", "--", f"pi --session {shlex.quote(session_file)}")
                 break
     return parked
