@@ -6,6 +6,16 @@
 set -euo pipefail
 
 RESURRECT_SCRIPT="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tmux-resurrect/scripts/save.sh"
+SPINNER="$(dirname "$RESURRECT_SCRIPT")/tmux_spinner.sh Saving"
+
+# One save at a time (timer, prefix C-s, tmux.service stop, fzf session kill).
+# Overlapping save.sh runs share pane_contents.tar.gz and the "last" link, and
+# a run that dies leaves its "Saving..." spinner looping in the status line.
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/tmux-safe-save.lock"
+if ! flock -w "${TMUX_SAFE_SAVE_LOCK_WAIT:-30}" 9; then
+    echo "Another tmux save is still running, skipping"
+    exit 0
+fi
 
 # Check if there are any sessions to save
 session_count=$(tmux list-sessions 2>/dev/null | wc -l)
@@ -53,7 +63,9 @@ if [ -f "$contents" ]; then
 fi
 
 save_started="$(mktemp)"
-trap 'rm -f "$save_started"' EXIT
+# Under the lock no other save runs, so any "Saving..." spinner left now is
+# an orphan of a save.sh that died before its stop_spinner.
+trap 'rm -f "$save_started"; pkill -f "$SPINNER" || true' EXIT
 
 # Run the actual save script
 if [ -x "$RESURRECT_SCRIPT" ]; then

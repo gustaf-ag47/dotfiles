@@ -46,6 +46,7 @@ class TmuxSafeSaveTest(unittest.TestCase):
             tmux.chmod(0o755)
             env = os.environ | {
                 "HOME": tmp,
+                "XDG_RUNTIME_DIR": tmp,
                 "XDG_CONFIG_HOME": str(root / "config"),
                 "PATH": f"{fakebin}:{os.environ['PATH']}",
             }
@@ -83,6 +84,49 @@ class TmuxSafeSaveTest(unittest.TestCase):
             self.assertFalse((resurrect / "tmux_resurrect_new.txt.pi").exists())
             self.assertGreater(last_file.stat().st_mtime, 1000)
 
+    def test_orphaned_saving_spinner_is_killed_even_when_save_fails(self):
+        # A save.sh that dies before stop_spinner leaves tmux_spinner.sh
+        # looping "Saving..." in the status line forever.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            resurrect = root / "resurrect"
+            resurrect.mkdir()
+            self._fake_env(root, resurrect, "exit 3\n")
+            scripts = root / "config/tmux/plugins/tmux-resurrect/scripts"
+            spinner = scripts / "tmux_spinner.sh"
+            spinner.write_text("#!/bin/bash\nwhile true; do sleep 0.1; done\n")
+            spinner.chmod(0o755)
+            orphan = subprocess.Popen(["bash", str(spinner), "Saving...", "saved!"])
+            try:
+                result = self._run(root)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNotNone(orphan.wait(timeout=5))
+            finally:
+                orphan.kill()
+
+    def test_concurrent_save_waits_for_lock_then_skips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            resurrect = root / "resurrect"
+            resurrect.mkdir()
+            marker = root / "ran"
+            self._fake_env(root, resurrect, f"touch {str(marker)!r}\n")
+            holder = subprocess.Popen(
+                ["flock", str(root / "tmux-safe-save.lock"), "sleep", "30"]
+            )
+            try:
+                for _ in range(50):
+                    if (root / "tmux-safe-save.lock").exists():
+                        break
+                    subprocess.run(["sleep", "0.1"])
+                result = self._run(root, {"TMUX_SAFE_SAVE_LOCK_WAIT": "1"})
+            finally:
+                holder.kill()
+                holder.wait()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("still running", result.stdout)
+            self.assertFalse(marker.exists())
+
     def _fake_env(self, root, resurrect, body):
         config = root / "config/tmux/plugins/tmux-resurrect/scripts"
         config.mkdir(parents=True)
@@ -102,9 +146,10 @@ class TmuxSafeSaveTest(unittest.TestCase):
         )
         tmux.chmod(0o755)
 
-    def _run(self, root):
-        env = os.environ | {
+    def _run(self, root, extra=None):
+        env = os.environ | (extra or {}) | {
             "HOME": str(root),
+            "XDG_RUNTIME_DIR": str(root),
             "XDG_CONFIG_HOME": str(root / "config"),
             "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
         }
