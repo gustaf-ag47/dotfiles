@@ -4,6 +4,10 @@ Description=Park idle pi panes and remove dead agent worktrees (lossless)
 [Service]
 Type=oneshot
 Environment=TMPDIR=/mnt/my_encrypted_nvme/scratch/tmp
+# Agents create ~80 worktrees a night (~0.4 GB each); at 72 h they held ~90 GB
+# and kept the NVMe at the 90% host-pressure line (2026-11-08). Removal is
+# lossless (HEAD -> refs/parked/<dir>), so 36 h is safe.
+Environment=AGENT_GC_WT_IDLE_H=36
 ExecStart=%h/.local/bin/agent-gc
 Nice=10
 IOSchedulingClass=idle
