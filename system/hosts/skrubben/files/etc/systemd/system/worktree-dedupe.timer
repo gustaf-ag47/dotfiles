@@ -1,0 +1,10 @@
+[Unit]
+Description=Dedupe agent worktrees every 6 h (first run 2026-11-09 freed 32 GB of NVMe)
+
+[Timer]
+OnCalendar=*-*-* 00/6:30
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

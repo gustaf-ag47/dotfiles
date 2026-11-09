@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""worktree-dedupe: share identical file data between agent worktrees on btrfs.
+
+  worktree-dedupe [--dry-run] [--min-kb N] [--state FILE] ROOT
+
+Agents create ~80-150 git worktrees a day under $WORKTREES, each a full checkout
+(~370 MB exclusive: tracked data such as ralph/site-truth, tests/fixtures, and a
+mypy cache), identical across worktrees. Git cannot reflink a checkout, so the
+NVMe filled at ~30 GB/day until agent-gc caught up (2026-11-09). This finds
+identical files under ROOT/wt-*/ and asks the kernel (FIDEDUPERANGE) to share
+their extents. The kernel compares the bytes itself, so a file that changes
+mid-run is simply not deduped: it is safe on live worktrees.
+
+State (inode, size, mtime -> sha256, and pairs already deduped) is kept in
+--state so nightly runs only hash new files. duperemove 0.15.2 aborted
+(run_dedupe.c:447) on this tree twice, hence this small tool.
+"""
+import argparse
+import array
+import fcntl
+import hashlib
+import json
+import os
+import struct
+import sys
+import time
+from collections import defaultdict
+
+FIDEDUPERANGE = 0xC0189436
+CHUNK = 16 * 1024 * 1024  # btrfs caps one dedupe request at 16 MiB
+SKIP_DIRS = {".git", "node_modules/.cache", "__pycache__"}
+
+
+def walk(root, min_size):
+    for top in sorted(os.listdir(root)):
+        if not top.startswith("wt-"):
+            continue
+        base = os.path.join(root, top)
+        if os.path.islink(base) or not os.path.isdir(base):
+            continue
+        for d, dirs, files in os.walk(base):
+            dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
+            for f in files:
+                p = os.path.join(d, f)
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                if st.st_size >= min_size and (st.st_mode & 0o170000) == 0o100000:
+                    yield p, st
+
+
+def sha256(path):
+    with open(path, "rb") as fh:
+        return hashlib.file_digest(fh, "sha256").hexdigest()
+
+
+def dedupe(src, dst, size):
+    """Share dst's data with src. Returns bytes deduped."""
+    done = 0
+    with open(src, "rb") as s, open(dst, "rb") as d:
+        off = 0
+        while off < size:
+            n = min(CHUNK, size - off)
+            buf = bytearray(struct.pack("=QQHHI", off, n, 1, 0, 0) + struct.pack("=qQQiI", d.fileno(), off, 0, 0, 0))
+            fcntl.ioctl(s.fileno(), FIDEDUPERANGE, buf)
+            _, _, deduped, status, _ = struct.unpack_from("=qQQiI", buf, 24)
+            if status < 0 or status == 1:  # error, or FILE_DEDUPE_RANGE_DIFFERS
+                return done
+            done += deduped
+            off += n
+    return done
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("root")
+    ap.add_argument("--min-kb", type=int, default=64)
+    ap.add_argument("--state", default="/var/lib/worktree-dedupe/state.json")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    t0 = time.time()
+    try:
+        with open(a.state) as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        state = {"hash": {}, "done": {}}
+    old_hash, done_pairs = state["hash"], state["done"]
+    new_hash = {}
+    by_size = defaultdict(list)
+    for p, st in walk(a.root, a.min_kb * 1024):
+        by_size[st.st_size].append((p, st))
+    groups = defaultdict(list)
+    hashed = 0
+    for size, items in by_size.items():
+        if len(items) < 2:
+            continue
+        for p, st in items:
+            key = f"{st.st_dev}:{st.st_ino}:{size}:{st.st_mtime_ns}"
+            h = old_hash.get(key)
+            if h is None:
+                try:
+                    h = sha256(p)
+                except OSError:
+                    continue
+                hashed += 1
+            new_hash[key] = h
+            groups[(size, h)].append((p, key))
+    saved = pairs = 0
+    new_done = {}
+    for (size, _h), files in groups.items():
+        if len(files) < 2:
+            continue
+        src, src_key = files[0]
+        for dst, dst_key in files[1:]:
+            pair = f"{src_key}>{dst_key}"
+            if pair in done_pairs:
+                new_done[pair] = 1
+                continue
+            pairs += 1
+            if a.dry_run:
+                saved += size
+                continue
+            try:
+                saved += dedupe(src, dst, size)
+                new_done[pair] = 1
+            except OSError as e:
+                print(f"skip {dst}: {e}", file=sys.stderr)
+    if not a.dry_run:
+        os.makedirs(os.path.dirname(a.state), exist_ok=True)
+        tmp = a.state + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"hash": new_hash, "done": new_done}, fh)
+        os.replace(tmp, a.state)
+    print(f"worktree-dedupe: files={sum(len(v) for v in by_size.values())} hashed={hashed} "
+          f"new_pairs={pairs} deduped={saved / 2**30:.2f}GiB{' (dry run)' if a.dry_run else ''} "
+          f"in {time.time() - t0:.0f}s")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

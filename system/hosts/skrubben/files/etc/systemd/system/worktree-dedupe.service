@@ -1,0 +1,13 @@
+[Unit]
+Description=Share identical file data between agent worktrees (btrfs FIDEDUPERANGE)
+Documentation=file:///home/gud1/sync/src/dotfiles/bin/worktree-dedupe
+RequiresMountsFor=/mnt/my_encrypted_nvme
+
+[Service]
+Type=oneshot
+ExecStart=/home/gud1/sync/src/dotfiles/bin/worktree-dedupe /mnt/my_encrypted_nvme/scratch/tmp
+Nice=15
+IOSchedulingClass=idle
+MemoryHigh=3G
+MemoryMax=4G
+TimeoutStartSec=3h
