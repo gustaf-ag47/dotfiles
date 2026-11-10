@@ -1,31 +1,15 @@
-// delegate-mailbox.ts — in-band delivery for delegation completion records.
-//
-// Problem (measured 2026-10-03): watch-child.sh notifies the parent pi session
-// with tmux send-keys, and a TUI swallows keystrokes without trace — a child
-// finished, 8 nudges fired, none reached the parent's context; the human closed
-// the loop. The mailbox backstop is pull-only: nothing wakes an idle parent.
-//
-// Fix: this extension runs INSIDE the parent pi session and watches the mailbox
-// directory itself. When a record appears whose `parent:` pane matches this
-// session's $TMUX_PANE, it injects the record as a custom message via
-// pi.sendMessage(..., { triggerTurn: true }) — no keystrokes involved — and
-// acks it by moving it to ack/, which stops watch-child's keystroke re-nudges
-// (they remain as fallback for parents without this extension).
-//
-// Scope rules:
-// - Only records addressed to this pane are ingested; a machine-global mailbox
-//   with several pi sessions must not cross-deliver or cross-ack.
-// - Sweep on session_start (catch-up after restart/reboot), fs.watch afterward.
-// - Watcher starts in session_start, never in the factory; closed idempotently
-//   in session_shutdown (docs/extensions.md lifecycle contract).
-//
-// Knobs: PI_DELEGATE_MAILBOX (default ~/.pi/agent/delegate-mailbox).
+// Session-ID-only delivery. Pane/window fields are diagnostics, never authority.
+// A new/forked chat cannot consume a previous occupant's mail; resuming the same
+// session elsewhere can. Legacy records are copied to quarantine/, not ack/; originals stay intact.
+// Pi 1.5.2 replaces the extension runtime and its queues on new/resume/fork.
+// Async verification must also check its generation before send or ack.
+// Knob: PI_DELEGATE_MAILBOX (default ~/.pi/agent/delegate-mailbox).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const MAILBOX = process.env.PI_DELEGATE_MAILBOX || path.join(os.homedir(), ".pi/agent/delegate-mailbox");
 const ACK_DIR = path.join(MAILBOX, "ack");
@@ -35,12 +19,27 @@ const STATE_DIR = path.join(MAILBOX, "state");
 const SETTLE_MS = 300;
 
 export default function (pi: ExtensionAPI) {
-	const pane = process.env.TMUX_PANE || "";
 	let watcher: fs.FSWatcher | null = null;
 	const delivered = new Set<string>();
-
-	const addressedToUs = (content: string): boolean =>
-		pane !== "" && content.match(/^- parent: `([^`]+)`$/m)?.[1] === pane;
+	let sessionId = "";
+	let context: ExtensionContext | undefined;
+	let generation = 0;
+	const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local/state");
+	const readyFile = path.join(base, "pi-panes", `${process.pid}.mailbox`);
+	function publishReady() {
+		const stat = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8").split(") ").at(-1)!.split(" ");
+		fs.mkdirSync(path.dirname(readyFile), { recursive: true });
+		fs.writeFileSync(`${readyFile}.tmp`, JSON.stringify({ protocol: 2, session_id: sessionId, mailbox: fs.realpathSync(MAILBOX),
+			start_ticks: stat[19], boot_id: fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() }), { mode: 0o600 });
+		fs.renameSync(`${readyFile}.tmp`, readyFile);
+	}
+	const validId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/.test(id);
+	const recipient = (content: string): string => {
+		const fields = [...content.matchAll(/^- recipient_session_id: `([^`]+)`$/gm)];
+		return fields.length === 1 && validId(fields[0][1]) ? fields[0][1] : "";
+	};
+	const current = (epoch: number): boolean => !closed && epoch === generation &&
+		!!sessionId && context?.sessionManager.getSessionId() === sessionId;
 	const steering = (content: string): boolean =>
 		content.split("\n\n", 1)[0].split("\n").includes('- kind: `steer`');
 	let closed = false;
@@ -62,7 +61,7 @@ export default function (pi: ExtensionAPI) {
 	function state(file: string, status: string) {
 		fs.mkdirSync(STATE_DIR, { recursive: true });
 		const target = path.join(STATE_DIR, `${path.basename(file)}.json`);
-		fs.writeFileSync(`${target}.tmp`, JSON.stringify({ state: status, pane, at: new Date().toISOString() }) + "\n");
+		fs.writeFileSync(`${target}.tmp`, JSON.stringify({ state: status, recipient_session_id: sessionId, pane: process.env.TMUX_PANE || "", at: new Date().toISOString() }) + "\n");
 		fs.renameSync(`${target}.tmp`, target);
 	}
 
@@ -82,7 +81,7 @@ export default function (pi: ExtensionAPI) {
 						`The child has an active CI watch and has not finished.\n\n${content}`
 					: `DELEGATION FINISHED — record ${file} (auto-acked to ${ACK_DIR}; do not mv it).\n` +
 						`Process the completion below: verify the child's claims, then decide next steps.\n\n${content}`,
-			details: { record: file, steering: steering(content) },
+			details: { record: file, steering: steering(content), recipient_session_id: sessionId },
 			display: true,
 		};
 		try {
@@ -94,28 +93,28 @@ export default function (pi: ExtensionAPI) {
 			try {
 				pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
 			} catch {
-				return false; // leave unacked; keystroke fallback still applies
+				return false; // leave durable; never fall back to pane keystrokes
 			}
 		}
 		return true;
 	}
 
 	async function scan() {
-		if (closed) return;
+		if (!current(generation)) return;
 		if (scanning) { rescan = true; return; }
 		scanning = true;
 		try {
-		await scanRecords();
+		await scanRecords(generation);
 		} finally {
 			scanning = false;
 			if (rescan && !closed) { rescan = false; void scan(); }
 		}
 	}
 
-	async function scanRecords() {
+	async function scanRecords(epoch: number) {
 		let names: string[];
 		try {
-			names = fs.readdirSync(MAILBOX).filter((n) => n.endsWith(".md"));
+			names = fs.readdirSync(MAILBOX).filter((n) => n.endsWith(".mail") || n.endsWith(".md"));
 		} catch {
 			return; // mailbox may not exist yet
 		}
@@ -128,57 +127,77 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				continue; // raced with an ack/removal
 			}
-			if (!addressedToUs(content)) continue;
+			if (!current(epoch)) return;
+			const to = recipient(content);
+			if (!to) {
+				// No safe inference from a pane-only record, even if its pane is ours.
+				try {
+					const quarantine = path.join(MAILBOX, "quarantine");
+					fs.mkdirSync(quarantine, { recursive: true });
+					// Preserve the original for still-running legacy owners during mixed rollout.
+					fs.copyFileSync(file, path.join(quarantine, name), fs.constants.COPYFILE_EXCL);
+					if (context?.hasUI) context.ui.setStatus("mailbox-legacy", "Mailbox: legacy/invalid records in quarantine (not delivered)");
+				} catch { /* Another consumer may have quarantined it. */ }
+				continue;
+			}
+			if (to !== sessionId) continue;
+			const original = content;
 			content = await verification(file, content);
-			if (closed) return;
+			if (!current(epoch)) return;
+			try { if (fs.readFileSync(file, "utf8") !== original) continue; } catch { continue; }
 			delivered.add(file);
 			try {
-				if (steering(content)) state(file, "accepted");
+				state(file, "accepted");
 			} catch { delivered.delete(file); continue; }
 			if (!deliver(file, content)) {
 				delivered.delete(file);
-				try { if (steering(content)) state(file, "queued"); } catch { /* Retry later. */ }
+				try { state(file, "queued"); } catch { /* Retry later. */ }
 				continue;
 			}
-			try {
-				// Steering stays durable until Pi actually starts its custom message.
-				// A restart before that boundary replays the pending record.
-				if (!steering(content)) ack(file);
-			} catch {
-				// Ack failed; watch-child re-nudges keep the at-least-once contract.
-			}
+			// All records stay durable until Pi actually starts their message.
 		}
 	}
 
-	pi.on("message_start", async (event) => {
+	pi.on("message_start", async (event, ctx) => {
 		const message = event.message;
 		if (message.role !== "custom" || message.customType !== "delegate-mailbox") return;
-		const details = message.details as { record?: string; steering?: boolean } | undefined;
-		if (!details?.steering || !details.record || !delivered.has(details.record)) return;
+		const details = message.details as { record?: string; recipient_session_id?: string } | undefined;
+		if (!current(generation) || ctx.sessionManager.getSessionId() !== sessionId ||
+			details?.recipient_session_id !== sessionId || !details.record || !delivered.has(details.record)) return;
 		try {
+			if (recipient(fs.readFileSync(details.record, "utf8")) !== sessionId) return;
 			state(details.record, "delivered");
 			ack(details.record);
 		} catch { /* The pending record survives for replay after restart. */ }
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		stop();
 		closed = false;
+		context = ctx;
+		const id = ctx.sessionManager.getSessionId();
+		sessionId = validId(id) ? id : "";
 		delivered.clear();
-		if (pane === "") return; // not under tmux: no delegations can address us
+		if (!sessionId) return; // no identity, no delivery; tmux is not required
 		fs.mkdirSync(ACK_DIR, { recursive: true });
-		await scan(); // catch up on records that arrived while no session was running
+		const epoch = generation;
 		watcher = fs.watch(MAILBOX, (_type, filename) => {
-			if (!filename || !filename.toString().endsWith(".md")) return;
+			if (!filename || !/\.(?:mail|md)$/.test(filename.toString())) return;
 			clearTimeout(timer);
 			timer = setTimeout(() => { void scan(); }, SETTLE_MS);
 		});
-		if (ctx.hasUI) ctx.ui.notify(`delegate-mailbox: watching ${MAILBOX} for ${pane}`, "info");
+		publishReady(); // sender must see BOTH publisher identity and this consumer capability
+		await scan(); // watcher first: no gap while verification is running
+		if (current(epoch) && ctx.hasUI) ctx.ui.notify(`delegate-mailbox: watching for session ${sessionId}`, "info");
 	});
 
-	pi.on("session_shutdown", async () => {
+	function stop() {
+		generation++;
 		closed = true;
 		clearTimeout(timer);
 		watcher?.close(); // idempotent: close() on a closed watcher is a no-op
 		watcher = null;
-	});
+		try { fs.rmSync(readyFile, { force: true }); } catch { /* no authority after teardown */ }
+	}
+	pi.on("session_shutdown", async () => { stop(); });
 }

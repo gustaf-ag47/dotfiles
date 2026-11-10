@@ -10,27 +10,33 @@ import * as path from 'node:path';
 
 const MAILBOX = fs.mkdtempSync(path.join(os.tmpdir(), 'delegate-mailbox-'));
 process.env.PI_DELEGATE_MAILBOX = MAILBOX; // must be set before the module loads
+process.env.XDG_STATE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mailbox-state-'));
 process.env.TMUX_PANE = '%99';
 const { default: delegateMailbox } = await import('../../config/pi/extensions/delegate-mailbox.ts');
 
+const ID = '11111111-1111-4111-8111-111111111111';
+const ctx = { hasUI: false, sessionManager: { getSessionId: () => ID } };
 function boot() {
   const sent = [];
   const handlers = {};
   delegateMailbox({
-    sendMessage: (message, opts) => sent.push([message, opts]),
+    sendMessage: (message, opts) => {
+      sent.push([message, opts]);
+      if (!message.details.steering) void handlers.message_start({ message: { role: 'custom', ...message } }, ctx);
+    },
     on: (name, fn) => { handlers[name] = fn; },
   });
   return { sent, handlers };
 }
 
 const record = (pane, name, body = 'child finished') =>
-  fs.writeFileSync(path.join(MAILBOX, name), `# record\n- parent: \`${pane}\`\n\n${body}\n`);
+  fs.writeFileSync(path.join(MAILBOX, name), `# record\n- parent: \`${pane}\`\n- recipient_session_id: \`${pane === '%99' ? ID : 'other-session'}\`\n\n${body}\n`);
 
 test('matching record is delivered once, with triggerTurn, and acked', async () => {
   const { sent, handlers } = boot();
   record('%99', 'a-match.md');
   record('%42', 'b-other-pane.md');
-  await handlers.session_start({}, { hasUI: false });
+  await handlers.session_start({}, ctx);
   try {
     assert.equal(sent.length, 1);
     const [message, opts] = sent[0];
@@ -51,7 +57,7 @@ test('matching record is delivered once, with triggerTurn, and acked', async () 
 test('CI wait is delivered as waiting rather than a completion', async () => {
   const { sent, handlers } = boot();
   record('%99', 'waiting-ci.md', '- verdict: **waiting on CI**');
-  await handlers.session_start({}, { hasUI: false });
+  await handlers.session_start({}, ctx);
   try {
     assert.equal(sent.length, 1);
     assert.match(sent[0][0].content, /DELEGATION WAITING ON CI/);
@@ -65,13 +71,13 @@ test('malformed and unreadable records do not throw and are not acked', async ()
   const { sent, handlers } = boot();
   fs.writeFileSync(path.join(MAILBOX, 'malformed.md'), 'no parent line at all');
   fs.mkdirSync(path.join(MAILBOX, 'a-directory.md')); // readFileSync throws EISDIR
-  await handlers.session_start({}, { hasUI: false });
+  await handlers.session_start({}, ctx);
   try {
     assert.equal(sent.length, 0);
-    assert.ok(fs.existsSync(path.join(MAILBOX, 'malformed.md')));
+    assert.ok(fs.existsSync(path.join(MAILBOX, 'quarantine', 'malformed.md')));
   } finally {
     await handlers.session_shutdown({}, {});
-    fs.rmSync(path.join(MAILBOX, 'malformed.md'));
+    fs.rmSync(path.join(MAILBOX, 'quarantine', 'malformed.md'));
     fs.rmdirSync(path.join(MAILBOX, 'a-directory.md'));
   }
 });
@@ -83,7 +89,7 @@ test('failed sendMessage leaves the record unacked for the keystroke fallback', 
     on: (name, fn) => { handlers[name] = fn; },
   });
   record('%99', 'c-fails.md');
-  await handlers.session_start({}, { hasUI: false });
+  await handlers.session_start({}, ctx);
   try {
     assert.ok(fs.existsSync(path.join(MAILBOX, 'c-fails.md')), 'record must survive for re-nudges');
   } finally {
@@ -95,8 +101,8 @@ test('failed sendMessage leaves the record unacked for the keystroke fallback', 
 test('steering queues at a turn boundary and acks only when its message starts', async () => {
   const { sent, handlers } = boot();
   const name = 'steer-boundary.md';
-  fs.writeFileSync(path.join(MAILBOX, name), '# steering\n- parent: `%99`\n- kind: `steer`\n\nliteral `payload`\n');
-  await handlers.session_start({}, { hasUI: false });
+  fs.writeFileSync(path.join(MAILBOX, name), '# steering\n- parent: `%99`\n- recipient_session_id: `11111111-1111-4111-8111-111111111111`\n- kind: `steer`\n\nliteral `payload`\n');
+  await handlers.session_start({}, ctx);
   try {
     assert.equal(sent.length, 1);
     const [message, opts] = sent[0];
@@ -105,7 +111,7 @@ test('steering queues at a turn boundary and acks only when its message starts',
     assert.ok(fs.existsSync(path.join(MAILBOX, name)), 'still durable while queued in Pi');
     const state = () => JSON.parse(fs.readFileSync(path.join(MAILBOX, 'state', `${name}.json`)));
     assert.equal(state().state, 'accepted');
-    await handlers.message_start({ message: { role: 'custom', ...message } });
+    await handlers.message_start({ message: { role: 'custom', ...message } }, ctx);
     assert.equal(state().state, 'delivered');
     assert.ok(fs.existsSync(path.join(MAILBOX, 'ack', name)));
     assert.ok(!fs.existsSync(path.join(MAILBOX, name)));
@@ -116,15 +122,15 @@ test('steering queues at a turn boundary and acks only when its message starts',
 
 test('queued steering replays after restart before delivery', async () => {
   const name = 'steer-restart.md';
-  fs.writeFileSync(path.join(MAILBOX, name), '# steering\n- parent: `%99`\n- kind: `steer`\n\nretry\n');
+  fs.writeFileSync(path.join(MAILBOX, name), '# steering\n- parent: `%99`\n- recipient_session_id: `11111111-1111-4111-8111-111111111111`\n- kind: `steer`\n\nretry\n');
   const first = boot();
-  await first.handlers.session_start({}, { hasUI: false });
+  await first.handlers.session_start({}, ctx);
   await first.handlers.session_shutdown({}, {});
   const second = boot();
-  await second.handlers.session_start({}, { hasUI: false });
+  await second.handlers.session_start({}, ctx);
   try {
     assert.equal(second.sent.length, 1);
-    await second.handlers.message_start({ message: { role: 'custom', ...second.sent[0][0] } });
+    await second.handlers.message_start({ message: { role: 'custom', ...second.sent[0][0] } }, ctx);
   } finally { await second.handlers.session_shutdown({}, {}); }
 });
 
@@ -137,7 +143,7 @@ test('DONE completion receives automatic verifier evidence, including failures',
       fs.writeFileSync(helper, `#!/bin/bash\n[ "$1" = --record ] || exit 9\nprintf '${verdict}: fixture evidence\\n'\nexit ${code}\n`, { mode: 0o755 });
       const { sent, handlers } = boot();
       record('%99', `verify-${verdict}.md`, 'task: DONE abcdef123 - /report.md ci:123 pr:3915');
-      await handlers.session_start({}, { hasUI: false });
+      await handlers.session_start({}, ctx);
       try {
         assert.equal(sent.length, 1);
         assert.match(sent[0][0].content, new RegExp(`AUTOMATIC DONE VERIFICATION: ${verdict}`));
@@ -151,18 +157,18 @@ test('DONE completion receives automatic verifier evidence, including failures',
   }
 });
 
-test('no TMUX_PANE: session_start is inert (no watcher, nothing delivered)', async () => {
+test('session addressing works without TMUX_PANE', async () => {
   const savedPane = process.env.TMUX_PANE;
   delete process.env.TMUX_PANE;
   try {
     const { sent, handlers } = boot();
     record('%99', 'd-while-paneless.md');
-    await handlers.session_start({}, { hasUI: false });
-    assert.equal(sent.length, 0);
-    assert.ok(fs.existsSync(path.join(MAILBOX, 'd-while-paneless.md')));
+    await handlers.session_start({}, ctx);
+    assert.equal(sent.length, 1);
+    assert.ok(fs.existsSync(path.join(MAILBOX, 'ack', 'd-while-paneless.md')));
     await handlers.session_shutdown({}, {});
   } finally {
     process.env.TMUX_PANE = savedPane;
-    fs.rmSync(path.join(MAILBOX, 'd-while-paneless.md'));
+    fs.rmSync(path.join(MAILBOX, 'ack', 'd-while-paneless.md'));
   }
 });

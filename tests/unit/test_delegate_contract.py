@@ -12,7 +12,7 @@ WATCHER = ROOT / "config/pi/skills/delegate/scripts/watch-child.sh"
 
 
 class DelegateContractTest(unittest.TestCase):
-    def run_watcher(self, child_line: str, require_join=False) -> tuple[str, str]:
+    def run_watcher(self, child_line: str, require_join=False, identity=False) -> tuple[str, str]:
         with tempfile.TemporaryDirectory(prefix="delegate-contract-") as tmp:
             root = Path(tmp)
             commands = root / "bin"
@@ -42,17 +42,32 @@ class DelegateContractTest(unittest.TestCase):
                 "PI_DELEGATE_IDLE_STREAK": "1",
                 "PI_DELEGATE_MIN_GRACE_SECS": "0",
             }
+            manifest = root / "lane.json"
+            manifest.write_text(json.dumps({"parent_session_id": "original-parent", "child_session_id": "original-child"}))
             run = subprocess.run(
-                [str(WATCHER), "demo:child", "unknown", "run-id", tmp, "example"],
+                [str(WATCHER), "demo:child", "unknown", "run-id", tmp, "example", *([str(manifest)] if identity else [])],
                 env=env,
                 text=True,
                 capture_output=True,
                 timeout=10,
             )
             self.assertEqual(run.returncode, 0, run.stderr)
-            records = list((root / "mailbox").glob("*.md"))
+            if identity:
+                steering = list((root / "mailbox").glob("steer-*.mail"))
+                self.assertEqual(len(steering), 1)
+                self.assertIn('- recipient_session_id: `original-child`', steering[0].read_text())
+                self.assertNotIn('- parent: ', steering[0].read_text())
+                state = json.loads((root / "mailbox/state" / (steering[0].name + ".json")).read_text())
+                self.assertEqual(state["recipient_session_id"], "original-child")
+            records = [p for p in (root / "mailbox").glob("*.mail") if not p.name.startswith("steer-")]
             self.assertEqual(len(records), 1)
             return records[0].read_text(), (root / "keys").read_text() if (root / "keys").exists() else ""
+
+    def test_continuation_and_completion_use_original_ids_without_typing(self):
+        record, keys = self.run_watcher("progress without a result", identity=True)
+        self.assertIn('- recipient_session_id: `original-parent`', record)
+        self.assertNotIn('- parent: ', record, 'old consumer must not match a new record')
+        self.assertEqual(keys, '', 'neither parent nor child pane may receive fallback keys')
 
     def test_old_child_uses_slow_poll(self):
         # Check the shell's dynamic interval, not wall clock: mocked sleep exits instantly.
@@ -108,7 +123,7 @@ class DelegateContractTest(unittest.TestCase):
         ):
             with self.subTest(line=line):
                 _, keys = self.run_watcher(line)
-                self.assertIn("/goal", keys)
+                self.assertNotIn("/goal", keys, "legacy lane has no session identity; must not type into reused pane")
 
 
 class LaneManifestResultFieldsTest(unittest.TestCase):
@@ -134,7 +149,7 @@ class LaneManifestResultFieldsTest(unittest.TestCase):
             manifest_path = root / "lane.json"
             manifest_path.write_text(json.dumps({
                 "run_id": "run-id", "session": "demo", "window": "child", "status": "open",
-                "parent_pane": parent_pane,
+                "parent_pane": parent_pane, "parent_session_id": "original-parent",
             }))
             env = os.environ | {
                 "PATH": str(commands) + os.pathsep + os.environ["PATH"],
@@ -160,7 +175,7 @@ class LaneManifestResultFieldsTest(unittest.TestCase):
 
     def test_completion_targets_pinned_parent_pane_for_in_band_delivery(self):
         self.run_watcher_with_manifest("example: DONE abcdef123 - /notes/report.md", parent_pane="%42")
-        self.assertIn('- parent: `%42`', self.last_record)
+        self.assertIn('- recipient_session_id: `original-parent`', self.last_record)
         self.assertIn('- parent-window: `unknown`', self.last_record)
 
     def test_done_line_fills_result_fields(self):

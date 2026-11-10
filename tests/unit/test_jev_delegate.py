@@ -3,6 +3,7 @@
 All tmux/agent/classifier commands are local stubs. No network, credentials,
 real processes/windows, or private state are used.
 """
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -26,6 +27,11 @@ class JevDelegateTests(unittest.TestCase):
         shutil.copyfile(SCRIPT.with_name('verify-model.py'), self.script.with_name('verify-model.py'))
         self.helper = self.root / 'dotfiles/bin/jev-classify'
         self.helper.parent.mkdir()
+        shutil.copyfile(SCRIPT.with_name('session_routing.py'), self.script.with_name('session_routing.py'))
+        shutil.copyfile(ROOT / 'bin/pi-session-target', self.helper.with_name('pi-session-target'))
+        self.helper.with_name('pi-session-target').chmod(0o755)
+        self.parent_file = self.root / 'parent.jsonl'
+        self.parent_file.write_text('{"type":"session","id":"fixture-parent"}\n')
         self.write_exec(self.mock / 'tmux', '''#!/bin/bash
 printf '%s\\n' "$*" >> "$TEST_ROOT/tmux-calls"
 case "$1" in
@@ -54,6 +60,7 @@ printf '{"status":"ok","suggestion":"mechanical","confidence":1,"applied":false}
             'PATH': f'{self.mock}:/usr/bin:/bin',
             'HOME': str(self.root), 'TEST_ROOT': str(self.root),
             'PI_JEV_MODE': 'observe', 'PI_OFFLINE': '1',
+            'PI_SESSION_ID': 'fixture-parent', 'PI_SESSION_FILE': str(self.parent_file),
         }
 
     def write_exec(self, path, content):
@@ -70,6 +77,18 @@ printf '{"status":"ok","suggestion":"mechanical","confidence":1,"applied":false}
                                 capture_output=True, timeout=12)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    def test_launch_captures_original_parent_id_and_file(self):
+        self.run_delegate()
+        manifests = [json.loads(p.read_text()) for p in self.root.rglob('*.json') if p.is_file()]
+        lanes = [m for m in manifests if m.get('parent_session_id')]
+        self.assertTrue(lanes)
+        for lane in lanes:
+            self.assertEqual(lane['parent_session_id'], 'fixture-parent')
+            self.assertEqual(lane['parent_session_file'], str(self.parent_file))
+        calls = (self.root / 'tmux-calls').read_text()
+        self.assertIn('PI_DELEGATE_PARENT_SESSION_ID=fixture-parent', calls)
+        self.assertIn('-u PI_SESSION_ID -u PI_SESSION_FILE', calls)
 
     def assert_launch_unchanged(self):
         calls = (self.root / 'tmux-calls').read_text()

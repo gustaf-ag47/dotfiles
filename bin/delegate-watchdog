@@ -23,7 +23,7 @@ def parked(child, mailbox):
     lane = re.escape(child.split(":")[-1])
     result = re.compile(rf"^\s*{lane}: (BLOCKER|DONE|PASS|FAILED) ", re.MULTILINE)
     latest = None
-    for record in list(mailbox.glob("*.md")) + list((mailbox / "ack").glob("*.md")):
+    for record in [p for directory in (mailbox, mailbox / "ack") for p in directory.glob("*") if p.suffix in (".mail", ".md")]:
         try:
             match = result.search(record.read_text(errors="replace"))
             stamp = record.stat().st_mtime
@@ -37,13 +37,18 @@ def parked(child, mailbox):
     return bool(PARKED.search(history))
 
 
-def notify(target, message):
+def notify(sid, message):
+    if not sid:
+        return  # legacy lane: no pane fallback
+    target = f"session:{sid}"
     sender = Path(__file__).resolve().with_name("delegate-send")
     command([str(sender), target, "--text", message])
 
 
 def tick(manifest, child, parent):
     lane = json.loads(manifest.read_text())
+    parent_sid = lane.get("parent_session_id")
+    child_sid = lane.get("child_session_id")
     cwd = lane.get("cwd")
     if not cwd:
         return 0
@@ -97,10 +102,10 @@ def tick(manifest, child, parent):
         signature = f"{pr['headRefOid']}:{reason}"
         if state.get("signature") != signature or not state.get("stalled"):
             if parked(child, mailbox):
-                notify(parent, f"Child {child} is parked on BLOCKER; PR #{pr['number']} {reason} is left for the operator's decision. {pr['url']} (lane {manifest.stem})")
+                notify(parent_sid, f"Child {child} is parked on BLOCKER; PR #{pr['number']} {reason} is left for the operator's decision. {pr['url']} (lane {manifest.stem})")
             else:
-                notify(parent, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
-                notify(child, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
+                notify(parent_sid, f"Child {child} stalled: PR #{pr['number']} {reason}. {pr['url']} (lane {manifest.stem})")
+                notify(child_sid, f"Rebase/fix: PR #{pr['number']} is {reason}. Resolve the blocker, rerun gates and verify CI before claiming done. {pr['url']}")
             state.update(signature=signature, stalled_since=now, parent_alerted=False)
         parent_pane = command(["tmux", "capture-pane", "-J", "-p", "-t", parent])
         if BUSY.search(parent_pane):
@@ -109,7 +114,7 @@ def tick(manifest, child, parent):
             state["parent_idle_since"] = state.get("parent_idle_since") or now
             minutes = float(os.environ.get("PI_DELEGATE_PARENT_IDLE_MINUTES", "10"))
             if now - state["parent_idle_since"] >= minutes * 60 and not state.get("parent_alerted"):
-                notify(parent, f"Orchestrator idle while child {child} remains stalled for PR #{pr['number']} {reason}. Take ownership of the blocker. {pr['url']}")
+                notify(parent_sid, f"Orchestrator idle while child {child} remains stalled for PR #{pr['number']} {reason}. Take ownership of the blocker. {pr['url']}")
                 state["parent_alerted"] = True
     else:
         state.pop("parent_idle_since", None)
