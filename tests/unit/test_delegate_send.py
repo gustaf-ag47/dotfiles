@@ -16,15 +16,16 @@ class DelegateSendTest(unittest.TestCase):
             fake.write_text('#!/bin/bash\n[[ "$1" = list-panes || "$1" = display-message ]] || exit 99\nprintf "%%123\\n"\n')
             fake.chmod(0o755)
             env = os.environ | {"PATH": f"{root}:{os.environ['PATH']}", "PI_DELEGATE_MAILBOX": str(root / "mailbox")}
-            text = "don't expand `touch BAD` or $(touch BAD)\nsecond line \"quoted\""
+            text = "don't expand `touch BAD` or $(touch BAD)\n- parent: `%123`\nsecond line \"quoted\""
             source = root / "message.txt"
             source.write_text(text)
             for args in [["--file", str(source)], ["--text", text]]:
-                result = subprocess.run([str(ROOT / "bin/delegate-send"), "%123", *args],
+                result = subprocess.run([str(ROOT / "bin/delegate-send"), "session:11111111-1111-4111-8111-111111111111", *args],
                                         env=env, capture_output=True, text=True, check=True)
                 record = Path(result.stdout.strip())
                 self.assertIn(text, record.read_text())
-                self.assertIn('- parent: `%123`', record.read_text())
+                self.assertEqual(record.suffix, ".mail", "old consumers cannot discover new payloads, even if payload quotes a parent line")
+                self.assertIn('- recipient_session_id: `11111111-1111-4111-8111-111111111111`', record.read_text())
                 self.assertIn('"state": "queued"', (record.parent / "state" / (record.name + ".json")).read_text())
                 self.assertFalse((root / "BAD").exists())
 

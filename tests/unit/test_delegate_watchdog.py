@@ -22,7 +22,7 @@ class WatchdogTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.manifest = self.root / "lane.json"
-        self.manifest.write_text(json.dumps({"cwd": str(self.root)}))
+        self.manifest.write_text(json.dumps({"parent_session_id": "parent", "child_session_id": "child", "cwd": str(self.root)}))
         self.pr = dict(number=12, url="https://github.com/owner/repo/pull/12", state="OPEN", isDraft=False, mergeStateStatus="DIRTY", headRefOid="a" * 40)
         self.child = "idle"
         self.parent = "idle"

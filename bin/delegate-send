@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Queue a literal steering payload for a Pi pane, without typing keystrokes."""
+"""Queue steering for a full Pi session ID (session:ID), or resolve a live tmux target."""
 import argparse
 import datetime
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
+import sys
 import tempfile
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "config/pi/skills/delegate/scripts"))
+from session_routing import live_target, session_id  # noqa: E402
 
 
 def atomic_write(path, text):
@@ -26,32 +29,29 @@ def atomic_write(path, text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("target", help="tmux session:window or %%pane")
+    parser.add_argument("target", help="session:FULL_ID (offline OK), tmux session:window or %%pane; no pane fallback")
     payload = parser.add_mutually_exclusive_group(required=True)
     payload.add_argument("--file", type=Path)
     payload.add_argument("--text")
     args = parser.parse_args()
     try:
-        command = (["tmux", "display-message", "-p", "-t", args.target, "#{pane_id}"]
-                   if re.fullmatch(r"%\d+", args.target)
-                   else ["tmux", "list-panes", "-t", args.target, "-F", "#{pane_id}"])
-        panes = subprocess.check_output(command, text=True).splitlines()
-        if len(panes) != 1 or not re.fullmatch(r"%\d+", panes[0]):
-            parser.error("target must resolve to exactly one pane; specify %pane for split windows")
+        resolved = ({"session_id": session_id(args.target.removeprefix("session:")), "pane": ""}
+                    if args.target.startswith("session:") else live_target(args.target))
+        sid, pane = resolved["session_id"], resolved["pane"]
         message = args.file.read_text() if args.file else args.text
         if not message.strip():
             parser.error("message must not be empty")
         mailbox = Path(os.environ.get("PI_DELEGATE_MAILBOX", Path.home() / ".pi/agent/delegate-mailbox"))
         mailbox.mkdir(parents=True, exist_ok=True)
         (mailbox / "state").mkdir(exist_ok=True)
-        name = f"steer-{uuid.uuid4().hex}.md"
+        name = f"steer-{uuid.uuid4().hex}.mail"  # old consumers only scan *.md
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        record = (f"# Delegation steering\n- parent: `{panes[0]}`\n- kind: `steer`\n"
+        record = (f"# Delegation steering\n- recipient_session_id: `{sid}`\n- parent-pane: `{pane}`\n- kind: `steer`\n"
                   f"- created: `{now}`\n\n{message}\n")
-        atomic_write(mailbox / "state" / f"{name}.json", json.dumps({"state": "queued", "pane": panes[0], "at": now}) + "\n")
+        atomic_write(mailbox / "state" / f"{name}.json", json.dumps({"state": "queued", "recipient_session_id": sid, "pane": pane, "at": now}) + "\n")
         atomic_write(mailbox / name, record)
         print(mailbox / name)
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, f"delegate-send: {error}\n")
 
 

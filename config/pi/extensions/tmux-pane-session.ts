@@ -8,7 +8,7 @@
 // session_shutdown: that also fires when the machine shuts down, and the final
 // tmux save must still see it. tmux-pi-panes prunes files of dead pids, and
 // only reads the file of a pid that is a live pi in a pane. Only inside tmux.
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -27,13 +27,27 @@ export default function (pi: ExtensionAPI) {
 		try {
 			if (!sessionFile) {
 				rmSync(file, { force: true });
+				rmSync(`${file}.json`, { force: true });
 				return;
 			}
 			mkdirSync(join(file, ".."), { recursive: true });
-			writeFileSync(file, `${sessionFile}\n`);
+			writeFileSync(file, `${sessionFile}\n`); // legacy tmux-resurrect contract
+			const stat = readFileSync(`/proc/${process.pid}/stat`, "utf8").split(") ").at(-1)!.split(" ");
+			const identity = {
+				session_id: ctx.sessionManager.getSessionId(), session_file: sessionFile,
+				pid: process.pid, pane: process.env.TMUX_PANE,
+				socket: (process.env.TMUX || "").split(",")[0],
+				start_ticks: stat[19], boot_id: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+			};
+			writeFileSync(`${file}.json.tmp`, JSON.stringify(identity) + "\n", { mode: 0o600 });
+			renameSync(`${file}.json.tmp`, `${file}.json`);
 		} catch {
 			// Best effort: losing the mapping only costs an automatic resume.
 		}
 	});
 
+	// Routing authority must not survive teardown; keep the legacy resume path.
+	pi.on("session_shutdown", async () => {
+		rmSync(`${stateFile()}.json`, { force: true });
+	});
 }

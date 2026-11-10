@@ -31,6 +31,9 @@ class QueueTests(unittest.TestCase):
             path.write_text('#!/bin/bash\n' + source + '\n')
             path.chmod(0o755)
         self.env = os.environ | {"PATH": f"{self.root}:{os.environ['PATH']}", "FIXTURE": str(self.root)}
+        self.session_file = self.root / "session.jsonl"
+        self.session_file.write_text(json.dumps({"type": "session", "id": "original-parent"}) + "\n")
+        self.env.update(PI_SESSION_ID="original-parent", PI_SESSION_FILE=str(self.session_file))
         (self.root / "pr-state").write_text("OPEN")
         self.directory = self.root / "lanes"
 
@@ -49,6 +52,11 @@ class QueueTests(unittest.TestCase):
     def test_all_dependencies_then_launch_once(self):
         path = self.enqueue("pr:owner/repo#12:merged", "lane:dependency:done")
         self.assertIn("queued", self.run_queue("list").stdout)
+        queued = json.loads(path.read_text())
+        self.assertEqual(queued["environment"]["PI_SESSION_ID"], "original-parent")
+        # The queuing caller/pane switches chat before launch. Captured ID wins.
+        self.env["PI_SESSION_ID"] = "replacement-chat"
+        self.assertEqual(queued["environment"]["PI_SESSION_FILE"], str(self.session_file))
         self.run_queue("_tick", str(path))
         self.assertFalse((self.root / "launched").exists())
         (self.root / "pr-state").write_text("MERGED")

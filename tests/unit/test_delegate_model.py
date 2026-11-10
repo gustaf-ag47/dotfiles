@@ -59,7 +59,9 @@ esac
             for name, source in scripts.items():
                 (commands / name).write_text(source)
                 (commands / name).chmod(0o755)
-            env = os.environ | {"HOME": tmp, "NOTES": tmp, "PATH": f"{commands}:{os.environ['PATH']}",
+            session_file = root / "parent.jsonl"
+            session_file.write_text('{"type":"session","id":"fixture-parent"}\n')
+            env = os.environ | {"PI_SESSION_ID": "fixture-parent", "PI_SESSION_FILE": str(session_file), "HOME": tmp, "NOTES": tmp, "PATH": f"{commands}:{os.environ['PATH']}",
                                 "REPAIRED": str(int(repaired)), "PI_JEV_MODE": "off",
                                 "DELEGATE_IGNORE_MEM": "1", "TMUX": "", "TMUX_PANE": ""}
             result = subprocess.run([str(SCRIPTS / "delegate.sh"), "--task", "fixture task", "--session", "Demo",

@@ -31,7 +31,7 @@ class SupervisorTests(unittest.TestCase):
     def lane(self, name, supervisor=True):
         path = self.registry / (name + ".json")
         path.write_text(json.dumps({"run_id": name, "status": "open", "watcher": "supervisor" if supervisor else "legacy",
-            "session": "s", "window": name, "window_id": "@42", "parent": "%8", "parent_pane": "%8",
+            "session": "s", "window": name, "window_id": "@42", "parent": "%8", "parent_pane": "%8", "parent_session_id": "parent-id", "child_session_id": "child-id",
             "created_at": "1970-01-01T00:15:00Z", "cwd": str(self.root), "task": name, "goal": "/goal test"}))
         return path
 
@@ -39,12 +39,13 @@ class SupervisorTests(unittest.TestCase):
         # parent_exists asks the real tmux server; pin it so results do not
         # depend on which panes happen to exist on the machine running tests.
         with patch.object(self.mod, "capture", side_effect=lambda *args: self.pane), \
-             patch.object(self.mod, "parent_exists", return_value=parent_present), \
+             patch.object(self.mod, "parent_exists", return_value=parent_present) as old_pane_lookup, \
              patch.object(self.mod, "window_exists", return_value=True), \
              patch.object(self.mod, "send", side_effect=lambda target, message: self.sent.append((target, message))), \
              patch.object(self.mod, "watchdog", return_value=False), \
              patch.object(self.mod, "now", side_effect=lambda: self.now):
             self.mod.scan(self.registry, self.mailbox)
+            old_pane_lookup.assert_not_called()
 
     def test_legacy_not_adopted_and_goal_before_completion(self):
         self.lane("old", False)
@@ -55,13 +56,13 @@ class SupervisorTests(unittest.TestCase):
         for _ in range(3):
             self.now += 20
             self.scan()
-        self.assertEqual(self.sent, [("s:new", "/goal test")])
+        self.assertEqual(self.sent, [("child-id", "/goal test")])
         self.assertEqual(json.loads(path.read_text())["status"], "open")
         for _ in range(3):
             self.now += 20
             self.scan()
         self.assertEqual(json.loads(path.read_text())["status"], "closed")
-        self.assertEqual(len(list(self.mailbox.glob("*.md"))), 1)
+        self.assertEqual(len(list(self.mailbox.glob("*.mail"))), 1)
 
     def test_ci_wait_is_not_finished(self):
         path = self.lane("ci")
@@ -70,7 +71,7 @@ class SupervisorTests(unittest.TestCase):
             self.now += 20
             self.scan()
         self.assertEqual(json.loads(path.read_text())["status"], "open")
-        records = list(self.mailbox.glob("*.md"))
+        records = list(self.mailbox.glob("*.mail"))
         self.assertEqual(len(records), 1)
         self.assertIn("waiting on CI", records[0].read_text())
         self.assertEqual(self.sent, [])
@@ -82,11 +83,26 @@ class SupervisorTests(unittest.TestCase):
             self.now += 20
             self.scan(parent_present=True)
         self.assertEqual(json.loads(path.read_text())["status"], "open")
-        self.assertEqual(len(self.sent), 1)
-        target, message = self.sent[0]
-        self.assertEqual(target, "%8")
-        self.assertIn("DELEGATION WAITING ON CI (nudge 1/8)", message)
-        self.assertIn("ci-waiting-ci.md", message)
+        self.assertEqual(self.sent, [], "no parent pane keystroke fallback")
+        record = next(self.mailbox.glob("*.mail")).read_text()
+        self.assertIn('- recipient_session_id: `parent-id`', record)
+
+    def test_completion_uses_captured_parent_not_current_old_pane(self):
+        path = self.lane("pinned")
+        self.pane = "1.0%/1.0M\npinned: PASS none - /report"
+        for _ in range(3):
+            self.now += 20
+            self.scan(parent_present=True)
+        record = next(self.mailbox.glob("*.mail"))
+        self.assertIn('- recipient_session_id: `parent-id`', record.read_text())
+        self.assertNotIn('- parent: ', record.read_text())
+        lane = json.loads(path.read_text())
+        self.assertEqual(lane['parent_session_id'], 'parent-id')
+        state = json.loads((self.mailbox / 'supervisor/pinned.json').read_text())
+        self.assertEqual(state['recipient_session_id'], 'parent-id')
+        self.now += 400
+        self.scan(parent_present=True)
+        self.assertEqual(self.sent, [])
 
     def test_ci_wait_then_result_closes(self):
         path = self.lane("ci")
@@ -122,13 +138,13 @@ class SupervisorTests(unittest.TestCase):
             self.scan()
         self.now += 400
         self.scan(parent_present=True)
-        self.assertEqual(len(self.sent), 1)
-        record = next(self.mailbox.glob("*.md"))
+        self.assertEqual(len(self.sent), 0)
+        record = next(self.mailbox.glob("*.mail"))
         (self.mailbox / "ack").mkdir(exist_ok=True)
         record.rename(self.mailbox / "ack" / record.name)
         self.now += 400
         self.scan(parent_present=True)
-        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.sent), 0)
 
 
 if __name__ == "__main__":

@@ -1,31 +1,8 @@
 #!/bin/bash
-# watch-child.sh — close the delegation feedback loop.
-#
-# A delegated child runs to completion and then sits idle forever. Nothing wakes
-# the parent, so work stops until a human looks. Measured 2026-08-29: nine agents
-# finished, and 22.5 hours passed with zero merges because nobody nudged.
-#
-# This watcher is detached from both parent and child. It polls the child's pane,
-# and when the child goes idle it (a) writes a durable record to the mailbox and
-# (b) sends the parent a one-line nudge.
-#
-# Two channels on purpose. The nudge is a keystroke and keystrokes get dropped —
-# a TUI that is mid-turn swallows them with no trace. The mailbox is the state,
-# on persistent disk, and survives a dropped nudge, a reboot, and the child's
-# worktree being removed. Never put the payload in the keystroke.
-#
-# A single nudge is not delivery (measured 2026-09-07: parent mid-turn with its
-# operator swallowed the nudge; the operator noticed before the parent did). So
-# the nudge is an at-least-once loop closed by an ACK: the parent acknowledges a
-# record by moving it to $MAILBOX/ack/, and until that happens the watcher waits
-# for the parent's pane to go idle and re-sends, up to PI_DELEGATE_MAX_NUDGES
-#
-# Primary channel (2026-10-03): pi parents running the delegate-mailbox.ts
-# extension ingest the record in-band (pi.sendMessage) and auto-ack within
-# seconds, so the keystroke path below usually never fires. It stays as the
-# fallback for parents without the extension.
-# attempts spaced PI_DELEGATE_RENUDGE_SECS apart.
-#
+# watch-child.sh — legacy per-child monitor. Writes a durable completion to
+# PI_DELEGATE_MAILBOX addressed ONLY to the launch-time parent_session_id in the
+# lane manifest. No parent/child keystroke fallback: panes may host other chats.
+# Old manifests produce unaddressed records preserved by consumer quarantine.
 # usage: watch-child.sh <session:window> <parent-window> <run-id> <cwd> [task] [lane-manifest]
 set -uo pipefail
 
@@ -76,11 +53,10 @@ MAX_HOURS="${PI_DELEGATE_WATCH_HOURS:-12}"
 # a not-yet-ready TUI ready. Require evidence the child actually started: either we
 # observed it busy, or its context gauge moved off 0.0% (it consumed the prompt).
 MIN_GRACE="${PI_DELEGATE_MIN_GRACE_SECS:-45}"
-RENUDGE_SECS="${PI_DELEGATE_RENUDGE_SECS:-300}"
-MAX_NUDGES="${PI_DELEGATE_MAX_NUDGES:-8}"
+# Delivery retry belongs to the session-bound mailbox consumer.
 
 mkdir -p "$MAILBOX" "$MAILBOX/ack"
-LOCK="$MAILBOX/.nudge.lock"
+
 
 # pi renders busy as a braille spinner + "Working" ("── ⠴ Working ────"), older TUIs as
 # "Working...". Matching only the dotted form made every pi child look idle from birth
@@ -91,7 +67,6 @@ pane_busy() {
 	printf '%s' "$pane" | grep -qE '[⠀-⣿] Working|Working\.\.\.|esc to interrupt'
 }
 
-parent_pane_busy_pattern='[⠀-⣿] Working|Working\.\.\.|esc to interrupt'
 
 pane_cost() {
 	tmux capture-pane -t "$TARGET" -p 2>/dev/null |
@@ -187,11 +162,12 @@ while :; do
 			# calling remaining work "blocked"; each cost a parent round-trip.
 			if [ -n "${PI_DELEGATE_GOAL:-}" ] && [ "$goal_sent" = "0" ] && ! child_reported_result; then
 				goal_sent=1
-				tmux send-keys -t "$TARGET" C-u 2>/dev/null || true
-				sleep 0.4
-				tmux send-keys -t "$TARGET" -l -- "/goal ${PI_DELEGATE_GOAL}"
-				sleep 0.6
-				tmux send-keys -t "$TARGET" Enter
+				# Only the captured child's ID, never whoever occupies TARGET now.
+				child_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("child_session_id") or "")' "$LANE_MANIFEST" 2>/dev/null)"
+				if [ -n "$child_id" ]; then
+					sender="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../../../bin/delegate-send"
+					"$sender" "session:$child_id" --text "/goal ${PI_DELEGATE_GOAL}" || true
+				fi
 				streak=0
 				continue
 			fi
@@ -223,27 +199,24 @@ result_fields_from_pane
 [ -n "$result_status" ] || result_status="$verdict"
 
 # Durable record first: if the nudge is dropped, this is still here.
-rec="$MAILBOX/${ts//:/-}_${RUN_ID}.md"
+rec="$MAILBOX/${ts//:/-}_${RUN_ID}.mail"
 
 close_lane_manifest "$result_line" "$result_status" "$result_sha" "$result_path" "$ts" "$cost" "$rec"
 
-# The stable parent window is for fallback nudges; the in-band mailbox matches
-# exact pane IDs. Prefer the launcher's pinned parent pane (also handles renames).
+# Only launch-time identity may address the completion. Old manifests remain
+# durable but unaddressed; operators must explicitly map them, never guess.
 MAILBOX_PARENT="$PARENT"
+PARENT_SESSION_ID=""
 if [ -n "$LANE_MANIFEST" ] && [ -f "$LANE_MANIFEST" ]; then
-	pinned_parent="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent_pane", ""))' "$LANE_MANIFEST" 2>/dev/null)"
-	if [[ "$pinned_parent" =~ ^%[0-9]+$ ]]; then MAILBOX_PARENT="$pinned_parent"; fi
-fi
-if [[ "$MAILBOX_PARENT" != %* ]] && [ "$PARENT" != unknown ]; then
-	resolved_parent="$(tmux display-message -p -t "$PARENT" '#{pane_id}' 2>/dev/null)"
-	if [[ "$resolved_parent" =~ ^%[0-9]+$ ]]; then MAILBOX_PARENT="$resolved_parent"; fi
+	PARENT_SESSION_ID="$(python3 -c 'import json,re,sys; s=json.load(open(sys.argv[1])).get("parent_session_id", ""); print(s if isinstance(s,str) and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?",s) else "")' "$LANE_MANIFEST" 2>/dev/null)"
 fi
 
 {
 	echo "# Delegation finished: ${TASK:-$RUN_ID}"
 	echo
 	echo "- window: \`$TARGET\`"
-	echo "- parent: \`$MAILBOX_PARENT\`"
+	echo "- parent-pane: \`$MAILBOX_PARENT\`"
+	echo "- recipient_session_id: \`$PARENT_SESSION_ID\`"
 	echo "- parent-window: \`$PARENT\`"
 	echo "- run id: \`$RUN_ID\`"
 	echo "- cwd: \`$CHILD_CWD\`"
@@ -267,93 +240,10 @@ fi
 	echo '```'
 	printf '%s\n' "$tail_txt"
 	echo '```'
-} >"$rec" 2>/dev/null
+} >"${rec}.tmp" 2>/dev/null
+mv -- "${rec}.tmp" "$rec"
 
-# Then the nudge. Refuse to send if the parent could not be resolved or no longer
-# exists: nudging a guessed window delivers someone else's completion report into an
-# unrelated agent's input box, which happened across two sessions on 2026-08-31. The
-# mailbox record above is already written, so nothing is lost by staying silent.
-parent_ok=1
-case "$PARENT" in
-	unknown | "") parent_ok=0 ;;
-esac
-if [ "$parent_ok" = "1" ]; then
-	case "$PARENT" in
-	%*) tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qxF "$PARENT" || parent_ok=0 ;;
-	*) tmux list-panes -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep -qxF "$PARENT" || parent_ok=0 ;;
-	esac
-fi
-if [ "$parent_ok" = "0" ]; then
-	echo "watch-child: parent '$PARENT' unresolved or gone; record written to $rec, no nudge sent" >&2
-	exit 0
-fi
-
-parent_busy() {
-	tmux capture-pane -t "$PARENT" -p 2>/dev/null |
-		grep -qE "$parent_pane_busy_pattern"
-}
-
-parent_gone() {
-	case "$PARENT" in
-	%*) ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qxF "$PARENT" ;;
-	*) ! tmux list-panes -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep -qxF "$PARENT" ;;
-	esac
-}
-
-acked() {
-	[ ! -e "$rec" ] || [ -e "$MAILBOX/ack/$(basename "$rec")" ]
-}
-
-send_nudge() {
-	local attempt="$1"
-	local nudge="DELEGATION FINISHED (nudge ${attempt}/${MAX_NUDGES}) — ${TASK:-$RUN_ID} in window ${TARGET} is now ${verdict} (cost ${cost:-unknown}). Full record: ${rec}. Read the record, decide what to do next, then ACKNOWLEDGE with: mv '${rec}' '${MAILBOX}/ack/' — unacknowledged records are re-nudged. The child is idle and will do nothing further on its own."
-	(
-		flock -w 120 9 || exit 0
-		tmux send-keys -t "$PARENT" C-u 2>/dev/null || true
-		sleep 0.4
-		tmux send-keys -t "$PARENT" -l -- "$nudge" 2>/dev/null || true
-		sleep 0.6
-		tmux send-keys -t "$PARENT" C-m 2>/dev/null || true
-		sleep 0.6
-		tmux send-keys -t "$PARENT" Enter 2>/dev/null || true
-		sleep 2
-	) 9>"$LOCK"
-}
-
-attempt=1
-while :; do
-	# Prefer delivering into an idle parent: a mid-turn TUI swallows keystrokes.
-	# Wait up to one re-nudge interval for idleness, then send anyway — an
-	# at-least-once send into a busy pane still beats staying silent, because the
-	# ack loop catches the drop.
-	waited=0
-	while parent_busy && [ "$waited" -lt "$RENUDGE_SECS" ]; do
-		sleep 15
-		waited=$((waited + 15))
-		if acked; then break 2; fi
-		if parent_gone; then
-			echo "watch-child: parent '$PARENT' gone before nudge $attempt; record stays in $rec" >&2
-			exit 0
-		fi
-	done
-	# Final check: the in-band extension may have acked while we waited; a
-	# keystroke nudge after that would C-u into the operator's input for nothing.
-	if acked; then break; fi
-	send_nudge "$attempt"
-	waited=0
-	while [ "$waited" -lt "$RENUDGE_SECS" ]; do
-		sleep 15
-		waited=$((waited + 15))
-		if acked; then break 2; fi
-		if parent_gone; then
-			echo "watch-child: parent '$PARENT' gone after nudge $attempt; record stays in $rec" >&2
-			exit 0
-		fi
-	done
-	attempt=$((attempt + 1))
-	if [ "$attempt" -gt "$MAX_NUDGES" ]; then
-		echo "watch-child: $MAX_NUDGES nudges sent, no ack; record stays in $rec" >&2
-		exit 0
-	fi
-done
+# No keystroke fallback: the old pane may now contain another chat or shell.
+# The session-addressed record survives until the intended parent resumes.
+echo "watch-child: record $rec queued for session ${PARENT_SESSION_ID:-UNKNOWN (quarantine)}; no pane nudge" >&2
 exit 0

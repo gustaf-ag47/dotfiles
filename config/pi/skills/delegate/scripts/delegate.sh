@@ -218,6 +218,22 @@ PARENT_WINDOW="$(resolve_parent_window)"
 # a fallback field on the manifest for when PARENT_WINDOW's window name turns
 # out not to be a reliable address (see check below).
 PARENT_PANE="${TMUX_PANE:-unknown}"
+# Freeze identity before any waits/queued dispatch. The shell tool supplies the
+# actual caller's current ID; a terminal caller must have a live publisher.
+IDENTITY_HELPER="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../../../bin/pi-session-target"
+PARENT_SESSION_ID=""
+PARENT_SESSION_FILE=""
+# A dry run has no recipient and performs no dispatch; it must still work in CI
+# and a terminal outside Pi. Actual launches/queues always verify before writes.
+if [ "$DRY" != "1" ]; then
+	if [ -n "${PI_SESSION_ID:-}" ]; then
+		PARENT_IDENTITY="$("$IDENTITY_HELPER" --caller)" || die "cannot verify caller Pi identity"
+	else
+		PARENT_IDENTITY="$("$IDENTITY_HELPER" "$PARENT_PANE")" || die "cannot verify parent Pi identity"
+	fi
+	PARENT_SESSION_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])' <<< "$PARENT_IDENTITY")"
+	PARENT_SESSION_FILE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session_file"])' <<< "$PARENT_IDENTITY")"
+fi
 
 # ── single-owner subjects (fail closed) ──
 # A verbal "stop dispatching X" did not stop backlog-triggered dispatches
@@ -483,7 +499,7 @@ WINDOW_ID="$(tmux display-message -p -t "$SESSION:$NAME" '#{window_id}')"
 tmux set-option -w -t "$WINDOW_ID" @pi_delegate_run_id "$RUN_ID"
 # Clear any buffered keystrokes on a dirty prompt line before typing the command.
 tmux send-keys -t "$SESSION:$NAME" C-u 2>/dev/null || true
-CHILD_ENV=(env "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS" "PI_DELEGATE_LANE_MANIFEST=$LANE_MANIFEST")
+CHILD_ENV=(env -u PI_SESSION_ID -u PI_SESSION_FILE "PI_DELEGATE_PARENT_SESSION_ID=$PARENT_SESSION_ID" "PI_DELEGATE_PARENT=$PARENT_WINDOW" "PI_DELEGATE_RUN_ID=$RUN_ID" "PI_LLM_CLASS=$CLASS" "PI_DELEGATE_LANE_MANIFEST=$LANE_MANIFEST")
 # Expose the brief path so merge-pr.sh (and the child itself) can find it without
 # re-deriving it from the prompt text. Absolute, so it resolves regardless of cwd.
 if [ -n "$BRIEF" ]; then
@@ -494,6 +510,7 @@ fi
 # explicitly selected profile/offline settings, never credentials in argv.
 [ -z "${PI_CODING_AGENT_DIR:-}" ] || CHILD_ENV+=("PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR")
 [ -z "${PI_OFFLINE:-}" ] || CHILD_ENV+=("PI_OFFLINE=$PI_OFFLINE")
+[ -z "${PI_DELEGATE_MAILBOX:-}" ] || CHILD_ENV+=("PI_DELEGATE_MAILBOX=$PI_DELEGATE_MAILBOX")
 [ -z "${PI_JEV_MODE:-}" ] || CHILD_ENV+=("PI_JEV_MODE=$PI_JEV_MODE")
 printf -v child_command '%q ' "${CHILD_ENV[@]}" "$AGENT" "${MODEL_ARGS[@]}"
 tmux send-keys -t "$SESSION:$NAME" -l -- "$child_command"
@@ -504,9 +521,9 @@ LANE_MANIFEST="$LANE_DIR/$RUN_ID.json"
 if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	# <<- strips only LEADING TABS, and strips every one of them from every
 	# line, so python's own indentation below is built from spaces, not tabs.
-	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" "$WINDOW_ID" "${OWNS[@]}" <<-'PY'
+	python3 - "$LANE_MANIFEST" "$SESSION" "$NAME" "$CWD" "$WORKTREE" "$MODEL" "${BRIEF:-}" "$PARENT_WINDOW" "$RESUME" "$RUN_ID" "$PARENT_PANE" "$WINDOW_ID" "$PARENT_SESSION_ID" "$PARENT_SESSION_FILE" "${OWNS[@]}" <<-'PY'
 	import json, sys, datetime
-	(path, session, window, cwd, branch, model, brief, parent, resume, run_id, parent_pane, window_id) = sys.argv[1:13]
+	(path, session, window, cwd, branch, model, brief, parent, resume, run_id, parent_pane, window_id, parent_session_id, parent_session_file) = sys.argv[1:15]
 	manifest = {
 	    "run_id": run_id,
 	    "window_id": window_id,
@@ -515,11 +532,13 @@ if mkdir -p "$LANE_DIR" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
 	    "cwd": cwd,
 	    "branch": branch,
 	    "model": model,
-	    "owns": sys.argv[13:],
+	    "owns": sys.argv[15:],
 	    "brief": brief,
 	    "pi_session": None,
 	    "parent": parent,
 	    "parent_pane": parent_pane,
+	    "parent_session_id": parent_session_id,
+	    "parent_session_file": parent_session_file,
 	    "resume": resume,
 	    "status": "open",
 	    "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -597,7 +616,7 @@ if [ -n "$BRIEF" ]; then
 	prompt="$prompt Read ${brief_rel} in full — it is your complete brief — then execute it."
 fi
 [ -n "$TASK" ] && prompt="$prompt Task: ${TASK}"
-prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (delegation run id ${RUN_ID}); the same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings at the operator-notes path in the brief; never commit the Vault. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. For DONE, use a real SHA and append ci:<successful-run-id> for that exact SHA; run delegate-verify before reporting. No ACK, receipt or relay messages. At 300k tokens of context (the TUI footer's absolute count, not a percentage), write a handover file with remaining work and evidence, send its path in that line, and stop."
+prompt="$prompt You were booted by the pi agent in tmux window '${PARENT_WINDOW}' (Pi session ID ${PARENT_SESSION_ID}, delegation run id ${RUN_ID}); use delegate-send session:${PARENT_SESSION_ID} for replies, never resolve the old pane again. The same ids are in your PI_DELEGATE_PARENT and PI_DELEGATE_RUN_ID env vars. Work in ${CWD}. Read AGENTS.md/CLAUDE.md in the repo before acting and record findings at the operator-notes path in the brief; never commit the Vault. Send the parent only a result or blocker, once, as one line: <task>: <PASS|BLOCKER|DONE|FAILED> <sha-or-none> - <report path>. For DONE, use a real SHA and append ci:<successful-run-id> for that exact SHA; run delegate-verify before reporting. No ACK, receipt or relay messages. At 300k tokens of context (the TUI footer's absolute count, not a percentage), write a handover file with remaining work and evidence, send its path in that line, and stop."
 
 # -l sends the string literally: without it tmux parses words like "Enter" or
 # "Space" inside the prompt as key names. Submit separately, and send Enter
@@ -651,6 +670,23 @@ if [ "$landed" != "1" ]; then
 	echo "    tmux send-keys -t $SESSION:$NAME -l -- '<prompt>'; tmux send-keys -t $SESSION:$NAME Enter" >&2
 	echo "  Do not assume it is working: check the context gauge is off 0.0%." >&2
 	DELEGATE_FAILED=1
+fi
+
+# Capture the child's identity once as well; later steering must not follow a
+# different conversation which happens to occupy this window.
+if [ -f "$LANE_MANIFEST" ]; then
+	CHILD_IDENTITY="$("$IDENTITY_HELPER" "$SESSION:$NAME" 2>/dev/null)" || CHILD_IDENTITY='{}'
+	python3 - "$LANE_MANIFEST" "$CHILD_IDENTITY" <<-'PY'
+		import json, os, sys, tempfile
+		path, identity = sys.argv[1:]
+		lane = json.load(open(path))
+		child = json.loads(identity)
+		lane.update(child_session_id=child.get("session_id"), child_session_file=child.get("session_file"))
+		fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".manifest-")
+		with os.fdopen(fd, "w") as out:
+		    json.dump(lane, out, indent=2)
+		os.replace(tmp, path)
+	PY
 fi
 
 # ── close the feedback loop ─────────────────────────────────────────────────

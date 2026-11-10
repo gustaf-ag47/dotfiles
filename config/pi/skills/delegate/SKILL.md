@@ -61,7 +61,12 @@ and capacity; a successful availability probe alone is not model verification.
 
 ## Coordination contract
 
-Steer a running child with `delegate-send <session:window-or-%pane> --file <message>`
+Steer a child with `delegate-send session:<FULL_PI_SESSION_ID> --file <message>`.
+A live `session:window` or `%pane` target is only a lookup: the sender requires a
+unique live Pi PID, matching header/boot/start/socket identity, and a protocol-2
+mailbox consumer. Missing, ambiguous, stale or old consumers fail closed. Never
+re-resolve an old parent pane when a child finishes. For immediate steering use
+`delegate-send <session:window-or-%pane> --file <message>`
 (or `--text <literal-message>`). The durable record is injected in-band at the next
 turn boundary. Use a file for multiline text or shell metacharacters. Do not type
 messages into panes; reserve pane input for slash commands and launcher bootstrap.
@@ -225,7 +230,7 @@ committing has done nothing.
 time the watcher sees the child idle without a results/blocker line it sends
 `/goal <condition>` so `goal.ts` keeps the child working (up to `PI_GOAL_MAX_TURNS`, 25)
 instead of stopping after one slice and calling the rest "blocked". Only a second idle
-nudges the parent. Watchers now run as `systemd-run --user` units (fallback `setsid`) because
+queues a completion for the parent. Watchers now run as `systemd-run --user` units (fallback `setsid`) because
 `nohup` did not survive the tool-call shell that spawned them — seven delegations in a
 row produced zero nudges.
 
@@ -249,36 +254,29 @@ completion is reported only after the child leaves CI wait or sends a result.
 notify : watching (nudges Work-Driver:speedup ci on idle)
 ```
 
-**In-band delivery (2026-10-03).** Parents that are pi sessions load
-`delegate-mailbox.ts` (via `pi-setup`), which watches the mailbox from
-inside the session and injects records addressed to its `$TMUX_PANE` with
-`pi.sendMessage(..., {triggerTurn: true})`, auto-acking on delivery. Keystroke
-nudges below are the fallback for parents without the extension — measured
-2026-10-03: a child finished, 8 keystroke nudges fired, none reached the
-parent's context; the operator closed the loop by hand.
+**Session-bound delivery.** The mailbox extension matches only the explicit
+`recipient_session_id` against the current `ctx.sessionManager.getSessionId()`.
+The launcher and dependency queue capture the parent's full ID/file at spawn or
+enqueue, not completion. New/forked chats in the same pane cannot receive older
+mail; the same session resumed elsewhere can. All records stay durable until
+`message_start`; verification rechecks the session after asynchronous work.
 
-**Two channels, deliberately.** The nudge is a keystroke, and keystrokes get dropped — a
-TUI mid-turn swallows them without trace. So the *state* goes to a mailbox on persistent
-disk (`~/.pi/agent/delegate-mailbox`, **not** a tmpfs worktree) and only the *pointer*
-goes in the keystroke. A dropped nudge loses nothing; the record is still there for the
-next turn. Never put the payload in the keystroke.
+Pane/window fields are diagnostic only. There is **no keystroke fallback** for
+completion or steering. New records use `.mail`, invisible to old `.md`-only
+consumers even if the literal payload quotes a legacy parent line. Legacy
+pane-only/invalid records are copied to `quarantine/`, not delivered or acked;
+the originals remain intact for still-running legacy owners during rollout. Existing lane manifests without parent IDs
+remain unaddressed: an operator must explicitly bind a known original session,
+never infer it from whoever occupies the pane now. Do not bulk-replay legacy mail.
 
-**Delivery is at-least-once, closed by an ACK (added 2026-09-07).** A single nudge is
-not delivery: a parent mid-turn with its operator swallows the keystroke, and the
-operator finds out before the parent does (measured same day, first session using the
-watcher). The watcher now waits for the parent's pane to go idle, sends, and **re-sends
-every `PI_DELEGATE_RENUDGE_SECS` (300) up to `PI_DELEGATE_MAX_NUDGES` (8) times until
-the parent acknowledges** by moving the record into the mailbox's `ack/` subdirectory
-(the nudge text contains the exact `mv` command). Unacked records survive in the mailbox
-root either way.
-
-**Parent duty — if you spawned children, this is on you:**
-- When you process a completion (via nudge OR by reading the pane/output yourself),
-  **ack the durable mailbox record** (this is bookkeeping, not a child chat ACK): `mv <record> ~/.pi/agent/delegate-mailbox/ack/`. An unacked record means
-  re-nudges keep landing in your input box.
-- At the start of any turn where you suspect a child finished (or after being away),
-  **sweep the mailbox**: `ls ~/.pi/agent/delegate-mailbox/*.md` — any record there is a
-  completion you have not processed yet.
+For deployment, reload the consumer and `tmux-pane-session.ts` publisher together
+in a selected idle session; do not restart all live agents. The publisher retains
+the old `pi-panes/<pid>` text-path format for tmux-resurrect and adds a separate
+JSON identity. The consumer publishes a process-bound protocol-2 capability.
+A new sender refuses pane lookup unless both and the mailbox directory match. New records deliberately use
+`parent-pane`, not legacy `parent`, so an old consumer cannot misdeliver them.
+Direct `session:ID` targeting intentionally permits offline queuing until that
+session resumes with the new consumer.
 
 It watches **from the outside**, so a child that crashes, wedges, or simply forgets to
 report is still reported — the loop must not depend on the child's cooperation.
@@ -334,8 +332,8 @@ Knobs: `PI_DELEGATE_WAIT_MAX` (2h), `PI_DELEGATE_MAILBOX`, `PI_DELEGATE_POLL_SEC
 (3), `PI_DELEGATE_MIN_GRACE_SECS` (45), `PI_DELEGATE_WATCH_HOURS` (12). `--no-notify`
 disables it.
 
-Several children finishing together serialize their nudges under `flock`, so they cannot
-interleave keystrokes into one corrupted prompt.
+Several children finishing together write separate records; the session-bound
+consumer serializes verification and delivery without typing into panes.
 
 ## Always verify the child received its task
 
