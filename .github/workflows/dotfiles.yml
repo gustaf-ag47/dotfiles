@@ -124,7 +124,9 @@ jobs:
           docker run --rm --pull=always -v "$PWD:/src:ro" \
             archlinux:latest bash -c '
             set -e
-            pacman -Sy --noconfirm --needed diffutils python >/dev/null
+            # Arch does not support partial upgrades; rolling library splits
+            # (e.g. openssl -> openssl + openssl-3) need a coherent base first.
+            pacman -Syu --noconfirm --needed diffutils python >/dev/null
             cp -a /src /tmp/dotfiles
             cd /tmp/dotfiles
             SYSTEM_LAYER_RESOLVE=1 bash tests/system-layer.sh
