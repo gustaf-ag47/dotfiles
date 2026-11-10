@@ -162,11 +162,13 @@ export function setup(pi: ExtensionAPI, deps: Deps = {}) {
 
 	// --- evaluation --------------------------------------------------------
 	async function evalRuns(w: Watch, branch: string, sha: string | undefined, since: number): Promise<Verdict | null | "unknown"> {
-		const args = ["run", "list", "-R", w.repo, "--branch", branch, "-L", "50", "--json", "databaseId,workflowName,status,conclusion,url,headSha,createdAt"];
+		// Scheduled/dispatch runs at this SHA do not establish push CI health.
+		const args = ["run", "list", "-R", w.repo, "--branch", branch, "--event", "push", "-L", "50", "--json", "databaseId,workflowName,status,conclusion,url,headSha,createdAt,event"];
 		if (sha) args.push("--commit", sha);
 		const r = await gh(args);
 		if (r.code !== 0) { w.lastError = r.stderr.trim() || `gh run list exit ${r.code}`; return "unknown"; }
-		let runs = (json(r) ?? []) as { databaseId: number; workflowName: string; status: string; conclusion: string; url: string; headSha: string; createdAt: string }[];
+		let runs = (json(r) ?? []) as { databaseId: number; workflowName: string; status: string; conclusion: string; url: string; headSha: string; createdAt: string; event: string }[];
+		runs = runs.filter((r) => r.event === "push");
 		if (!sha) {
 			// Branch watch: pin to the newest head at first sight; re-arm on a new push.
 			const head = runs[0]?.headSha;
