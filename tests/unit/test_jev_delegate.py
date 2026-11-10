@@ -78,6 +78,17 @@ printf '{"status":"ok","suggestion":"mechanical","confidence":1,"applied":false}
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
 
+    def test_no_session_environment_dry_run_works_but_real_launch_refuses(self):
+        self.env.pop('PI_SESSION_ID')
+        self.env.pop('PI_SESSION_FILE')
+        self.run_delegate('--dry-run')
+        result = subprocess.run(['bash', str(self.script), '--task', 'fixture', '--session', 'test', '--cwd', str(self.root),
+                                 '--model', 'anthropic/fixed-model', '--no-probe', '--no-notify', '--force'],
+                                env=self.env, text=True, capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot verify parent Pi identity', result.stderr)
+        self.assertNotIn('new-window', (self.root / 'tmux-calls').read_text())
+
     def test_launch_captures_original_parent_id_and_file(self):
         self.run_delegate()
         manifests = [json.loads(p.read_text()) for p in self.root.rglob('*.json') if p.is_file()]

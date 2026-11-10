@@ -221,13 +221,19 @@ PARENT_PANE="${TMUX_PANE:-unknown}"
 # Freeze identity before any waits/queued dispatch. The shell tool supplies the
 # actual caller's current ID; a terminal caller must have a live publisher.
 IDENTITY_HELPER="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../../../bin/pi-session-target"
-if [ -n "${PI_SESSION_ID:-}" ]; then
-	PARENT_IDENTITY="$("$IDENTITY_HELPER" --caller)" || die "cannot verify caller Pi identity"
-else
-	PARENT_IDENTITY="$("$IDENTITY_HELPER" "$PARENT_PANE")" || die "cannot verify parent Pi identity"
+PARENT_SESSION_ID=""
+PARENT_SESSION_FILE=""
+# A dry run has no recipient and performs no dispatch; it must still work in CI
+# and a terminal outside Pi. Actual launches/queues always verify before writes.
+if [ "$DRY" != "1" ]; then
+	if [ -n "${PI_SESSION_ID:-}" ]; then
+		PARENT_IDENTITY="$("$IDENTITY_HELPER" --caller)" || die "cannot verify caller Pi identity"
+	else
+		PARENT_IDENTITY="$("$IDENTITY_HELPER" "$PARENT_PANE")" || die "cannot verify parent Pi identity"
+	fi
+	PARENT_SESSION_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])' <<< "$PARENT_IDENTITY")"
+	PARENT_SESSION_FILE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session_file"])' <<< "$PARENT_IDENTITY")"
 fi
-PARENT_SESSION_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])' <<< "$PARENT_IDENTITY")"
-PARENT_SESSION_FILE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session_file"])' <<< "$PARENT_IDENTITY")"
 
 # ── single-owner subjects (fail closed) ──
 # A verbal "stop dispatching X" did not stop backlog-triggered dispatches
