@@ -13,26 +13,22 @@ include_special = false
 command = "terminal --class=dotfiles.scratchpad"
 class = "dotfiles.scratchpad"
 size = "75% 60%"
-position = "center"
 animation = "fromTop"
 
 [scratchpads.btop]
 command = "terminal --class=dotfiles.btop -e btop"
 class = "dotfiles.btop"
 size = "80% 80%"
-position = "center"
 animation = "fromTop"
 
 [scratchpads.lazygit]
 command = "terminal --class=dotfiles.lazygit -e lazygit"
 class = "dotfiles.lazygit"
 size = "90% 85%"
-position = "center"
 animation = "fromTop"
 
 [scratchpads.yazi]
 command = "terminal --class=dotfiles.yazi -e yazi"
 class = "dotfiles.yazi"
 size = "80% 80%"
-position = "center"
 animation = "fromTop"
