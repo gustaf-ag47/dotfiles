@@ -30,7 +30,7 @@ done
 # Backup disks fill by design, so warn only when the next backups may not fit:
 # /mnt/backup2's restic repo reached 95% unnoticed (2026-11-07).
 backup_threshold="${HOST_PRESSURE_BACKUP_THRESHOLD:-95}"
-for m in ${HOST_PRESSURE_BACKUP_MOUNTS-/mnt/backup2}; do
+for m in ${HOST_PRESSURE_BACKUP_MOUNTS-/mnt/backup2 /mnt/data}; do
     mountpoint -q "$m" || continue
     pct=$(df --output=pcent "$m" | tail -1 | tr -dc '0-9')
     [[ "$pct" -ge "$backup_threshold" ]] && { state=warning; reasons+=("backup disk $m at ${pct}% (>= ${backup_threshold}%)"); }
