@@ -60,7 +60,8 @@ class TerminalTest(unittest.TestCase):
     def test_ghostty_class_starts_own_instance_with_class_first(self):
         r, calls = self.run_with(["ghostty"], "--class=dotfiles.scratchpad", "-e", "btop")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(calls, [["ghostty", "--class=dotfiles.scratchpad", "-e", "btop"]])
+        self.assertEqual(calls, [["ghostty", "--class=dotfiles.scratchpad",
+                                  "--quit-after-last-window-closed=true", "-e", "btop"]])
 
     def test_foot_uses_app_id_and_positional_command(self):
         r, calls = self.run_with(["foot"], "--class", "dotfiles.x", "-e", "lf")

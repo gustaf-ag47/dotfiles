@@ -86,7 +86,9 @@ ghostty)
 	else
 		# A class means its own application instance; flags after -e are argv,
 		# so the class has to come first.
-		args=("--class=$class" "${args[@]}")
+		# Its own instance must exit with its window (the config keeps the
+		# shared +new-window instance alive instead).
+		args=("--class=$class" --quit-after-last-window-closed=true "${args[@]}")
 	fi
 	;;
 kitty)

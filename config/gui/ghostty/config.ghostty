@@ -22,6 +22,12 @@ window-decoration = none
 confirm-close-surface = false
 resize-overlay = never
 
+# bin/terminal opens plain windows in the D-Bus activated instance
+# (ghostty +new-window). Keep it running after its last window closes: a
+# restart costs ~1s, and a request racing the exiting instance fails with
+# NoReply. --class launches pass --quit-after-last-window-closed=true.
+quit-after-last-window-closed = false
+
 # Plain SSH (outside tmux): install the xterm-ghostty terminfo on hosts that
 # lack it, and fall back to xterm-256color when that fails.
 shell-integration-features = ssh-terminfo,ssh-env,no-cursor
