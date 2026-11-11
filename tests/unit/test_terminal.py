@@ -39,18 +39,22 @@ class TerminalTest(unittest.TestCase):
             calls = [c.strip("\n").split("\n") for c in self.log.read_text().split("---\n") if c.strip()]
         return r, calls
 
-    def test_alacritty_is_preferred_and_gets_class_title_command(self):
-        r, calls = self.run_with(["alacritty", "ghostty"], "--class", "dotfiles.calc",
+    def test_ghostty_is_preferred(self):
+        r, calls = self.run_with(["alacritty", "ghostty"], "-e", "htop")
+        self.assertEqual(calls, [["ghostty", "+new-window", "-e", "htop"]])
+
+    def test_alacritty_is_the_fallback_and_gets_class_title_command(self):
+        r, calls = self.run_with(["alacritty", "kitty"], "--class", "dotfiles.calc",
                                  "--title", "Calculator", "-e", "python3", "-c", "print(1)")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(calls, [["alacritty", "--class", "dotfiles.calc", "--title", "Calculator",
                                   "-e", "python3", "-c", "print(1)"]])
 
-    def test_override_selects_ghostty_new_window_without_class(self):
+    def test_override_selects_alacritty(self):
         r, calls = self.run_with(["alacritty", "ghostty"], "-e", "nvim", "a b",
-                                 env={"DOTFILES_TERMINAL": "ghostty"})
+                                 env={"DOTFILES_TERMINAL": "alacritty"})
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(calls, [["ghostty", "+new-window", "-e", "nvim", "a b"]])
+        self.assertEqual(calls, [["alacritty", "-e", "nvim", "a b"]])
 
     def test_ghostty_falls_back_to_standalone_when_new_window_fails(self):
         r, calls = self.run_with(["ghostty"], "--title=T", env={"STUB_RC": "1"})

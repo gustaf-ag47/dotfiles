@@ -14,7 +14,8 @@
 #                `--` works the same (wofi runs Terminal=true apps that way).
 #
 # DOTFILES_TERMINAL=<emulator> forces one; otherwise the first installed of
-# alacritty, ghostty, kitty, foot, wezterm, xterm wins.
+# ghostty, alacritty, kitty, foot, wezterm, xterm wins. Alacritty stays as the
+# fallback on machines where ghostty is not installed yet.
 set -euo pipefail
 
 class='' title=''
@@ -56,7 +57,7 @@ done
 
 term=${DOTFILES_TERMINAL:-}
 if [ -z "$term" ]; then
-	for t in alacritty ghostty kitty foot wezterm xterm; do
+	for t in ghostty alacritty kitty foot wezterm xterm; do
 		if command -v "$t" >/dev/null 2>&1; then
 			term=$t
 			break
@@ -65,7 +66,7 @@ if [ -z "$term" ]; then
 fi
 if [ -z "$term" ]; then
 	echo "terminal: no terminal emulator found" >&2
-	echo "install one of: alacritty, ghostty, kitty, foot, wezterm, xterm" >&2
+	echo "install one of: ghostty, alacritty, kitty, foot, wezterm, xterm" >&2
 	exit 1
 fi
 

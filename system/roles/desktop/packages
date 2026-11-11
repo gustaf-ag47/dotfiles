@@ -30,9 +30,9 @@ xdg-desktop-portal-gtk
 xdg-utils
 polkit-kde-agent
 udiskie
-alacritty
-# Successor to alacritty (bin/terminal picks; DOTFILES_TERMINAL=ghostty opts in).
+# Terminal: ghostty is the default (bin/terminal); alacritty is the fallback.
 ghostty
+alacritty
 brightnessctl
 playerctl
 pamixer
