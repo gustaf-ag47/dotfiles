@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""waybar-hotplug: put Waybar back on monitors that lost it after a hotplug.
+
+Waybar 0.15 logs "Bar configured ... for output: DP-1" when a monitor comes
+back (dock, KVM, monitor power cycle) but often never maps the surface, so the
+bar is silently missing until Waybar restarts (xps14, 2026-11-11). Waybar
+does not exit, so Restart=always on waybar.service cannot catch it.
+
+Listens on Hyprland's event socket. After monitor add/remove events settle,
+compares `hyprctl monitors` with the `waybar` layer surfaces and restarts
+waybar.service only if some monitor has no bar.
+
+  waybar-hotplug           watch (exec-once from hyprland.conf)
+  waybar-hotplug --check   one check now; exit 1 if a monitor had no bar
+"""
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+SETTLE = 3.0          # seconds of quiet after the last monitor event
+RECHECK = 5.0         # a restarted Waybar needs a moment to map its bars
+MAX_RESTARTS = 2      # per burst of monitor events
+EVENTS = ("monitoradded", "monitoraddedv2", "monitorremoved", "monitorremovedv2")
+
+
+def log(msg):
+    print(f"waybar-hotplug: {msg}", flush=True)
+
+
+def is_monitor_event(line):
+    return line.split(">>", 1)[0] in EVENTS
+
+
+def missing_bars(monitors, layers):
+    """Names of enabled monitors without a waybar layer surface."""
+    have = {
+        mon for mon, data in layers.items()
+        if any(s.get("namespace") == "waybar"
+               for level in data.get("levels", {}).values() for s in level)
+    }
+    return sorted(m["name"] for m in monitors
+                  if not m.get("disabled") and m["name"] not in have)
+
+
+def hyprctl_json(*args):
+    out = subprocess.run(["hyprctl", "-j", *args], capture_output=True, text=True, timeout=10)
+    return json.loads(out.stdout)
+
+
+def check_and_fix():
+    """Restart Waybar if a monitor has no bar. True if every monitor had one."""
+    try:
+        missing = missing_bars(hyprctl_json("monitors"), hyprctl_json("layers"))
+    except (subprocess.SubprocessError, ValueError, OSError) as e:
+        log(f"cannot read Hyprland state: {e}")
+        return True
+    if not missing:
+        return True
+    log(f"no bar on {', '.join(missing)}: restarting waybar.service")
+    subprocess.run(["systemctl", "--user", "restart", "waybar.service"], timeout=30)
+    return False
+
+
+def socket_path():
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not sig:
+        sys.exit("waybar-hotplug: HYPRLAND_INSTANCE_SIGNATURE is not set")
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    return os.path.join(runtime, "hypr", sig, ".socket2.sock")
+
+
+def watch():
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path())
+    buf, due, retries = b"", None, 0
+    while True:
+        sock.settimeout(None if due is None else max(0.0, due - time.monotonic()))
+        try:
+            chunk = sock.recv(4096)
+        except TimeoutError:
+            chunk = None
+        if chunk == b"":
+            return  # Hyprland went away; the next session starts a new watcher
+        if chunk:
+            buf += chunk
+            *lines, buf = buf.split(b"\n")
+            if any(is_monitor_event(ln.decode(errors="replace")) for ln in lines):
+                due, retries = time.monotonic() + SETTLE, 0
+            continue
+        due = None
+        if check_and_fix():
+            log("monitors settled; every monitor has a bar")
+            continue
+        # Verify the restart brought the bars back, but never loop: a monitor
+        # Waybar is configured to skip would otherwise restart it forever.
+        retries += 1
+        if retries < MAX_RESTARTS:
+            due = time.monotonic() + RECHECK
+        else:
+            log("bars still missing after restarts; waiting for the next monitor event")
+
+
+def main(argv):
+    if argv[1:] == ["--check"]:
+        return 0 if check_and_fix() else 1
+    if argv[1:]:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    watch()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
