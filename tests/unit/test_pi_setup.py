@@ -115,6 +115,19 @@ class AdoptionTests(unittest.TestCase):
         targets = [dst for kind, _, dst in ops if kind == 'link']
         self.assertIn(root / 'agent/bin/pi-scratch', targets)
 
+    def test_work_progress_extension_and_helper_are_installed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = setup.pi_ai_path
+            setup.pi_ai_path = lambda binary: root / 'pi-ai'
+            try:
+                ops = setup.plan(root / 'agent', root / 'private', 'pi')
+            finally:
+                setup.pi_ai_path = original
+        targets = [dst for kind, _, dst in ops if kind == 'link']
+        self.assertIn(root / 'agent/extensions/work-progress.ts', targets)
+        self.assertIn(root / 'agent/lib/work-progress.mjs', targets)
+
     def test_source_enumeration_excludes_dependencies_and_keeps_siblings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
