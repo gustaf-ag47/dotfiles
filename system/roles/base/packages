@@ -62,6 +62,8 @@ testdisk
 texinfo
 tldr
 tmux
+# xterm-ghostty terminfo, so SSH from a Ghostty window works on every host.
+ghostty-terminfo
 tmuxp
 tokei
 tree

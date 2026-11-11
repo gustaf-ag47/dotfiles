@@ -139,4 +139,4 @@ while True:
 "
 
 # Launch the calculator in a floating terminal
-exec alacritty --class "floating-calculator" --title "Calculator" -e python3 -c "$CALC_SCRIPT"
+exec terminal --class dotfiles.calculator --title "Calculator" -e python3 -c "$CALC_SCRIPT"

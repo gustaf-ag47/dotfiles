@@ -280,6 +280,7 @@ fi
 
 link_config "$DOTFILES/config/gui/dunst" "$XDG_CONFIG_HOME/dunst"
 link_config "$DOTFILES/config/gui/alacritty" "$XDG_CONFIG_HOME/alacritty"
+link_config "$DOTFILES/config/gui/ghostty" "$XDG_CONFIG_HOME/ghostty"
 link_config "$DOTFILES/config/gui/zathura" "$XDG_CONFIG_HOME/zathura"
 link_config "$DOTFILES/config/gui/gtk-3.0" "$XDG_CONFIG_HOME/gtk-3.0"
 link_config "$DOTFILES/config/gui/gtk-4.0" "$XDG_CONFIG_HOME/gtk-4.0"
@@ -403,6 +404,7 @@ link_overlay "$DOTFILES/config/gui/Wayland/waybar" jsonc "$XDG_CONFIG_HOME/wayba
 link_overlay "$DOTFILES/config/gui/Wayland/hypr" conf "$XDG_CONFIG_HOME/hypr-host.conf"
 link_overlay "$DOTFILES/config/gui/Wayland/hypr/hypridle" conf "$XDG_CONFIG_HOME/hypridle-host.conf"
 link_overlay "$DOTFILES/config/gui/alacritty" toml "$XDG_CONFIG_HOME/alacritty-host.toml"
+link_overlay "$DOTFILES/config/gui/ghostty" conf "$XDG_CONFIG_HOME/ghostty-host"
 link_overlay "$DOTFILES/config/tmux" conf "$XDG_CONFIG_HOME/tmux-host.conf"
 link_overlay "$DOTFILES/config/environment.d" conf "$XDG_CONFIG_HOME/environment.d/50-host.conf"
 

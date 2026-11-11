@@ -39,7 +39,7 @@ echo "-- core symlinks --"
 check "HOME/.zshenv -> repo" is_link_to "$HOME/.zshenv" "$DOTFILES/config/zsh/.zshenv"
 check "GTK2 default config -> repo" is_link_to "$HOME/.gtkrc-2.0" "$DOTFILES/config/gui/gtk-2.0/gtkrc"
 check "\$ZDOTDIR/.zshrc -> repo" is_link_to "$ZDOTDIR/.zshrc" "$DOTFILES/config/zsh/.zshrc"
-for c in nvim git tmux lf hypr waybar alacritty dunst swaync wlogout swayosd eww atuin; do
+for c in nvim git tmux lf hypr waybar alacritty ghostty dunst swaync wlogout swayosd eww atuin; do
 	check "config/$c is a symlink" test -L "$XDG_CONFIG_HOME/$c"
 done
 check "local/bin/git-setup-hooks exists" test -e "$HOME/.local/bin/git-setup-hooks"
@@ -55,6 +55,7 @@ check "hypr gpu overlay" test -e "$XDG_CONFIG_HOME/hypr-gpu.conf"
 check "hypr host overlay" test -e "$XDG_CONFIG_HOME/hypr-host.conf"
 check "hypridle overlay" test -e "$XDG_CONFIG_HOME/hypridle-host.conf"
 check "alacritty overlay" test -e "$XDG_CONFIG_HOME/alacritty-host.toml"
+check "ghostty overlay" test -e "$XDG_CONFIG_HOME/ghostty-host"
 check "tmux overlay" test -e "$XDG_CONFIG_HOME/tmux-host.conf"
 check "environment.d overlay" test -e "$XDG_CONFIG_HOME/environment.d/50-host.conf"
 check "profile facts generated" test -s "$XDG_CONFIG_HOME/dotfiles-profile.env"

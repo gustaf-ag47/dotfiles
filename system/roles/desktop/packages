@@ -31,6 +31,8 @@ xdg-utils
 polkit-kde-agent
 udiskie
 alacritty
+# Successor to alacritty (bin/terminal picks; DOTFILES_TERMINAL=ghostty opts in).
+ghostty
 brightnessctl
 playerctl
 pamixer

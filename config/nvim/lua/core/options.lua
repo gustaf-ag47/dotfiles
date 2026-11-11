@@ -61,10 +61,10 @@ opt.autoread = true -- Auto read when file changes
 -- terminal's clipboard into the session.
 --
 -- Custom copy: Neovim 0.11 removed DCS passthrough from vim.ui.clipboard.osc52,
--- breaking the nested-tmux chain (nvim → inner tmux → SSH → outer tmux → Alacritty).
+-- breaking the nested-tmux chain (nvim → inner tmux → SSH → outer tmux → terminal).
 -- We restore it: when inside tmux, wrap OSC 52 in DCS so allow-passthrough
 -- unwraps it and passes raw OSC 52 to the outer tmux, which set-clipboard
--- forwards to Alacritty.
+-- forwards to the terminal (Alacritty/Ghostty).
 local function osc52_copy(reg)
   local clipboard = reg == '+' and 'c' or 'p'
   return function(lines)
