@@ -208,6 +208,8 @@ done
 # `systemctl --user daemon-reload` re-sends it: set on user@.service it was silently
 # dropped by every user reload, leaving oomd guarding nothing (2026-11-03).
 link_config "$DOTFILES/config/systemd/user/app.slice.d" "$XDG_CONFIG_HOME/systemd/user/app.slice.d"
+# Waybar runs as a restarting user service (started from hyprland.conf).
+link_config "$DOTFILES/config/systemd/user/waybar.service.d" "$XDG_CONFIG_HOME/systemd/user/waybar.service.d"
 
 # Hermes Agent: only skrubben runs the gateway (see $NOTES/Homelab/dotfiles/HERMES.md).
 # Require the canonical host and all shared state bind mounts before enabling
