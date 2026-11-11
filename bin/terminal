@@ -1,21 +1,120 @@
 #!/bin/bash
+# terminal [--class ID] [--title TITLE] [-e CMD [ARGS...]]
+#
+# Open a terminal window. Every launcher (Hyprland/i3 binds, pyprland
+# scratchpads, .desktop files, popups) goes through here, so only this file
+# knows each emulator's flags.
+#
+#   --class ID   window class / Wayland app-id for window rules. Use a dotted
+#                ID (dotfiles.scratchpad): Ghostty uses the class as its GTK
+#                application ID and silently replaces an undotted one with
+#                com.mitchellh.ghostty, which breaks rules that match on it.
+#   --title T    initial window title.
+#   -e CMD...    run CMD instead of the shell; everything after -e is argv.
+#                `--` works the same (wofi runs Terminal=true apps that way).
+#
+# DOTFILES_TERMINAL=<emulator> forces one; otherwise the first installed of
+# ghostty, alacritty, kitty, foot, wezterm, xterm wins. Alacritty stays as the
+# fallback on machines where ghostty is not installed yet.
 set -euo pipefail
 
-# Terminal emulator launcher with fallbacks
-if command -v alacritty &>/dev/null; then
-    exec alacritty "$@"
-elif command -v kitty &>/dev/null; then
-    exec kitty "$@"
-elif command -v wezterm &>/dev/null; then
-    exec wezterm "$@"
-elif command -v foot &>/dev/null; then
-    exec foot "$@"
-elif command -v terminator &>/dev/null; then
-    exec terminator "$@"
-elif command -v xterm &>/dev/null; then
-    exec xterm "$@"
-else
-    echo "Error: No terminal emulator found" >&2
-    echo "Please install: alacritty, kitty, wezterm, foot, terminator, or xterm" >&2
-    exit 1
+class='' title=''
+cmd=()
+while [ $# -gt 0 ]; do
+	case $1 in
+	--class)
+		class=${2:?terminal: --class needs a value}
+		shift 2
+		;;
+	--class=*)
+		class=${1#*=}
+		shift
+		;;
+	--title)
+		title=${2:?terminal: --title needs a value}
+		shift 2
+		;;
+	--title=*)
+		title=${1#*=}
+		shift
+		;;
+	-e | --)
+		shift
+		[ $# -gt 0 ] || {
+			echo "terminal: -e needs a command" >&2
+			exit 2
+		}
+		cmd=("$@")
+		break
+		;;
+	*)
+		echo "terminal: unknown option: $1" >&2
+		echo "usage: terminal [--class ID] [--title TITLE] [-e CMD [ARGS...]]" >&2
+		exit 2
+		;;
+	esac
+done
+
+term=${DOTFILES_TERMINAL:-}
+if [ -z "$term" ]; then
+	for t in ghostty alacritty kitty foot wezterm xterm; do
+		if command -v "$t" >/dev/null 2>&1; then
+			term=$t
+			break
+		fi
+	done
 fi
+if [ -z "$term" ]; then
+	echo "terminal: no terminal emulator found" >&2
+	echo "install one of: ghostty, alacritty, kitty, foot, wezterm, xterm" >&2
+	exit 1
+fi
+
+args=()
+case $term in
+alacritty)
+	[ -n "$class" ] && args+=(--class "$class")
+	[ -n "$title" ] && args+=(--title "$title")
+	[ ${#cmd[@]} -gt 0 ] && args+=(-e "${cmd[@]}")
+	;;
+ghostty)
+	[ -n "$title" ] && args+=("--title=$title")
+	[ ${#cmd[@]} -gt 0 ] && args+=(-e "${cmd[@]}")
+	if [ -z "$class" ]; then
+		# Ask the running (D-Bus activated) instance for a window: much faster
+		# than starting GTK. Fall back to a standalone process if that fails.
+		ghostty +new-window "${args[@]}" 2>/dev/null && exit 0
+	else
+		# A class means its own application instance; flags after -e are argv,
+		# so the class has to come first.
+		# Its own instance must exit with its window (the config keeps the
+		# shared +new-window instance alive instead).
+		args=("--class=$class" --quit-after-last-window-closed=true "${args[@]}")
+	fi
+	;;
+kitty)
+	[ -n "$class" ] && args+=(--class "$class")
+	[ -n "$title" ] && args+=(--title "$title")
+	args+=("${cmd[@]}")
+	;;
+foot)
+	[ -n "$class" ] && args+=(--app-id "$class")
+	[ -n "$title" ] && args+=(--title "$title")
+	args+=("${cmd[@]}")
+	;;
+wezterm)
+	args=(start)
+	[ -n "$class" ] && args+=(--class "$class")
+	[ ${#cmd[@]} -gt 0 ] && args+=(-- "${cmd[@]}")
+	;;
+xterm)
+	[ -n "$class" ] && args+=(-class "$class")
+	[ -n "$title" ] && args+=(-T "$title")
+	[ ${#cmd[@]} -gt 0 ] && args+=(-e "${cmd[@]}")
+	;;
+*)
+	[ ${#cmd[@]} -gt 0 ] && args+=(-e "${cmd[@]}")
+	;;
+esac
+
+exec "$term" "${args[@]}"

@@ -22,7 +22,7 @@ fi
 
 # Always send OSC 52 so text reaches the terminal's system clipboard.
 # When inside tmux, wrap in DCS passthrough so allow-passthrough forwards
-# raw OSC 52 to the outer terminal (SSH chain: inner tmux → outer tmux → Alacritty).
+# raw OSC 52 to the outer terminal (SSH chain: inner tmux → outer tmux → Alacritty/Ghostty).
 encoded=$(printf '%s' "$input" | base64 -w 0)
 if [ -n "$TMUX" ]; then
   printf '\033Ptmux;\033\033]52;c;%s\a\033\\' "$encoded" >/dev/tty 2>/dev/null || true

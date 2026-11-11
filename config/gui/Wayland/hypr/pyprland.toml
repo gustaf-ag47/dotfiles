@@ -10,29 +10,29 @@ plugins = ["scratchpads", "expose", "toggle_special"]
 include_special = false
 
 [scratchpads.term]
-command = "alacritty --class=scratchpad"
-class = "scratchpad"
+command = "terminal --class=dotfiles.scratchpad"
+class = "dotfiles.scratchpad"
 size = "75% 60%"
 position = "center"
 animation = "fromTop"
 
 [scratchpads.btop]
-command = "alacritty --class=btop-scratch -e btop"
-class = "btop-scratch"
+command = "terminal --class=dotfiles.btop -e btop"
+class = "dotfiles.btop"
 size = "80% 80%"
 position = "center"
 animation = "fromTop"
 
 [scratchpads.lazygit]
-command = "alacritty --class=lazygit-scratch -e lazygit"
-class = "lazygit-scratch"
+command = "terminal --class=dotfiles.lazygit -e lazygit"
+class = "dotfiles.lazygit"
 size = "90% 85%"
 position = "center"
 animation = "fromTop"
 
 [scratchpads.yazi]
-command = "alacritty --class=yazi-scratch -e yazi"
-class = "yazi-scratch"
+command = "terminal --class=dotfiles.yazi -e yazi"
+class = "dotfiles.yazi"
 size = "80% 80%"
 position = "center"
 animation = "fromTop"

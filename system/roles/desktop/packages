@@ -30,6 +30,8 @@ xdg-desktop-portal-gtk
 xdg-utils
 polkit-kde-agent
 udiskie
+# Terminal: ghostty is the default (bin/terminal); alacritty is the fallback.
+ghostty
 alacritty
 brightnessctl
 playerctl
