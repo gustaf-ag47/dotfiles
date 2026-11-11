@@ -60,6 +60,9 @@ constraints can choose implementation details within the decided design.
 - Steering uses `delegate-send <child> --file <message>`; pane typing is reserved for
   slash commands, not task payloads.
 - Git: use `GIT_EDITOR=true` for any rebase/merge continuation so it cannot hang.
+- Rebase cadence: before each work chunk and before every push, fetch and rebase onto
+  `origin/<base>`, resolve conflicts by hand, re-run touched gates, push
+  `--force-with-lease`; check the PR is not DIRTY/BEHIND before waiting on CI.
   `main` may enforce linear history — check before choosing a merge strategy.
 
 ## Where to record findings

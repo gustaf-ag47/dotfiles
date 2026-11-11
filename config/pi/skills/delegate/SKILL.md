@@ -388,6 +388,13 @@ Earned the hard way; each one cost real time when it was missing:
 - **`GIT_EDITOR=true git rebase --continue`.** Redirecting stdin does *not* stop git
   launching `$EDITOR`. An agent sat wedged for **20.7 hours** on nvim holding an empty
   `COMMIT_EDITMSG`, showing `Working...` the whole time with its cost frozen.
+- **Rebase onto the base branch every iteration.** A delegated child is one long
+  session, not a loop wrapper, so nothing rebases for it. Before each work chunk and
+  immediately before every push: `git fetch origin <base> && GIT_EDITOR=true git rebase
+  origin/<base>`, resolve conflicts by hand (never `-X ours/theirs`), re-run the gates
+  for touched areas, push `--force-with-lease`; confirm the PR is not DIRTY/BEHIND
+  before registering a CI wait. Never merge the base in or use Update branch. Measured
+  2026-11-11: a lane rebased only when the watchdog flagged its PR DIRTY.
 - **The exact test invocation.** If a suite is behind a build tag, a plain run compiles
   zero files and *passes*. An agent reported such a run as evidence in a PR body.
 - **Who owns merges.** If you are running a merge train, say so — a child that
