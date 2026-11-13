@@ -233,9 +233,23 @@ CODEX_TOPUP_URL = "https://chatgpt.com/codex/settings/usage"
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 # Beta flags Claude Code sends for subscription-OAuth auth (used by the seed probe only).
 OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
-# Presented for every forwarded request: Anthropic gates models on this version
-# and clients (Hermes pins 2.1.83) advertise stale ones that upstream rejects.
-OAUTH_USER_AGENT = "claude-code/2.1.280"
+# Floor presented on every forwarded request: Anthropic gates models on this
+# version and clients (Hermes pins 2.1.83) advertise stale ones that upstream
+# rejects. A client advertising a NEWER Claude Code version passes through, so
+# a pi/claude upgrade unblocks a new model without editing this pin (2.1.280
+# rejected claude-fable-5-2, "2.1.290 or newer is required", while pi 1.5.2
+# itself sent 2.1.322; 2026-11-11).
+OAUTH_USER_AGENT = "claude-code/2.1.322"
+_CC_VERSION = re.compile(r"claude-(?:cli|code)/(\d+)\.(\d+)\.(\d+)")
+
+
+def oauth_user_agent(client_ua: str | None) -> str:
+    """The pinned Claude Code user-agent, or the client's if it is newer."""
+    pin = tuple(int(x) for x in _CC_VERSION.match(OAUTH_USER_AGENT).groups())
+    m = _CC_VERSION.match(client_ua or "")
+    if m and tuple(int(x) for x in m.groups()) > pin:
+        return "claude-code/" + ".".join(m.groups())
+    return OAUTH_USER_AGENT
 FAILOVER_STATUSES = {401, 403, 429, 529}
 # A 429 either means "this bucket is spent" (rotate) or "you are going too fast"
 # (wait). Only the former is worth a failover — see operator notes:
@@ -2491,7 +2505,7 @@ def upstream(method: str, path: str, headers: dict, body: bytes, token: str, tim
          if k.lower() not in ("authorization", "x-api-key", "host")}
     betas = [b.strip() for b in h.get("anthropic-beta", "").split(",") if b.strip()]
     h["anthropic-beta"] = ",".join(dict.fromkeys(betas + ["claude-code-20250219", "oauth-2025-04-20"]))
-    h["user-agent"] = OAUTH_USER_AGENT  # clients advertise stale versions Anthropic rejects
+    h["user-agent"] = oauth_user_agent(h.get("user-agent"))  # never below the pin
     h["x-app"] = "cli"
     h["authorization"] = f"Bearer {token}"
     h["host"] = UPSTREAM_HOST
