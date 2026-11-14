@@ -189,8 +189,11 @@ class RunPyPreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             env = clean_env(home)
-            saved = {k: os.environ.get(k) for k in env}
+            # A developer's shell may export TYPESAFE_API_KEY; the preflight
+            # must see no key at all, so drop it for the test's duration.
+            saved = {k: os.environ.get(k) for k in [*env, "TYPESAFE_API_KEY"]}
             os.environ.update(env)
+            os.environ.pop("TYPESAFE_API_KEY", None)
             try:
                 module = _import_run_module()
                 original = module.checkout_ready
@@ -239,6 +242,10 @@ class RunPyPreflightTests(unittest.TestCase):
 def _import_run_module():
     import importlib.util
 
+    # run.py imports its sibling _bounded.py; the script dir is on sys.path
+    # when run as a script, so put it there for an in-process import too.
+    if str(RUN_PY.parent) not in sys.path:
+        sys.path.insert(0, str(RUN_PY.parent))
     spec = importlib.util.spec_from_file_location("jev_ultrafast_run", RUN_PY)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
