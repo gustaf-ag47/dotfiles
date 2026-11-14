@@ -7,7 +7,8 @@
 # - background user services in app.slice (sentinels, proxies, headless
 #   browsers, syncthing) drop to CPUWeight=20/IOWeight=20 so Ghostty, Waybar and
 #   launched apps (app-*.service/scope) win under contention. They are only
-#   deprioritised, never starved.
+#   deprioritised, never starved. tmux.service stays at full weight: the
+#   server draws every pane in the terminal, so it is interactive.
 #
 # Runtime properties only (gone on reboot/restart; the timer reapplies them).
 # DESKTOP_PRIORITY_KEEP: extended regex of app.slice units left at full weight.
@@ -15,7 +16,7 @@
 #   desktop-priority --dry-run print what would change
 set -euo pipefail
 
-keep="${DESKTOP_PRIORITY_KEEP:-^(app-.*|waybar|swaync|mako|dunst|hypr.*|xdg-.*|dconf|wireplumber|pipewire.*|polkit.*|desktop-priority)\.service$}"
+keep="${DESKTOP_PRIORITY_KEEP:-^(app-.*|waybar|swaync|mako|dunst|hypr.*|xdg-.*|dconf|wireplumber|pipewire.*|polkit.*|tmux|desktop-priority)\.service$}"
 dry=false
 [[ "${1:-}" == "--dry-run" ]] && dry=true
 uid=$(id -u)

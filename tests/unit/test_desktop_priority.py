@@ -22,6 +22,7 @@ class DesktopPriorityTests(unittest.TestCase):
             ("agents.slice/tmux-spawn-d.scope", "0", "100"),
             ("app.slice/app-com.mitchellh.ghostty.service", "0", "100"),
             ("app.slice/waybar.service", "0", "100"),
+            ("app.slice/tmux.service", "0", "100"),
             ("app.slice/syncthing.service", "0", "100"),
             ("app.slice/log-sentinel.service", "0", "20"),  # already low
         ]:
