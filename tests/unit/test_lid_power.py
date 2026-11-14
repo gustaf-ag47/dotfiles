@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import unittest
+import importlib.util
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -11,7 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "system/hosts/xps14/files/usr/local/bin/lid-power"
 # No __pycache__ inside system/: install-system.sh would ship it to /usr/local/bin.
 sys.dont_write_bytecode = True
-lp = SourceFileLoader("lid_power", str(SCRIPT)).load_module()
+_loader = SourceFileLoader("lid_power", str(SCRIPT))
+_spec = importlib.util.spec_from_loader("lid_power", _loader)
+lp = importlib.util.module_from_spec(_spec)
+_loader.exec_module(lp)
 
 
 def plan(lid, ac, sav=False, kbd=0, saved=None):
