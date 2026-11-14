@@ -1,0 +1,3 @@
+# role: desktop -- systemd --user units enabled on machines with this role.
+# Format: <enable|disable> <unit>
+enable desktop-priority.timer
