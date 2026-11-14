@@ -70,5 +70,46 @@ class HyprPowerProfileTest(unittest.TestCase):
         self.assertEqual(run.returncode, 2)
 
 
+MONITORS = """Monitor eDP-1 (ID 0):
+\t2880x1800@120.00100 at 3520x2160
+\tdpmsStatus: {edp}
+Monitor DP-1 (ID 1):
+\tdpmsStatus: 1
+"""
+
+
+class LidGuardTest(unittest.TestCase):
+    def guard(self, lid, edp):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "state").write_text(f"state:      {lid}\n")
+            (root / "monitors.txt").write_text(MONITORS.format(edp=edp))
+            log = root / "hyprctl.log"
+            (root / "hyprctl").write_text(
+                '#!/bin/bash\nif [ "$1" = monitors ]; then cat "$MONITORS_TXT"; exit; fi\n'
+                'printf "%s\\n" "$*" >> "$HYPRCTL_LOG"\n'
+            )
+            (root / "hyprctl").chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                PATH=f"{root}:{env['PATH']}",
+                HYPRCTL_LOG=str(log),
+                MONITORS_TXT=str(root / "monitors.txt"),
+                LID_STATE_GLOB=str(root / "state"),
+            )
+            run = subprocess.run(["bash", str(SCRIPT), "--lid-guard"], text=True, capture_output=True, env=env, timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            return log.read_text().splitlines() if log.exists() else []
+
+    def test_closed_lid_turns_lit_panel_off(self):
+        self.assertEqual(self.guard("closed", 1), ["dispatch dpms off eDP-1"])
+
+    def test_closed_lid_panel_already_off(self):
+        self.assertEqual(self.guard("closed", 0), [])
+
+    def test_open_lid_touches_nothing(self):
+        self.assertEqual(self.guard("open", 1), [])
+
+
 if __name__ == "__main__":
     unittest.main()

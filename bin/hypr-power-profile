@@ -7,6 +7,11 @@
 #   hypr-power-profile            apply once for the current power source
 #   hypr-power-profile --watch    apply, then re-apply whenever AC state flips
 #   hypr-power-profile --status   print ac|battery and exit
+#   hypr-power-profile --lid-guard  lid closed: put a lit internal panel back to DPMS off
+#
+# --watch also runs the lid guard every poll: the lid binding turns eDP off,
+# but any `dpms on` (input wake, hypridle on-resume) lights every monitor,
+# including a panel under a closed lid.
 #
 # Started by config/gui/Wayland/hypr/hosts/<laptop>.conf (exec-once). Research:
 # $NOTES/Homelab/dotfiles/runs/2026-10-17-xps14-battery/
@@ -14,6 +19,7 @@ set -euo pipefail
 
 POWER_SUPPLY_DIR="${POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 POLL_SECS="${HYPR_POWER_PROFILE_POLL_SECS:-10}"
+LID_STATE_GLOB="${LID_STATE_GLOB:-/proc/acpi/button/lid/*/state}"
 
 # First mains adapter by type (AC on Dell, ADP1/ACAD elsewhere); scope=Device
 # is a peripheral's own supply, not the machine's.
@@ -50,6 +56,29 @@ apply_profile() {
 	esac
 }
 
+lid_closed() {
+	local f
+	for f in $LID_STATE_GLOB; do
+		[[ -r "$f" ]] && grep -q closed "$f" && return 0
+	done
+	return 1
+}
+
+# Internal panels (eDP-*) that Hyprland reports as DPMS on.
+lit_internal_panels() {
+	hyprctl monitors 2>/dev/null | awk '
+		/^Monitor / { name = $2 }
+		/dpmsStatus: 1/ && name ~ /^eDP-/ { print name }'
+}
+
+lid_guard() {
+	lid_closed || return 0
+	local m
+	for m in $(lit_internal_panels); do
+		hyprctl dispatch dpms off "$m" >/dev/null || true
+	done
+}
+
 # Live blur state as Hyprland reports it (0/1), empty if hyprctl is unreachable.
 live_blur() {
 	hyprctl getoption decoration:blur:enabled 2>/dev/null | awk '/^int:/ { print $2 }'
@@ -65,6 +94,7 @@ watch() {
 		if [[ "$(live_blur)" != "$want" ]]; then
 			apply_profile "$now" || true
 		fi
+		lid_guard
 		sleep "$POLL_SECS"
 	done
 }
@@ -73,6 +103,7 @@ case "${1:-}" in
 "") apply_profile "$(current_profile)" ;;
 --watch) watch ;;
 --status) current_profile ;;
+--lid-guard) lid_guard ;;
 -h | --help) sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0" ;;
 *)
 	echo "hypr-power-profile: unknown argument '$1'" >&2

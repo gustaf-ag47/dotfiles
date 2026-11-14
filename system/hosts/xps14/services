@@ -1,5 +1,7 @@
 enable intel-cvs-late.service
 enable tlp.service
+# Lid closed on battery -> TLP power-saver (usr/local/bin/lid-power).
+enable lid-power.service
 enable fwupd-refresh.timer
 # fwupd's LAN metadata-sharing daemon (pulls in avahi): a multicast listener
 # with no peers to serve; fwupd falls back to plain HTTP.

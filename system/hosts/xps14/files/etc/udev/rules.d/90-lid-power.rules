@@ -1,0 +1,3 @@
+# Re-evaluate lid-power on plug/unplug. Sorts after TLP's 85-tlp.rules, so
+# this runs after TLP's own `tlp auto` for the same event.
+ACTION=="change", SUBSYSTEM=="power_supply", KERNEL=="AC", RUN+="/usr/local/bin/lid-power --apply"

@@ -1,0 +1,14 @@
+[Unit]
+Description=TLP power-saver while the lid is closed on battery
+Documentation=file:///usr/local/bin/lid-power
+After=tlp.service
+Wants=tlp.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lid-power --watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

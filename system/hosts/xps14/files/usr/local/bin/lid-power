@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Lid closed on battery -> TLP power-saver profile; anything else -> back.
+
+xps14 keeps running with the lid shut (logind HandleLidSwitch=ignore,
+Hyprland turns the panel off via DPMS). With nobody at the keyboard there is
+no reason to race to idle, so while the lid is closed *and* the machine is on
+battery this switches TLP to its power-saver profile (_SAV values in
+/etc/tlp.d/10-xps14.conf: EPP "power") and turns the keyboard backlight off.
+Opening the lid or plugging in restores the profile TLP would pick itself
+(`tlp ac` / `tlp bat`, both equal to TLP_PROFILE_AC/BAT so TLP's smart auto
+switching keeps working) and the saved keyboard backlight level.
+
+A power-saver profile set by hand (not by this script) is left alone.
+
+  lid-power --apply   evaluate once (udev runs this on AC change)
+  lid-power --watch   apply, then re-apply on every lid event (lid-power.service)
+  lid-power --status  print lid/AC/state, change nothing
+
+Measured 2026-11-13 (fixed 4x6 GiB sha256 job, RAPL package energy):
+balance_power 66-87 J vs power 38-51 J. Notes:
+$NOTES/Homelab/dotfiles/runs/2026-11-13-xps14-lid-power/
+"""
+
+import fcntl
+import glob
+import os
+import struct
+import subprocess
+import sys
+
+STATE_DIR = os.environ.get("LID_POWER_STATE_DIR", "/run/lid-power")
+AC_ONLINE = "/sys/class/power_supply/AC/online"
+KBD = "/sys/class/leds/dell::kbd_backlight/brightness"
+EV_SW, SW_LID = 0x05, 0x00
+EVENT = struct.Struct("llHHi")  # struct input_event (64-bit timeval)
+
+
+def plan(lid_closed, on_ac, we_set_sav, kbd_level, kbd_saved):
+    """Pure decision. Returns a list of (action, arg) tuples."""
+    actions = []
+    if lid_closed and not on_ac:
+        if not we_set_sav:
+            actions.append(("tlp", "power-saver"))
+    elif we_set_sav:
+        actions.append(("tlp", "ac" if on_ac else "bat"))
+    if lid_closed:
+        if kbd_level and kbd_saved is None:
+            actions.append(("kbd", 0))
+    elif kbd_saved is not None:
+        actions.append(("kbd", kbd_saved))
+    return actions
+
+
+def read(path, default=None):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def lid_closed():
+    for path in glob.glob("/proc/acpi/button/lid/*/state"):
+        return "closed" in (read(path) or "")
+    return False
+
+
+def on_ac():
+    return read(AC_ONLINE, "1") == "1"
+
+
+def state_path(name):
+    return os.path.join(STATE_DIR, name)
+
+
+def snapshot():
+    kbd = read(KBD)
+    saved = read(state_path("kbd"))
+    return dict(
+        lid_closed=lid_closed(),
+        on_ac=on_ac(),
+        we_set_sav=os.path.exists(state_path("sav")),
+        kbd_level=int(kbd) if kbd and kbd.isdigit() else 0,
+        kbd_saved=int(saved) if saved and saved.isdigit() else None,
+    )
+
+
+def log(msg):
+    print(f"lid-power: {msg}", flush=True)
+
+
+def apply():
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(state_path("lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        snap = snapshot()
+        for action, arg in plan(**snap):
+            if action == "tlp":
+                log(f"lid {'closed' if snap['lid_closed'] else 'open'}, "
+                    f"{'AC' if snap['on_ac'] else 'battery'}: tlp {arg}")
+                subprocess.run(["tlp", arg], stdout=subprocess.DEVNULL, check=False)
+                if arg == "power-saver":
+                    open(state_path("sav"), "w").close()
+                else:
+                    os.unlink(state_path("sav"))
+            elif action == "kbd":
+                if arg == 0:
+                    with open(state_path("kbd"), "w") as f:
+                        f.write(str(snap["kbd_level"]))
+                try:
+                    with open(KBD, "w") as f:
+                        f.write(str(arg))
+                except OSError as exc:
+                    log(f"keyboard backlight: {exc}")
+                if arg != 0:
+                    os.unlink(state_path("kbd"))
+
+
+def lid_event_device():
+    for name in glob.glob("/sys/class/input/input*/name"):
+        if read(name) == "Lid Switch":
+            for ev in glob.glob(os.path.join(os.path.dirname(name), "event*")):
+                return "/dev/input/" + os.path.basename(ev)
+    return None
+
+
+def watch():
+    apply()
+    dev = lid_event_device()
+    if dev is None:
+        log("no 'Lid Switch' input device")
+        return 1
+    log(f"watching {dev}")
+    with open(dev, "rb", buffering=0) as f:
+        while True:
+            data = f.read(EVENT.size)
+            if len(data) < EVENT.size:
+                return 1
+            _, _, etype, code, _ = EVENT.unpack(data)
+            if etype == EV_SW and code == SW_LID:
+                apply()
+
+
+def main(argv):
+    mode = argv[1] if len(argv) > 1 else "--status"
+    if mode == "--status":
+        snap = snapshot()
+        print(" ".join(f"{k}={v}" for k, v in snap.items()))
+        print("plan:", plan(**snap) or "nothing to do")
+        return 0
+    if os.geteuid() != 0:
+        print("lid-power: needs root", file=sys.stderr)
+        return 1
+    if mode == "--apply":
+        apply()
+        return 0
+    if mode == "--watch":
+        return watch()
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
