@@ -1,0 +1,18 @@
+# All tmux panes (agents, test suites, builds) share this one slice, via
+# tmux-spawn-.scope.d. Weight is per sibling cgroup, so a per-pane weight of 15
+# still let 30 busy panes outweigh app.slice (Ghostty, Waybar) 450:100.
+# CPUWeight=idle (cgroup cpu.idle, SCHED_IDLE): agents get every cycle the
+# desktop does not want, but never delay a desktop wakeup. Measured on xps14
+# (8x4 ms/120 Hz render probe vs 96 spinners): weight 15 slice missed 11-40 %
+# of frames, idle 0.8-12 %, no load 0.2-1.4 %.
+[Unit]
+Description=tmux panes and agent fleets (background CPU/IO share)
+
+[Slice]
+CPUWeight=idle
+IOWeight=15
+# Same thrash guard as app.slice: under sustained memory stall oomd kills the
+# worst pane here instead of the host freezing.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=40%
+ManagedOOMMemoryPressureDurationSec=20s

@@ -208,9 +208,21 @@ done
 # `systemctl --user daemon-reload` re-sends it: set on user@.service it was silently
 # dropped by every user reload, leaving oomd guarding nothing (2026-11-03).
 link_config "$DOTFILES/config/systemd/user/app.slice.d" "$XDG_CONFIG_HOME/systemd/user/app.slice.d"
-# Every tmux pane scope (tmux-spawn-<uuid>.scope) at low CPU weight, so agent
-# fleets cannot starve Ghostty, Waybar and the rest of app.slice.
+# Every tmux pane scope (tmux-spawn-<uuid>.scope) goes into agents.slice, one
+# low-weight group, so agent fleets cannot starve Ghostty, Waybar and app.slice.
+link_config "$DOTFILES/config/systemd/user/agents.slice" "$XDG_CONFIG_HOME/systemd/user/agents.slice"
 link_config "$DOTFILES/config/systemd/user/tmux-spawn-.scope.d" "$XDG_CONFIG_HOME/systemd/user/tmux-spawn-.scope.d"
+# Panes that predate the slice cannot be moved into it; make them idle-class
+# (runtime only) so a long-lived fleet stays below app.slice until it respawns.
+if command -v systemctl >/dev/null 2>&1; then
+	systemctl --user daemon-reload 2>/dev/null || true
+	while read -r scope; do
+		systemctl --user set-property --runtime "$scope" CPUWeight=idle 2>/dev/null || true
+	done < <(systemctl --user list-units --plain --no-legend 'tmux-spawn-*.scope' 2>/dev/null \
+		| awk '{print $1}' | while read -r u; do
+			[ "$(systemctl --user show -P Slice "$u" 2>/dev/null)" = agents.slice ] || echo "$u"
+		done)
+fi
 # Waybar runs as a restarting user service (started from hyprland.conf).
 link_config "$DOTFILES/config/systemd/user/waybar.service.d" "$XDG_CONFIG_HOME/systemd/user/waybar.service.d"
 
