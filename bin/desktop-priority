@@ -39,7 +39,11 @@ done < <(find "$um" -maxdepth 3 -type d -name 'tmux-spawn-*.scope' 2>/dev/null)
 for dir in "$um"/app.slice/*.service; do
   [[ -d "$dir" ]] || continue
   unit=$(basename "$dir")
-  [[ "$unit" =~ $keep ]] && continue
+  if [[ "$unit" =~ $keep ]]; then
+    # Undo an earlier run that predates this unit joining the keep list.
+    [[ "$(cat "$dir/cpu.weight" 2>/dev/null)" == 20 ]] && set_prop "$unit" CPUWeight=100 IOWeight=100
+    continue
+  fi
   [[ "$(cat "$dir/cpu.weight" 2>/dev/null)" == 20 ]] && continue
   set_prop "$unit" CPUWeight=20 IOWeight=20
 done

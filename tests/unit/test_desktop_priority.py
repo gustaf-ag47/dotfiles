@@ -22,7 +22,7 @@ class DesktopPriorityTests(unittest.TestCase):
             ("agents.slice/tmux-spawn-d.scope", "0", "100"),
             ("app.slice/app-com.mitchellh.ghostty.service", "0", "100"),
             ("app.slice/waybar.service", "0", "100"),
-            ("app.slice/tmux.service", "0", "100"),
+            ("app.slice/tmux.service", "0", "20"),          # kept: restored
             ("app.slice/syncthing.service", "0", "100"),
             ("app.slice/log-sentinel.service", "0", "20"),  # already low
         ]:
@@ -48,6 +48,7 @@ class DesktopPriorityTests(unittest.TestCase):
             "--user set-property --runtime tmux-spawn-a.scope CPUWeight=idle",
             "--user set-property --runtime tmux-spawn-b.scope CPUWeight=idle",
             "--user set-property --runtime syncthing.service CPUWeight=20 IOWeight=20",
+            "--user set-property --runtime tmux.service CPUWeight=100 IOWeight=100",
         ]))
 
     def test_dry_run_changes_nothing(self):
