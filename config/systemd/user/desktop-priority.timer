@@ -1,0 +1,9 @@
+[Unit]
+Description=Reapply desktop CPU priority every 2 min (new services, old panes)
+
+[Timer]
+OnActiveSec=10s
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

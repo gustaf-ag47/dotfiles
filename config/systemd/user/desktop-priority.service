@@ -1,0 +1,7 @@
+[Unit]
+Description=Deprioritise tmux panes and background services against the desktop
+Documentation=file://%h/sync/src/dotfiles/bin/desktop-priority
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/desktop-priority

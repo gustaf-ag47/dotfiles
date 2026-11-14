@@ -187,6 +187,8 @@ def main(argv):
     # tmux started from a terminal puts panes under app.slice; from tmux.service, beside it.
     legacy = [p for p in um.rglob("tmux-spawn-*.scope") if "agents.slice" not in p.parts]
     L.append(f"legacy pane scopes: {len(legacy)}, idle={sum(read(p / 'cpu.idle') == '1' for p in legacy)}")
+    low = [p.name for p in (um / "app.slice").glob("*.service") if read(p / "cpu.weight") == "20"]
+    L.append(f"app.slice services at weight 20: {', '.join(sorted(low)) or 'none'}")
     aws = Path.home() / ".local/bin/aws"
     L.append(f"aws shim: {aws.resolve() if aws.exists() else 'missing'}")
     L.append("dotfiles: " + sh("git", "-C", str(Path.home() / "sync/src/dotfiles"), "log", "-1", "--format=%h %s"))

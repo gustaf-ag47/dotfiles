@@ -1,0 +1,44 @@
+#!/bin/bash
+# desktop-priority: keep background work from out-competing the desktop.
+#
+# - tmux pane scopes outside agents.slice (panes that predate the
+#   tmux-spawn-.scope.d drop-in, or a tmux server that started elsewhere)
+#   become idle-class, like agents.slice itself.
+# - background user services in app.slice (sentinels, proxies, headless
+#   browsers, syncthing) drop to CPUWeight=20/IOWeight=20 so Ghostty, Waybar and
+#   launched apps (app-*.service/scope) win under contention. They are only
+#   deprioritised, never starved.
+#
+# Runtime properties only (gone on reboot/restart; the timer reapplies them).
+# DESKTOP_PRIORITY_KEEP: extended regex of app.slice units left at full weight.
+#   desktop-priority           apply, print what changed
+#   desktop-priority --dry-run print what would change
+set -euo pipefail
+
+keep="${DESKTOP_PRIORITY_KEEP:-^(app-.*|waybar|swaync|mako|dunst|hypr.*|xdg-.*|dconf|wireplumber|pipewire.*|polkit.*|desktop-priority)\.service$}"
+dry=false
+[[ "${1:-}" == "--dry-run" ]] && dry=true
+uid=$(id -u)
+um="${DESKTOP_PRIORITY_CGROUP:-/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service}"
+
+set_prop() {  # <unit> <prop=value>... (skipped when already in effect)
+  local unit=$1; shift
+  if $dry; then echo "would set $unit $*"; return 0; fi
+  systemctl --user set-property --runtime "$unit" "$@" 2>/dev/null && echo "set $unit $*" || true
+}
+
+# 1. Pane scopes outside agents.slice -> idle class.
+while IFS= read -r dir; do
+  [[ "$dir" == */agents.slice/* ]] && continue
+  [[ "$(cat "$dir/cpu.idle" 2>/dev/null)" == 1 ]] && continue
+  set_prop "$(basename "$dir")" CPUWeight=idle
+done < <(find "$um" -maxdepth 3 -type d -name 'tmux-spawn-*.scope' 2>/dev/null)
+
+# 2. Background services in app.slice -> low weight.
+for dir in "$um"/app.slice/*.service; do
+  [[ -d "$dir" ]] || continue
+  unit=$(basename "$dir")
+  [[ "$unit" =~ $keep ]] && continue
+  [[ "$(cat "$dir/cpu.weight" 2>/dev/null)" == 20 ]] && continue
+  set_prop "$unit" CPUWeight=20 IOWeight=20
+done
