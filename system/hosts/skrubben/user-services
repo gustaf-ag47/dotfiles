@@ -5,3 +5,4 @@ enable ws-up.service
 enable reading-ingest.timer
 enable reading-kobo-usb.path
 enable agent-gc.timer
+enable host-diag.timer
