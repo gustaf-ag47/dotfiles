@@ -7,7 +7,8 @@
 # - background user services in app.slice (sentinels, proxies, headless
 #   browsers, syncthing) drop to CPUWeight=20/IOWeight=20 so Ghostty, Waybar and
 #   launched apps (app-*.service/scope) win under contention. They are only
-#   deprioritised, never starved.
+#   deprioritised, never starved. tmux.service stays at full weight: the
+#   server draws every pane in the terminal, so it is interactive.
 #
 # Runtime properties only (gone on reboot/restart; the timer reapplies them).
 # DESKTOP_PRIORITY_KEEP: extended regex of app.slice units left at full weight.
@@ -15,7 +16,7 @@
 #   desktop-priority --dry-run print what would change
 set -euo pipefail
 
-keep="${DESKTOP_PRIORITY_KEEP:-^(app-.*|waybar|swaync|mako|dunst|hypr.*|xdg-.*|dconf|wireplumber|pipewire.*|polkit.*|desktop-priority)\.service$}"
+keep="${DESKTOP_PRIORITY_KEEP:-^(app-.*|waybar|swaync|mako|dunst|hypr.*|xdg-.*|dconf|wireplumber|pipewire.*|polkit.*|tmux|desktop-priority)\.service$}"
 dry=false
 [[ "${1:-}" == "--dry-run" ]] && dry=true
 uid=$(id -u)
@@ -38,7 +39,11 @@ done < <(find "$um" -maxdepth 3 -type d -name 'tmux-spawn-*.scope' 2>/dev/null)
 for dir in "$um"/app.slice/*.service; do
   [[ -d "$dir" ]] || continue
   unit=$(basename "$dir")
-  [[ "$unit" =~ $keep ]] && continue
+  if [[ "$unit" =~ $keep ]]; then
+    # Undo an earlier run that predates this unit joining the keep list.
+    [[ "$(cat "$dir/cpu.weight" 2>/dev/null)" == 20 ]] && set_prop "$unit" CPUWeight=100 IOWeight=100
+    continue
+  fi
   [[ "$(cat "$dir/cpu.weight" 2>/dev/null)" == 20 ]] && continue
   set_prop "$unit" CPUWeight=20 IOWeight=20
 done
