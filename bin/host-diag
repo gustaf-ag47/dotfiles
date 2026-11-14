@@ -92,6 +92,31 @@ def diskstats():
     return out
 
 
+def tf_probe():
+    path = Path(tempfile.gettempdir()) / "host-diag-probe.py"
+    path.write_text(PROBE)
+    return str(path)
+
+
+def ab(probe):
+    """Old: pane scopes at CPUWeight=15 inside app.slice, beside the terminal.
+    New: the same load in agents.slice (idle class). 2 pairs, ~50 s total."""
+    out = []
+    for _ in range(2):
+        for name, where in (("old app.slice/scope@15", ["--slice=app.slice", "-p", "CPUWeight=15"]),
+                            ("new agents.slice", ["--slice=agents.slice"])):
+            hogs = [subprocess.Popen(["systemd-run", "--user", "--scope", "-q", *where, "sh", "-c",
+                                      "for i in $(seq 16); do timeout 11 sh -c 'while :; do :; done' & done; wait"])
+                    for _ in range(6)]
+            time.sleep(1.5)
+            res = sh("systemd-run", "--user", "--scope", "-q", "--slice=app.slice", sys.executable, probe, timeout=60)
+            for h in hogs:
+                h.wait()
+            out.append(f"{name}: {res or 'failed'}")
+            time.sleep(2)
+    return out
+
+
 def main(argv):
     host = socket.gethostname()
     L = [f"# host-diag {host} {time.strftime('%F %T %z')}", ""]
@@ -127,6 +152,24 @@ def main(argv):
         L.append(f"{d}: util={util:.0f}% r/s={rd / dt:.0f} w/s={wr / dt:.0f} r_await={r_aw:.1f}ms w_await={w_aw:.1f}ms")
     L.append(sh("df", "-h", "-x", "tmpfs", "-x", "devtmpfs", "-x", "efivarfs", "--output=pcent,size,target"))
 
+    L += ["", "## io stall sources"]
+    L.append("io.pressure full avg10 by cgroup: " + ", ".join(
+        f"{k}={v}" for v, k in sorted(((float(read(f).split("full avg10=")[1].split()[0]), str(f.parent.relative_to(CG)))
+                                        for f in CG.glob("**/io.pressure") if len(f.relative_to(CG).parts) <= 7
+                                        and "full avg10=" in read(f)), reverse=True)[:6]))
+    waits = {}
+    for t in Path("/proc").glob("[0-9]*/task/*"):
+        try:
+            st = (t / "stat").read_text()
+            state = st[st.rindex(")") + 2]
+            wchan = (t / "wchan").read_text()
+        except OSError:
+            continue
+        if state == "D" or "uring" in wchan or "cqring" in wchan:
+            key = f"{state} {st[st.index('(') + 1:st.rindex(')')]} {wchan}"
+            waits[key] = waits.get(key, 0) + 1
+    L.append("D-state / io_uring waiters: " + (", ".join(f"{n}x {k}" for k, n in sorted(waits.items(), key=lambda kv: -kv[1])[:10]) or "none"))
+
     L += ["", "## gpu"]
     if shutil.which("nvidia-smi"):
         L.append(sh("nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,"
@@ -141,17 +184,21 @@ def main(argv):
     ag = um / "agents.slice"
     L.append(f"agents.slice: present={ag.is_dir()} cpu.idle={read(ag / 'cpu.idle', '-')} "
              f"panes={len(list(ag.glob('tmux-spawn-*.scope')))}")
-    legacy = list(um.glob("tmux-spawn-*.scope"))
+    # tmux started from a terminal puts panes under app.slice; from tmux.service, beside it.
+    legacy = [p for p in um.rglob("tmux-spawn-*.scope") if "agents.slice" not in p.parts]
     L.append(f"legacy pane scopes: {len(legacy)}, idle={sum(read(p / 'cpu.idle') == '1' for p in legacy)}")
     aws = Path.home() / ".local/bin/aws"
     L.append(f"aws shim: {aws.resolve() if aws.exists() else 'missing'}")
     L.append("dotfiles: " + sh("git", "-C", str(Path.home() / "sync/src/dotfiles"), "log", "-1", "--format=%h %s"))
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tf:
-        tf.write(PROBE)
     probe = sh("systemd-run", "--user", "--scope", "-q", "--slice=app.slice",
-               sys.executable, tf.name, timeout=90)
-    os.unlink(tf.name)
+               sys.executable, tf_probe(), timeout=90)
     L.append(f"render probe (app.slice, 8x4 ms @120 Hz): {probe or 'failed'}")
+    stamp = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "host-diag/ab-v1"
+    if "--ab" in argv or ("--upload" in argv and not stamp.exists()):
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+        L += ["", "## one-time A/B: 96 spinners vs the probe (old pane topology vs agents.slice)"]
+        L += ab(tf_probe())
     report = "\n".join(L) + "\n"
     print(report)
     if "--upload" in argv:
