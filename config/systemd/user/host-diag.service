@@ -1,0 +1,11 @@
+[Unit]
+Description=Read-only lag snapshot (CPU/RAM/GPU/disk) to a secret gist
+Documentation=file://%h/sync/src/dotfiles/bin/host-diag
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Runs its own render probe in app.slice; the sampler itself stays out of the way.
+Slice=agents.slice
+ExecStart=%h/.local/bin/host-diag --upload
+StandardOutput=null

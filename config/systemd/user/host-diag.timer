@@ -1,0 +1,10 @@
+[Unit]
+Description=Lag snapshot every 30 min (readable from other machines via gh gist)
+
+[Timer]
+OnActiveSec=2min
+OnUnitActiveSec=30min
+RandomizedDelaySec=1min
+
+[Install]
+WantedBy=timers.target

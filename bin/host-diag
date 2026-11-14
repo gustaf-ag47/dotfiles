@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""host-diag: read-only lag snapshot (CPU/RAM/GPU/disk) of this machine.
+
+    host-diag             print the report
+    host-diag --upload    also store it in a secret gist "host-diag <host>",
+                          one file per run (newest 48 kept), so another machine
+                          can read it with `gh gist view` when ssh is not open
+
+Reads /proc, cgroupfs, nvidia-smi and the kernel journal; runs an 8 s render
+probe (8 workers x 4 ms per 120 Hz frame) in app.slice. Process names only,
+never command lines (they can carry secrets).
+"""
+import json
+import re
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+KEEP = 48
+CG = Path("/sys/fs/cgroup")
+PROBE = r'''
+import time, multiprocessing as mp
+def w(q):
+    p=1/120; ft=[]; miss=0; nxt=time.perf_counter(); end=nxt+8
+    while nxt<end:
+        t=time.perf_counter(); c0=time.thread_time()
+        while time.thread_time()-c0<0.004: pass
+        ft.append((time.perf_counter()-t)*1000)
+        if time.perf_counter()>nxt+p: miss+=1
+        nxt+=p; s=nxt-time.perf_counter()
+        if s>0: time.sleep(s)
+    q.put((ft,miss))
+if __name__=="__main__":
+    q=mp.Queue(); ps=[mp.Process(target=w,args=(q,)) for _ in range(8)]
+    [x.start() for x in ps]; r=[q.get() for _ in ps]; [x.join() for x in ps]
+    ft=sorted(v for a in r for v in a[0]); m=sum(a[1] for a in r); n=len(ft)
+    print(f"frames={n} p50={ft[n//2]:.1f}ms p99={ft[int(n*.99)]:.1f}ms max={ft[-1]:.1f}ms missed={m} ({100*m/n:.1f}%)")
+'''
+
+
+def sh(*cmd, timeout=30):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def read(path, default=""):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return default
+
+
+def cgroup_usage():
+    out = {}
+    for stat in CG.glob("**/cpu.stat"):
+        if len(stat.relative_to(CG).parts) > 6:
+            continue
+        for line in read(stat).splitlines():
+            if line.startswith("usage_usec "):
+                out[str(stat.parent.relative_to(CG))] = int(line.split()[1])
+    return out
+
+
+def proc_ticks():
+    out = {}
+    for p in Path("/proc").iterdir():
+        if not p.name.isdigit():
+            continue
+        try:
+            raw = (p / "stat").read_text()
+        except OSError:
+            continue
+        comm = raw[raw.index("(") + 1:raw.rindex(")")]
+        f = raw[raw.rindex(")") + 2:].split()
+        out[p.name] = (comm, int(f[11]) + int(f[12]), int(f[21]) * os.sysconf("SC_PAGE_SIZE"))
+    return out
+
+
+def diskstats():
+    out = {}
+    for line in read("/proc/diskstats").splitlines():
+        f = line.split()
+        if re.fullmatch(r"nvme\d+n\d+|sd[a-z]+", f[2]):
+            out[f[2]] = [int(x) for x in f[3:14]]
+    return out
+
+
+def main(argv):
+    host = socket.gethostname()
+    L = [f"# host-diag {host} {time.strftime('%F %T %z')}", ""]
+    L.append(f"uptime: {sh('uptime')}  nproc={os.cpu_count()}")
+    for r in ("cpu", "memory", "io"):
+        L.append(f"psi {r}: " + " | ".join(read(f"/proc/pressure/{r}").splitlines()))
+    mi = {k: v for k, v in (line.split(":", 1) for line in read("/proc/meminfo").splitlines())}
+    L.append("mem: " + ", ".join(f"{k}={mi.get(k, '?').strip()}" for k in
+             ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree", "Dirty")))
+    L.append(f"swappiness={read('/proc/sys/vm/swappiness')} zram: {sh('zramctl', '--noheadings')}")
+
+    # 5 s sample of cgroups, processes and disks.
+    cg0, pr0, dk0, t0 = cgroup_usage(), proc_ticks(), diskstats(), time.monotonic()
+    time.sleep(5)
+    cg1, pr1, dk1, dt = cgroup_usage(), proc_ticks(), diskstats(), time.monotonic() - t0
+    L += ["", "## top cgroups (cores, 5 s)"]
+    rows = sorted(((cg1[k] - cg0.get(k, cg1[k])) / 1e6 / dt, k) for k in cg1)
+    L += [f"{c:6.2f} {k}" for c, k in reversed(rows[-15:]) if c > 0.02]
+    hz = os.sysconf("SC_CLK_TCK")
+    L += ["", "## top processes (cores, 5 s; name only)"]
+    prow = sorted(((v[1] - pr0[k][1]) / hz / dt, v[0], k) for k, v in pr1.items() if k in pr0)
+    L += [f"{c:6.2f} {n} [{pid}]" for c, n, pid in reversed(prow[-12:]) if c > 0.02]
+    L += ["", "## top RSS (GiB)"]
+    L += [f"{r / 2**30:6.2f} {n} [{pid}]" for pid, (n, _, r) in
+          sorted(pr1.items(), key=lambda kv: -kv[1][2])[:8]]
+    L += ["", "## disks (5 s)"]
+    for d, b in dk1.items():
+        a = dk0.get(d, b)
+        rd, wr = b[0] - a[0], b[4] - a[4]
+        util = (b[9] - a[9]) / 10 / dt
+        r_aw = (b[3] - a[3]) / rd if rd else 0
+        w_aw = (b[7] - a[7]) / wr if wr else 0
+        L.append(f"{d}: util={util:.0f}% r/s={rd / dt:.0f} w/s={wr / dt:.0f} r_await={r_aw:.1f}ms w_await={w_aw:.1f}ms")
+    L.append(sh("df", "-h", "-x", "tmpfs", "-x", "devtmpfs", "-x", "efivarfs", "--output=pcent,size,target"))
+
+    L += ["", "## gpu"]
+    if shutil.which("nvidia-smi"):
+        L.append(sh("nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,"
+                    "temperature.gpu,clocks.sm,power.draw,pstate", "--format=csv"))
+        L.append(sh("nvidia-smi", "--query-compute-apps=process_name,used_memory", "--format=csv,noheader"))
+    L.append("kernel: " + (sh("journalctl", "-k", "-b", "-q", "--no-pager", "-o", "short-iso",
+                              "-g", "Xid|Out of memory|hung_task|GPU has fallen", timeout=20)[-1500:] or "no Xid/OOM/hung_task this boot"))
+    L.append("oomd: " + (sh("journalctl", "-b", "-q", "--no-pager", "-u", "systemd-oomd", "-n", "5", timeout=20) or "-"))
+
+    L += ["", "## desktop isolation"]
+    um = CG / f"user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service"
+    ag = um / "agents.slice"
+    L.append(f"agents.slice: present={ag.is_dir()} cpu.idle={read(ag / 'cpu.idle', '-')} "
+             f"panes={len(list(ag.glob('tmux-spawn-*.scope')))}")
+    legacy = list(um.glob("tmux-spawn-*.scope"))
+    L.append(f"legacy pane scopes: {len(legacy)}, idle={sum(read(p / 'cpu.idle') == '1' for p in legacy)}")
+    aws = Path.home() / ".local/bin/aws"
+    L.append(f"aws shim: {aws.resolve() if aws.exists() else 'missing'}")
+    L.append("dotfiles: " + sh("git", "-C", str(Path.home() / "sync/src/dotfiles"), "log", "-1", "--format=%h %s"))
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tf:
+        tf.write(PROBE)
+    probe = sh("systemd-run", "--user", "--scope", "-q", "--slice=app.slice",
+               sys.executable, tf.name, timeout=90)
+    os.unlink(tf.name)
+    L.append(f"render probe (app.slice, 8x4 ms @120 Hz): {probe or 'failed'}")
+    report = "\n".join(L) + "\n"
+    print(report)
+    if "--upload" in argv:
+        upload(host, report)
+    return 0
+
+
+def upload(host, report):
+    desc = f"host-diag {host}"
+    name = f"{host}-{time.strftime('%Y%m%dT%H%M%S')}.md"
+    gists = json.loads(sh("gh", "api", "/gists?per_page=100") or "[]")
+    gid = next((g["id"] for g in gists if g.get("description") == desc), None)
+    if gid is None:
+        body = {"description": desc, "public": False, "files": {name: {"content": report}}}
+        method, url = "POST", "/gists"
+    else:
+        old = sorted(f for f in json.loads(sh("gh", "api", f"/gists/{gid}") or "{}").get("files", {}))
+        files = {f: None for f in old[: max(0, len(old) - KEEP + 1)]}
+        files[name] = {"content": report}
+        body = {"files": files}
+        method, url = "PATCH", f"/gists/{gid}"
+    r = subprocess.run(["gh", "api", "-X", method, url, "--input", "-"], input=json.dumps(body),
+                       capture_output=True, text=True)
+    print(f"host-diag: upload {'ok' if r.returncode == 0 else 'failed: ' + r.stderr.strip()}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
