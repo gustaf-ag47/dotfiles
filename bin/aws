@@ -1,0 +1,95 @@
+#!/bin/bash
+# aws -- AWS CLI shim that caches `aws eks get-token` output until it expires.
+#
+# Every kubectl call against an EKS context runs the kubeconfig exec plugin,
+# `aws eks get-token`: a full AWS CLI start (~0.4 s CPU idle, ~1 s under load).
+# Watchers (log-sentinel, driver-cluster-watch, sweetspot-driver-ops) ran it
+# ~86 times a minute on xps14 (2026-11-14), close to a core of pure CLI
+# start-up. The token is a presigned STS URL valid for 15 minutes, so this shim
+# serves it from a per-user cache until 2 minutes before its
+# expirationTimestamp, like aws-iam-authenticator does.
+#
+# Everything else execs the real CLI untouched. Cache: $XDG_RUNTIME_DIR
+# (tmpfs, 0700), one 0600 file per (args, profile/region/credential env).
+# The real CLI: ~/.local/aws-cli/v2/current/bin/aws if installed, else the
+# first `aws` on PATH that is not this script.
+# install.sh links bin/* into ~/.local/bin, replacing the AWS installer's
+# ~/.local/bin/aws symlink; an `aws/install --update` puts that back and the
+# next `make install` restores the shim (only the cache is lost meanwhile).
+#
+#   AWS_EKS_TOKEN_CACHE=0 aws ...   bypass the cache
+set -uo pipefail
+
+self=$(readlink -f "${BASH_SOURCE[0]}")
+real=""
+IFS=: read -ra path_dirs <<<"${PATH:-}"
+# The AWS v2 installer's tree first: its ~/.local/bin/aws symlink is what
+# this shim replaces, and PATH may also hold an older distro v1 in /usr/bin.
+for d in "$HOME/.local/aws-cli/v2/current/bin" "${path_dirs[@]}"; do
+	[ -n "$d" ] && [ -x "$d/aws" ] || continue
+	[ "$(readlink -f "$d/aws")" = "$self" ] && continue
+	real="$d/aws"
+	break
+done
+if [ -z "$real" ]; then
+	echo "aws (shim): no real aws CLI found on PATH" >&2
+	exit 127
+fi
+
+# Only `... eks get-token ...` with JSON output (the default and kubectl's
+# requirement) is cached.
+is_token=0 prev="" output=json
+for a in "$@"; do
+	[ "$prev" = eks ] && [ "$a" = get-token ] && is_token=1
+	[ "$prev" = --output ] && output=$a
+	case "$a" in --output=*) output=${a#--output=} ;; esac
+	prev=$a
+done
+runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+if [ "$is_token" -ne 1 ] || [ "$output" != json ] || [ "${AWS_EKS_TOKEN_CACHE:-1}" = 0 ] ||
+	[ ! -d "$runtime" ] || [ ! -w "$runtime" ]; then
+	exec "$real" "$@"
+fi
+
+dir="$runtime/aws-eks-token"
+mkdir -m 0700 "$dir" 2>/dev/null
+[ -d "$dir" ] && [ -O "$dir" ] || exec "$real" "$@"
+key=$(printf '%s\0' "$@" \
+	"P=${AWS_PROFILE:-}" "DP=${AWS_DEFAULT_PROFILE:-}" "R=${AWS_REGION:-}" "DR=${AWS_DEFAULT_REGION:-}" \
+	"K=${AWS_ACCESS_KEY_ID:-}" "T=${AWS_SESSION_TOKEN:-}" "RA=${AWS_ROLE_ARN:-}" \
+	"C=${AWS_CONFIG_FILE:-}" "S=${AWS_SHARED_CREDENTIALS_FILE:-}" | sha256sum | cut -c1-32)
+file="$dir/$key.json"
+
+# Serve the cached token if it has more than 120 s left.
+fresh() {
+	[ -s "$file" ] || return 1
+	local exp
+	exp=$(sed -n 's/.*"expirationTimestamp": *"\([^"]*\)".*/\1/p' "$file" | head -1)
+	[ -n "$exp" ] || return 1
+	exp=$(date -d "$exp" +%s 2>/dev/null) || return 1
+	[ $((exp - $(date +%s))) -gt 120 ]
+}
+if fresh; then
+	cat "$file"
+	exit 0
+fi
+
+# One refresh per key at a time; the others wait and reuse it.
+exec 9>"$file.lock"
+flock -w 30 9 || exec "$real" "$@"
+if fresh; then
+	cat "$file"
+	exit 0
+fi
+tmp=$(mktemp "$dir/.tmp.XXXXXX") || exec "$real" "$@"
+"$real" "$@" >"$tmp"
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q '"expirationTimestamp"' "$tmp" && grep -q '"token"' "$tmp"; then
+	chmod 600 "$tmp"
+	mv -f "$tmp" "$file"
+	cat "$file"
+	exit 0
+fi
+cat "$tmp"
+rm -f "$tmp"
+exit "$rc"

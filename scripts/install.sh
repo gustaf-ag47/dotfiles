@@ -208,6 +208,9 @@ done
 # `systemctl --user daemon-reload` re-sends it: set on user@.service it was silently
 # dropped by every user reload, leaving oomd guarding nothing (2026-11-03).
 link_config "$DOTFILES/config/systemd/user/app.slice.d" "$XDG_CONFIG_HOME/systemd/user/app.slice.d"
+# Every tmux pane scope (tmux-spawn-<uuid>.scope) at low CPU weight, so agent
+# fleets cannot starve Ghostty, Waybar and the rest of app.slice.
+link_config "$DOTFILES/config/systemd/user/tmux-spawn-.scope.d" "$XDG_CONFIG_HOME/systemd/user/tmux-spawn-.scope.d"
 # Waybar runs as a restarting user service (started from hyprland.conf).
 link_config "$DOTFILES/config/systemd/user/waybar.service.d" "$XDG_CONFIG_HOME/systemd/user/waybar.service.d"
 
