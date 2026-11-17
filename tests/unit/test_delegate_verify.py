@@ -64,16 +64,18 @@ class VerifyTests(unittest.TestCase):
     def test_explicit_unmerged_pr_head_with_its_ci_run_passes(self):
         self.report.write_text("Ready for parent review; not merged.\n")
         self.pr["merged_at"] = None
-        self.assertIn("PR #12", self.verify(" ci:123 pr:12"))
+        result = self.verify(" ci:123 pr:12")
+        self.assertIn("https://github.com/owner/repo/pull/12", result)
+        self.assertNotRegex(result, r"(?<!\w)#12\b")
 
     def test_explicit_pr_rejects_ancestor_instead_of_exact_head(self):
         self.pr["head"]["sha"] = "d" * 40
-        with self.assertRaisesRegex(ValueError, "not the head"):
+        with self.assertRaisesRegex(ValueError, r"not the head of https://github\.com/owner/repo/pull/12"):
             self.verify(" ci:123 pr:12")
 
     def test_explicit_pr_rejects_ci_from_other_pr(self):
         self.ci_pr = 99
-        with self.assertRaisesRegex(ValueError, "not associated with PR #12"):
+        with self.assertRaisesRegex(ValueError, r"not associated with https://github\.com/owner/repo/pull/12"):
             self.verify(" ci:123 pr:12")
 
     def test_merged_pr_with_empty_run_association_and_exact_check_link_passes(self):

@@ -82,6 +82,12 @@ function ghExec(bin: string): Exec {
 export const label = (w: Watch) =>
 	w.pr ? `${w.repo}#${w.pr}` : w.run ? `${w.repo} run ${w.run}` : `${w.repo}@${w.branch}`;
 
+// Agent/human-facing text gets the real URL (never both forms for one
+// reference in a line); width-constrained UI (status bar, /ci-wait list
+// columns) keeps the short label() above.
+export const labelUrl = (w: Watch) =>
+	w.pr ? `https://github.com/${w.repo}/pull/${w.pr}` : w.run ? `https://github.com/${w.repo}/actions/runs/${w.run}` : label(w);
+
 // --- check interpretation (shared semantics with bin/delegate-watchdog) ------
 interface Check { name: string; bucket?: string; state?: string; link?: string; workflow?: string }
 export function summarizeChecks(checks: Check[]) {
@@ -122,7 +128,7 @@ export function setup(pi: ExtensionAPI, deps: Deps = {}) {
 	};
 
 	function emitState() {
-		const list = [...watches.values()].map((w) => ({ id: w.id, target: label(w), until: w.until }));
+		const list = [...watches.values()].map((w) => ({ id: w.id, target: labelUrl(w), until: w.until }));
 		pi.events?.emit?.("ci-wait:state", { active: list.length > 0, watches: list });
 		if (ctxRef?.hasUI) {
 			const text = [...watches.values()].map((w) => `⏳ ci ${w.pr ? `#${w.pr}` : w.run ? `run ${w.run}` : w.branch}${w.progress ? ` ${w.progress}` : ""}`).join("  ");
@@ -143,7 +149,7 @@ export function setup(pi: ExtensionAPI, deps: Deps = {}) {
 	}
 
 	async function resolve(w: Watch, v: Verdict) {
-		const lines = [`CI WAIT RESOLVED - ${label(w)}: ${v.verdict}`];
+		const lines = [`CI WAIT RESOLVED - ${labelUrl(w)}: ${v.verdict}`];
 		if (w.note) lines.push(`note: ${w.note}`);
 		lines.push(...v.body);
 		if (w.events?.length) lines.push("", "Seen while waiting:", ...w.events.map((e) => `- ${e}`));
@@ -154,7 +160,7 @@ export function setup(pi: ExtensionAPI, deps: Deps = {}) {
 		}
 		if (v.next.length) lines.push("", "Next:", ...v.next.map((c) => `  ${c}`));
 		if (!watches.has(w.id)) return; // cancelled while we fetched logs
-		if (!deliver(lines.join("\n"), { id: w.id, target: label(w), verdict: v.verdict, red: !!v.red })) return; // retry next tick
+		if (!deliver(lines.join("\n"), { id: w.id, target: labelUrl(w), verdict: v.verdict, red: !!v.red })) return; // retry next tick
 		watches.delete(w.id);
 		pi.appendEntry("ci-wait", { op: "resolved", id: w.id, verdict: v.verdict });
 		emitState();
@@ -405,7 +411,7 @@ export function setup(pi: ExtensionAPI, deps: Deps = {}) {
 			pi.appendEntry("ci-wait", { op: "registered", watch });
 			emitState();
 			schedule(5_000);
-			const text = `ci_wait registered: ${watch.id} ${label(watch)} until ${until}. Waiting on CI in the background; ` +
+			const text = `ci_wait registered: ${watch.id} ${labelUrl(watch)} until ${until}. Waiting on CI in the background; ` +
 				`you will be re-prompted with "CI WAIT RESOLVED" when it is actionable. End your turn now; do not poll. (/ci-wait to list or cancel)`;
 			return { content: [{ type: "text", text }], details: { watch }, terminate: true };
 		},
@@ -420,7 +426,7 @@ export function setup(pi: ExtensionAPI, deps: Deps = {}) {
 				ctx.ui.notify(gone.length ? `ci-wait: cancelled ${gone.join(", ")}` : `ci-wait: no watch ${id}`, "info");
 				return;
 			}
-			const list = [...watches.values()].map((w) => `${w.id} ${label(w)} until ${w.until} - ${w.progress ?? "pending"}, ${Math.round((now() - w.registeredAt) / MIN)} min${w.failures ? `, ${w.failures} gh failures` : ""}`);
+			const list = [...watches.values()].map((w) => `${w.id} ${labelUrl(w)} until ${w.until} - ${w.progress ?? "pending"}, ${Math.round((now() - w.registeredAt) / MIN)} min${w.failures ? `, ${w.failures} gh failures` : ""}`);
 			ctx.ui.notify(list.length ? list.join("\n") : "ci-wait: no active watches", "info");
 		},
 	});
