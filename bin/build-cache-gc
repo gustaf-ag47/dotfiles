@@ -1,0 +1,72 @@
+#!/bin/bash
+# build-cache-gc: keep agent build caches from filling the root disk.
+#
+#   build-cache-gc [--dry-run]
+#
+# Go build cache: Go trims an entry only after 5 days unused, but ~30 agent
+# worktrees on different commits write ~16 GB/h of new package archives
+# (xps14, 2026-11-19: 80 GB in 5 h, / at 91%). Delete entries whose mtime is
+# older than GOCACHE_IDLE_H (48) hours, or GOCACHE_PRESSURE_IDLE_H (6) hours
+# once / reaches HIGH_PCT (85). Go refreshes an entry's mtime when a build uses
+# it (at most hourly), so a 6 h old entry is cold; a deleted one is a cache miss
+# and rebuilds. Never `go clean -cache`: wiping it makes every agent rebuild
+# everything at once.
+#
+# Docker: anonymous volumes (64-hex name, no compose project) that no
+# container references and that are older than VOLUME_MIN_AGE_H (24) hours.
+# They are what `docker run` without --rm leaves behind from postgres test
+# containers; nothing can mount them again by name (56 GB on 2026-11-19).
+set -euo pipefail
+
+dry_run=0
+[[ "${1:-}" == "--dry-run" ]] && dry_run=1
+
+gocache="${BUILD_CACHE_GC_GOCACHE:-${GOCACHE:-$HOME/.cache/go-build}}"
+high_pct="${BUILD_CACHE_GC_HIGH_PCT:-85}"
+idle_h="${BUILD_CACHE_GC_GOCACHE_IDLE_H:-48}"
+pressure_idle_h="${BUILD_CACHE_GC_GOCACHE_PRESSURE_IDLE_H:-6}"
+volume_age_h="${BUILD_CACHE_GC_VOLUME_MIN_AGE_H:-24}"
+
+root_pct() {
+    if [[ -n "${BUILD_CACHE_GC_ROOT_PCT:-}" ]]; then
+        echo "$BUILD_CACHE_GC_ROOT_PCT"
+    else
+        df --output=pcent / | tail -1 | tr -dc '0-9'
+    fi
+}
+
+before=$(root_pct)
+hours=$idle_h
+[[ "$before" -ge "$high_pct" ]] && hours=$pressure_idle_h
+
+go_files=0
+go_bytes=0
+# Entries live in the 256 two-hex-digit subdirectories; README and trim.txt
+# at the top level stay.
+if [[ -d "$gocache" && -f "$gocache/README" ]]; then
+    while IFS=' ' read -r size path; do
+        go_files=$((go_files + 1))
+        go_bytes=$((go_bytes + size))
+        [[ "$dry_run" -eq 1 ]] || rm -f -- "$path"
+    done < <(find "$gocache" -mindepth 2 -maxdepth 2 -path "$gocache/[0-9a-f][0-9a-f]/*" \
+        -type f -mmin "+$((hours * 60))" -printf '%s %p\n')
+fi
+
+vols=0
+if [[ "${BUILD_CACHE_GC_DOCKER:-1}" == "1" ]] && command -v docker >/dev/null 2>&1 \
+    && timeout 30 docker info >/dev/null 2>&1; then
+    cutoff=$(date -d "-${volume_age_h} hours" +%s)
+    while IFS='|' read -r name project created; do
+        [[ "$name" =~ ^[0-9a-f]{64}$ && -z "$project" ]] || continue
+        [[ "$(date -d "$created" +%s 2>/dev/null || echo "$cutoff")" -lt "$cutoff" ]] || continue
+        if [[ "$dry_run" -eq 1 ]] || docker volume rm "$name" >/dev/null 2>&1; then
+            vols=$((vols + 1))
+        fi
+    done < <(docker volume ls -qf dangling=true \
+        | xargs -r -n 200 docker volume inspect \
+            -f '{{.Name}}|{{index .Labels "com.docker.compose.project"}}|{{.CreatedAt}}' 2>/dev/null)
+fi
+
+verb=removed
+[[ "$dry_run" -eq 1 ]] && verb=would-remove
+echo "root=${before}%->$(root_pct)% gocache_idle_h=${hours} ${verb}: go_entries=${go_files} go_mb=$((go_bytes / 1048576)) docker_volumes=${vols}"

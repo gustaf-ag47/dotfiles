@@ -12,3 +12,4 @@ enable dotfiles-sync.timer
 enable host-pressure-alert.timer
 enable pi-delegate-supervisor.timer
 enable pi-delegate-reap.timer
+enable build-cache-gc.timer

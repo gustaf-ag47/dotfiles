@@ -1,0 +1,11 @@
+[Unit]
+Description=Trim agent build caches hourly, before / reaches host-pressure-alert's 90% line
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Unit=build-cache-gc.service
+
+[Install]
+WantedBy=timers.target

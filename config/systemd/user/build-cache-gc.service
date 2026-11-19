@@ -1,0 +1,9 @@
+[Unit]
+Description=Trim cold Go build cache entries and orphaned anonymous Docker volumes
+Documentation=file://%h/sync/src/dotfiles/bin/build-cache-gc
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/build-cache-gc
+Nice=19
+IOSchedulingClass=idle
