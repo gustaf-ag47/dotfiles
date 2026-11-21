@@ -39,6 +39,18 @@ class OAuthTransportTests(TestCase):
         # Anthropic gates models by claude-code version; a stale client UA must not pass through.
         self.assertEqual(sent["user-agent"], proxy.OAUTH_USER_AGENT)
 
+    def test_newer_client_version_passes_through(self):
+        # pi 1.5.2 sends claude-cli/2.1.322+; a newer model may need it (fable-5-2 did).
+        self.assertEqual(proxy.oauth_user_agent("claude-cli/2.1.999 (external, sdk-ts)"), "claude-code/2.1.999")
+        self.assertEqual(proxy.oauth_user_agent("claude-code/2.2.0"), "claude-code/2.2.0")
+        self.assertEqual(proxy.oauth_user_agent("claude-cli/2.1.83"), proxy.OAUTH_USER_AGENT)
+        self.assertEqual(proxy.oauth_user_agent("Anthropic/Python 1.0"), proxy.OAUTH_USER_AGENT)
+        self.assertEqual(proxy.oauth_user_agent(None), proxy.OAUTH_USER_AGENT)
+
+    def test_pin_meets_the_fable_5_2_floor(self):
+        version = tuple(int(x) for x in proxy.OAUTH_USER_AGENT.split("/")[1].split("."))
+        self.assertGreaterEqual(version, (2, 1, 290))
+
     def test_strip_anthropic_gateway_prefix(self):
         self.assertEqual(proxy.strip_anthropic_gateway_prefix("/anthropic/v1/messages"), "/v1/messages")
         self.assertEqual(
