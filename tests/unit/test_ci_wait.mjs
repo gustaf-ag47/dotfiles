@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.PI_CI_WAIT_MAX_FAILURES = '3';
-const { setup, summarizeChecks } = await import('../../config/pi/extensions/ci-wait.ts');
+const { setup, summarizeChecks, labelUrl } = await import('../../config/pi/extensions/ci-wait.ts');
 
 const REPO = 'o/r';
 
@@ -67,13 +67,21 @@ async function register(b, params) {
 
 const check = (name, bucket, link = 'https://github.com/o/r/actions/runs/42/job/1') => ({ name, bucket, state: bucket.toUpperCase(), link, workflow: 'ci' });
 
+test('labelUrl builds a real GitHub URL for pr/run watches, never a bare #number', () => {
+  assert.equal(labelUrl({ repo: 'o/r', pr: 7 }), 'https://github.com/o/r/pull/7');
+  assert.equal(labelUrl({ repo: 'o/r', run: 42 }), 'https://github.com/o/r/actions/runs/42');
+  // No PR/run to link to: fall back to the short label (no URL exists for a bare branch watch).
+  assert.equal(labelUrl({ repo: 'o/r', branch: 'main' }), 'o/r@main');
+});
+
 test('tool registers, terminates the turn and prints the supervisor phrase', async () => {
   const b = boot({});
   const res = await register(b, { pr: 7 });
   assert.equal(res.terminate, true);
-  assert.match(res.content[0].text, /^ci_wait registered: w1 o\/r#7 until checks/);
+  assert.match(res.content[0].text, /^ci_wait registered: w1 https:\/\/github\.com\/o\/r\/pull\/7 until checks/);
+  assert.doesNotMatch(res.content[0].text, /\bo\/r#7\b/); // URL only, not the bare #number too
   assert.equal(b.appended[0].op, 'registered');
-  assert.deepEqual(b.events.at(-1), ['ci-wait:state', { active: true, watches: [{ id: 'w1', target: 'o/r#7', until: 'checks' }] }]);
+  assert.deepEqual(b.events.at(-1), ['ci-wait:state', { active: true, watches: [{ id: 'w1', target: 'https://github.com/o/r/pull/7', until: 'checks' }] }]);
   await assert.rejects(b.tool.execute('c', { pr: 1, run: 2 }, undefined, undefined, b.ctx), /exactly one/);
   await assert.rejects(b.tool.execute('c', { run: 2, until: 'merged' }, undefined, undefined, b.ctx), /needs a pr/);
 });
@@ -91,7 +99,8 @@ test('pending checks do not wake; all green wakes once and clears state', async 
   assert.equal(msg.customType, 'ci-wait');
   assert.equal(msg.display, true);
   assert.deepEqual(opts, { triggerTurn: true });
-  assert.match(msg.content, /^CI WAIT RESOLVED - o\/r#7: green - 2\/2 checks/);
+  assert.match(msg.content, /^CI WAIT RESOLVED - https:\/\/github\.com\/o\/r\/pull\/7: green - 2\/2 checks/);
+  assert.doesNotMatch(msg.content.split('\n')[0], /\bo\/r#7\b/); // headline: URL, not a bare #number
   assert.match(msg.content, /note: then merge/);
   assert.equal(b.appended.at(-1).op, 'resolved');
   assert.deepEqual(b.events.at(-1), ['ci-wait:state', { active: false, watches: [] }]);
@@ -206,7 +215,7 @@ test('run target: completed failure wakes red', async () => {
   assert.equal(b.sent.length, 0);
   state.run = { status: 'completed', conclusion: 'failure', url: 'u', workflowName: 'ci', jobs: [{ name: 'lint', status: 'completed', conclusion: 'failure', url: 'j' }] };
   await b.api.tick();
-  assert.match(b.sent[0][0].content, /run 55: red - ci failure[\s\S]*- lint: failure j/);
+  assert.match(b.sent[0][0].content, /https:\/\/github\.com\/o\/r\/actions\/runs\/55: red - ci failure[\s\S]*- lint: failure j/);
 });
 
 test('gh failure is unknown, then actionable after N consecutive failures', async () => {
@@ -232,11 +241,11 @@ test('restart reconstructs active watches from session entries', async () => {
   const second = boot({ checks: [check('t', 'pass')] }, { entries: first.entries });
   await second.handlers.session_start({}, second.ctx);
   assert.deepEqual([...second.api.watches.keys()], ['w2']);
-  assert.deepEqual(second.events.at(-1)[1].watches.map((w) => w.target), ['o/r#8']);
+  assert.deepEqual(second.events.at(-1)[1].watches.map((w) => w.target), ['https://github.com/o/r/pull/8']);
   await second.api.tick();
-  assert.match(second.sent[0][0].content, /o\/r#8: green/);
+  assert.match(second.sent[0][0].content, /https:\/\/github\.com\/o\/r\/pull\/8: green/);
   const res = await second.tool.execute('c3', { pr: 9 }, undefined, undefined, second.ctx);
-  assert.match(res.content[0].text, /registered: w3 /);
+  assert.match(res.content[0].text, /registered: w3 https:\/\/github\.com\/o\/r\/pull\/9/);
 });
 
 test('busy agent gets a followUp delivery (and a rejected triggerTurn falls back)', async () => {

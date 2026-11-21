@@ -78,7 +78,7 @@ def verify(line, cwd, repo=None, merged=False):
     if pr_number:
         pr = api(repo, f"pulls/{pr_number}", cwd)
         if pr["head"]["sha"] != sha:
-            raise ValueError(f"claimed SHA {sha} is not the head of PR #{pr_number}")
+            raise ValueError(f"claimed SHA {sha} is not the head of https://github.com/{repo}/pull/{pr_number}")
         prs = [pr]
     else:
         prs = [pr for page in api(repo, f"commits/{sha}/pulls?per_page=100", cwd, True) for pr in page]
@@ -117,9 +117,9 @@ def verify(line, cwd, repo=None, merged=False):
                                              + r"/actions/runs/" + re.escape(ci_run) + r"(?:/job/[0-9]+)?/?")
                         linked = any(run_url.fullmatch(check.get("link") or "") for check in checks)
                     if not linked:
-                        raise ValueError(f"CI run {ci_run} is not associated with PR #{pr_number} at claimed SHA {sha}")
+                        raise ValueError(f"CI run {ci_run} is not associated with https://github.com/{repo}/pull/{pr_number} at claimed SHA {sha}")
                 evidence.append(run["html_url"])
-            return f"PASS {repo}@{sha} PR #{pr['number']} ({'merged on base' if is_merged else 'PR head ancestry'}); CI: {' '.join(filter(None, evidence))}"
+            return f"PASS {repo}@{sha} https://github.com/{repo}/pull/{pr['number']} ({'merged on base' if is_merged else 'PR head ancestry'}); CI: {' '.join(filter(None, evidence))}"
         except ValueError as error:
             errors.append(str(error))
     raise ValueError("; ".join(errors))

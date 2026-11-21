@@ -55,6 +55,8 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(self.tick(), 10)
         self.assertEqual([target for target, _ in self.sent], ["parent"])
         self.assertIn("parked on BLOCKER", self.sent[0][1])
+        self.assertIn(self.pr["url"], self.sent[0][1])
+        self.assertNotRegex(self.sent[0][1], r"(?<!\w)#12\b")
         self.pr["mergeStateStatus"] = "CLEAN"
         self.checks = [dict(name="hub verdict", bucket="fail")]
         self.tick()
@@ -82,6 +84,10 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(self.tick(), 10)
         self.assertEqual([target for target, _ in self.sent], ["parent", "child"])
         self.assertIn("DIRTY", self.sent[0][1])
+        # Stall notifications carry the real PR URL, never a bare #number.
+        for _, message in self.sent:
+            self.assertIn(self.pr["url"], message)
+            self.assertNotRegex(message, r"(?<!\w)#12\b")
         self.assertEqual(self.tick(), 10)
         self.assertEqual(len(self.sent), 2)
         self.pr["mergeStateStatus"] = "BEHIND"
@@ -141,6 +147,8 @@ class WatchdogTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.sent), 3)
         self.assertIn("Orchestrator idle", self.sent[-1][1])
+        self.assertIn(self.pr["url"], self.sent[-1][1])
+        self.assertNotRegex(self.sent[-1][1], r"(?<!\w)#12\b")
         self.tick()
         self.assertEqual(len(self.sent), 3)
         self.pr["mergeStateStatus"] = "CLEAN"
