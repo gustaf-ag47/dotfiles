@@ -11,6 +11,12 @@ Description=tmux panes and agent fleets (background CPU/IO share)
 [Slice]
 CPUWeight=idle
 IOWeight=15
+# Memory: cap the fleet, not the desktop. Parallel vitest workers (~20 x 400M)
+# plus go compiles pushed 30+ panes past RAM; with no limit the kernel swapped
+# the compositor, tmux server and Docker out first (xps14 2026-11-21: memory
+# full PSI 20%, zram full, load 71). Above MemoryHigh the fleet reclaims and
+# slows down itself; the session keeps its MemoryLow (system layer, xps14).
+MemoryHigh=50%
 # Same thrash guard as app.slice: under sustained memory stall oomd kills the
 # worst pane here instead of the host freezing.
 ManagedOOMMemoryPressure=kill
