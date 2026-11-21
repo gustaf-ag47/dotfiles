@@ -28,6 +28,13 @@ resize-overlay = never
 # NoReply. --class launches pass --quit-after-last-window-closed=true.
 quit-after-last-window-closed = false
 
+# epoll, not io_uring: with io_uring the renderer and io threads idle in
+# io_cqring_wait, which the kernel books as iowait. Every Ghostty window then
+# reports a constant ~50% "full" io pressure (PSI) with no disk I/O at all,
+# masking real stalls on the host (xps14, 2026-11-21). Ghostty measures no
+# difference between the backends. Needs a full restart to take effect.
+async-backend = epoll
+
 # Plain SSH (outside tmux): install the xterm-ghostty terminfo on hosts that
 # lack it, and fall back to xterm-256color when that fails.
 shell-integration-features = ssh-terminfo,ssh-env,no-cursor
