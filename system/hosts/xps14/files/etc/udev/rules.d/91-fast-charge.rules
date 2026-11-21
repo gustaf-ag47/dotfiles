@@ -1,0 +1,8 @@
+# xps14: keep the EC in ExpressCharge ("Fast", ~1.8 A / 22 W).
+# 2026-11-21 the EC sat at 1.45 A / 17 W for minutes while charge_types still
+# read [Fast] (CPU capped to 10 W: no change, so not adapter-limited);
+# re-writing Fast gave 1.81 A / 21.9 W at once. Re-assert it when the battery
+# appears (boot) and on every AC plug-in. See etc/tlp.d/10-xps14.conf for why
+# no charge thresholds are set (they force "Custom", ~0.75 A).
+SUBSYSTEM=="power_supply", KERNEL=="BAT0", ACTION=="add", ATTR{charge_types}="Fast"
+SUBSYSTEM=="power_supply", KERNEL=="AC", ACTION=="change", ATTR{online}=="1", RUN+="/bin/sh -c 'echo Fast > /sys/class/power_supply/BAT0/charge_types'"
